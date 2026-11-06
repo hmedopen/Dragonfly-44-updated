@@ -1,65 +1,107 @@
-import type { EloquenceLevel } from '../types/workbench';
+import type { EloquenceLevel, HumanizerIntensity, OrthographyMode } from '../types/workbench';
+import { compileHumanizerPromptDirectives } from './humanizerRulebook';
+
+export { ARABIC_HUMANIZER_RULES, compileHumanizerPromptDirectives } from './humanizerRulebook';
 
 /**
- * Arabic Humanizer & AI-Detector Bypass Engine
- * Enforces natural human scanlator cadence, strips mechanical AI artifacts,
- * and respects the chosen Eloquence Level (Level 1: Casual Modern, Level 2: Scanlation Literary, Level 3: High Classical).
+ * Legacy prompt rules export for backward compatibility with existing tests and imports.
+ * Points to the structured rulebook's balanced profile.
  */
+export const ARABIC_HUMANIZER_PROMPT_RULES = compileHumanizerPromptDirectives({
+  intensity: 'balanced',
+  isDialectActive: false,
+});
 
-export const ARABIC_HUMANIZER_PROMPT_RULES = `
-ARABIC HUMANIZER & AI-DETECTOR BYPASS DIRECTIVES:
-1. Forbid AI antithesis templates: NEVER use repetitive synthetic formulations like "لم يكن... بل كان..." or "ليس فقط... وإنما...". Use direct, punchy phrasing.
-2. Forbid robotic connector spam: Eliminate overused AI transitional fillers such as "حيث", "إذ", "في حين أن", "وفي تلك الأثناء", "بينما كان".
-3. Write with authentic human scanlator flow: Match natural speech cadence. Keep dialogue crisp, emotional, and formatted for real speech bubbles.
-4. Avoid formal academic dictionary words where conversational scanlation terms convey greater dramatic impact.
-`.trim();
+export interface HumanizeOptions {
+  eloquenceLevel?: EloquenceLevel;
+  intensity?: HumanizerIntensity;
+  orthographyMode?: OrthographyMode;
+  isDialectActive?: boolean;
+}
 
 /**
- * Deterministic Arabic Text Sanitizer
- * Removes structural dead giveaways of synthetic AI Arabic generation.
- * In High Classical eloquence (Level 3), preserves dignified classical hamzas and structures.
+ * Common Arabic adverbs and stems where Tanween Fathatan is grammatically and visually vital.
  */
-export function humanizeArabicText(text: string, eloquenceLevel: EloquenceLevel = 2): string {
-  if (!text) return '';
+export const MEANINGFUL_TANWEEN_STEMS = new Set([
+  'شكر',   // شكراً
+  'ابد',   // أبداً
+  'جد',    // جداً
+  'حق',    // حقاً
+  'مع',    // معاً
+  'تمام',  // تماماً
+  'دائم',  // دائماً
+  'ايض',   // أيضاً
+  'فعل',   // فعلاً
+  'حتم',   // حتماً
+  'طبع',   // طبعاً
+  'مطلق',  // مطلقاً
+  'خاص',   // خاصةً
+  'عذر',   // عذراً
+  'مهل',   // مهلاً
+  'حسن',   // حسناً
+  'مرحب',  // مرحباً
+  'اهل',   // أهلاً
+  'سهل',   // سهلاً
+]);
+
+/**
+ * Non-Destructive Arabic Scanlation Sanitizer
+ *
+ * Implements System #2 orthographic principles:
+ * - Preserves correct Arabic hamzas (أ، إ، آ، ؤ، ئ) by default. Never turns 'إلى' into 'الى' or 'إن' into 'ان'.
+ * - Preserves shadda (ّ) and meaningful tanween on adverbs (شكراً، أبداً، جداً).
+ * - Formats comic punctuation: converts em-dashes (—) to double periods (..) and semicolons (؛) to commas (،).
+ * - Cleans spacing and punctuation glitches without altering dialect or character personality.
+ */
+export function humanizeArabicText(
+  text: string,
+  optionsOrEloquence: EloquenceLevel | HumanizeOptions = 2
+): string {
+  if (!text || typeof text !== 'string') return '';
+
+  const options: HumanizeOptions =
+    typeof optionsOrEloquence === 'number'
+      ? { eloquenceLevel: optionsOrEloquence }
+      : optionsOrEloquence;
+
+  const {
+    eloquenceLevel = 2,
+    orthographyMode = 'correct_spelling',
+    isDialectActive = false,
+  } = options;
 
   let sanitized = text;
 
-  // 1. Replace em-dashes (— and –) with natural scanlation punctuation (comma or double periods)
+  // 1. Normalize comic bubble punctuation
+  // Convert em-dashes (— and –) to standard scanlation double periods
   sanitized = sanitized.replace(/[\u2014\u2013]/g, '..');
 
-  // 2. Replace bookish semicolons (؛ and ;) with standard Arabic comma (،)
+  // Convert academic semicolons (؛ and ;) to standard Arabic comma (،)
   sanitized = sanitized.replace(/[؛;]/g, '،');
 
-  // 3. Strip mechanical Tanwin diacritics (ً, ٌ, ٍ) that human typesetters and scanlators never type in comic bubbles
-  sanitized = sanitized.replace(/[\u064B\u064C\u064D]/g, '');
-
-  // 4. Strip stray non-critical tashkeel marks while preserving meaningful shadda (ّ) if present
-  sanitized = sanitized.replace(/[\u064E\u064F\u0650\u0652]/g, '');
-
-  // 5. Normalization of rigid robotic hamzas:
-  // For Levels 1 & 2 (Casual Modern & Scanlation Literary), normalize rigid Hamzas on connectors.
-  // For Level 3 (High Classical / Majestic), preserve formal classical Hamzas.
-  if (eloquenceLevel !== 3) {
-    // إلى / وإلى -> الى / والى
-    sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])إلى(?=[^\p{L}\p{N}]|$)/gu, (_m, p) => p + 'الى');
-    // إنك / أنك / وإنك -> انك / وانك
-    sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])[إأ]نك(?=[^\p{L}\p{N}]|$)/gu, (_m, p) => p + 'انك');
-    // إن / أن / وإن / وأن -> ان / وان
-    sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])[إأ]ن(?=[^\p{L}\p{N}]|$)/gu, (_m, p) => p + 'ان');
-    // أحد / وأحد -> احد / واحد
-    sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])أحد(?=[^\p{L}\p{N}]|$)/gu, (_m, p) => p + 'احد');
-    // أمام / وأمام -> امام / وامام
-    sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])أمام(?=[^\p{L}\p{N}]|$)/gu, (_m, p) => p + 'امام');
-    // أخير / وأخير / وأخيرا -> اخير / واخير
-    sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])أخير/gu, (_m, p) => p + 'اخير');
-    // أيضاً / أيضا / وأيضا -> ايضا / وايضا
-    sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])[أا]يض[ااً](?=[^\p{L}\p{N}]|$)/gu, (_m, p) => p + 'ايضا');
+  // 2. Safe Tanween & Tashkeel Handling
+  if (orthographyMode === 'correct_spelling' || eloquenceLevel === 3) {
+    // In Correct Orthography / High Classical mode:
+    // Strip only stray fatha, damma, kasra, and sukun while PRESERVING shadda (\u0651) and Tanween (\u064B, \u064C, \u064D)
+    sanitized = sanitized.replace(/[\u064E\u064F\u0650\u0652]/g, '');
+  } else {
+    // In Relaxed mode:
+    // Strip heavy non-adverbial vowels while protecting shadda
+    sanitized = sanitized.replace(/[\u064C\u064D\u064E\u064F\u0650\u0652]/g, '');
   }
 
-  // 6. Clean up doubled commas or awkward spaces around punctuation
+  // 3. Hamza Orthography Preservation
+  // CRITICAL: We NEVER blindly strip hamza from correct words (إلى, إن, أحد, أمام, أخير).
+  // If dialect is active, preserve colloquial phonetic representations verbatim.
+  if (isDialectActive) {
+    // Preserve dialect verbatim - do not force MSA orthography corrections
+  }
+
+  // 4. Clean up punctuation spacing and doubled characters
   sanitized = sanitized.replace(/([،]){2,}/g, '،');
-  sanitized = sanitized.replace(/\s+([،.?!])/g, '$1');
-  sanitized = sanitized.replace(/([،])([^\s])/g, '$1 $2');
+  sanitized = sanitized.replace(/\s+([،.?!:؛])/g, '$1');
+  sanitized = sanitized.replace(/([،])([^\s،.?!])/g, '$1 $2');
+  sanitized = sanitized.replace(/([!?])\s+([!?])/g, '$1$2');
 
   return sanitized.trim();
 }

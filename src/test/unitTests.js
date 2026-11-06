@@ -23,49 +23,49 @@ function sortFilesNaturally(files) {
   console.log('✓ 1. Natural alphanumeric sorting passed: page_2.png strictly precedes page_10.png');
 }
 
-// 2. Arabic Humanizer with Eloquence Level Awareness
-function humanizeArabicText(text, eloquenceLevel = 2) {
+// 2. Arabic Humanizer with Correct Orthography Preservation (System #2)
+function humanizeArabicText(text, optionsOrEloquence = 2) {
   if (!text) return '';
+  const options = typeof optionsOrEloquence === 'number' ? { eloquenceLevel: optionsOrEloquence } : optionsOrEloquence;
+  const { eloquenceLevel = 2, orthographyMode = 'correct_spelling', isDialectActive = false } = options;
   let sanitized = text;
+
+  // 1. Comic punctuation
   sanitized = sanitized.replace(/[\u2014\u2013]/g, '..');
   sanitized = sanitized.replace(/[؛;]/g, '،');
-  sanitized = sanitized.replace(/[\u064B\u064C\u064D]/g, '');
+
+  // 2. Preserve Hamza and meaningful Tanween, strip stray non-critical tashkeel
   sanitized = sanitized.replace(/[\u064E\u064F\u0650\u0652]/g, '');
-  if (eloquenceLevel !== 3) {
-    sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])إلى(?=[^\p{L}\p{N}]|$)/gu, (_m, p) => p + 'الى');
-    sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])[إأ]نك(?=[^\p{L}\p{N}]|$)/gu, (_m, p) => p + 'انك');
-    sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])[إأ]ن(?=[^\p{L}\p{N}]|$)/gu, (_m, p) => p + 'ان');
-    sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])أحد(?=[^\p{L}\p{N}]|$)/gu, (_m, p) => p + 'احد');
-    sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])أمام(?=[^\p{L}\p{N}]|$)/gu, (_m, p) => p + 'امام');
-    sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])أخير/gu, (_m, p) => p + 'اخير');
-    sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])[أا]يض[ااً](?=[^\p{L}\p{N}]|$)/gu, (_m, p) => p + 'ايضا');
-  }
+
+  // 3. Spacing and double punctuation
   sanitized = sanitized.replace(/([،]){2,}/g, '،');
-  sanitized = sanitized.replace(/\s+([،.?!])/g, '$1');
-  sanitized = sanitized.replace(/([،])([^\s])/g, '$1 $2');
+  sanitized = sanitized.replace(/\s+([،.?!:؛])/g, '$1');
+  sanitized = sanitized.replace(/([،])([^\s،.?!])/g, '$1 $2');
   return sanitized.trim();
 }
 
 {
   const aiOutput = 'ذهب إلى البيت—وقال له؛ إنك أحد الأبطال أمام الجميع وأخيراً كان مسروراً جداً.';
   
-  // Standard Scanlation Literary (Level 2)
+  // Standard Scanlation Literary (Level 2) - Preserves correct Hamza and Tanween!
   const humanizedL2 = humanizeArabicText(aiOutput, 2);
   assert.ok(!humanizedL2.includes('—'), 'Em-dash must be replaced');
   assert.ok(humanizedL2.includes('..'), 'Em-dash replaced with ..');
   assert.ok(!humanizedL2.includes('؛'), 'Semicolon must be replaced');
   assert.ok(humanizedL2.includes('،'), 'Semicolon replaced with comma');
-  assert.ok(!humanizedL2.includes('\u064B'), 'Tanwin fathatan must be stripped');
-  assert.ok(humanizedL2.includes('الى البيت'), 'إلى -> الى');
-  assert.ok(humanizedL2.includes('انك احد'), 'إنك أحد -> انك احد');
+  assert.ok(humanizedL2.includes('إلى البيت'), 'Correct hamza preserved on إلى');
+  assert.ok(humanizedL2.includes('إنك أحد'), 'Correct hamzas preserved on إنك أحد');
+  assert.ok(humanizedL2.includes('أخيراً'), 'Meaningful tanween preserved on أخيراً');
+  assert.ok(humanizedL2.includes('جداً'), 'Meaningful tanween preserved on جداً');
 
-  // High Classical (Level 3) - preserves dignified Hamzas
+  // High Classical (Level 3) - also preserves dignified Hamzas and Tanween
   const humanizedL3 = humanizeArabicText(aiOutput, 3);
   assert.ok(!humanizedL3.includes('—'), 'Em-dash must still be replaced');
   assert.ok(humanizedL3.includes('إلى البيت'), 'High Classical preserves formal Hamza on إلى');
   assert.ok(humanizedL3.includes('إنك أحد'), 'High Classical preserves formal Hamza on إنك أحد');
+  assert.ok(humanizedL3.includes('جداً'), 'Tanween preserved on جداً in High Classical');
 
-  console.log('✓ 2. Arabic humanizer passed: em-dashes, semicolons, tanwin sanitized, and eloquence level 3 classical preservation verified.');
+  console.log('✓ 2. System #2 Arabic humanizer passed: em-dashes and semicolons normalized, correct hamzas preserved, tanween adverbs protected.');
 }
 
 // 3. Canonical Typer Resolver
