@@ -8,7 +8,7 @@ import { initialFolders } from './mockData';
 import type { Folder, Chapter, PageMetadata } from './types';
 import { Sparkles } from 'lucide-react';
 import { pickImageFiles, ingestImageFiles, formatDraftName } from './services/fileIngestion';
-import { deletePageBlob } from './services/db';
+import { deletePageBlob, runIdempotentStorageMigration } from './services/db';
 
 export function App() {
   const {
@@ -78,6 +78,13 @@ export function App() {
   useEffect(() => {
     localStorage.setItem('dragonfly44_folders_v5', JSON.stringify(folders));
   }, [folders]);
+
+  // Idempotent database & storage migration on mount
+  useEffect(() => {
+    runIdempotentStorageMigration().catch((err) => {
+      console.warn('[StorageEngine] Migration warning:', err);
+    });
+  }, []);
 
   // Context-menu guard: block default browser context menu on non-input chrome
   useEffect(() => {

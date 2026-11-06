@@ -1,15 +1,15 @@
 import { create } from 'zustand';
 import type { 
   BubbleItem, 
-  BubbleType, 
   PageScanStatus, 
   ProjectLoreLedger, 
+  ChapterIntelligence,
   EloquenceLevel, 
   GeminiModelKey 
 } from '../types/workbench';
-import { BUBBLE_TYPE_CONFIG } from '../types/workbench';
-import { loadTyperSettings } from '../types/typers';
+import { loadTyperSettings, resolveCanonicalTyper } from '../types/typers';
 import { getPageBubbles, savePageBubbles, getProjectLore } from '../services/db';
+import { getChapterIntelligence } from '../services/intelligence';
 import { scanQueue } from '../lib/scanQueue';
 import { auditChapterWithGemini } from '../lib/reviewEngine';
 import { translateSingleBubbleWithGemini } from '../lib/geminiScan';
@@ -27,6 +27,7 @@ interface WorkbenchState {
   selectedBubbleId: string | null;
   bubblesByPage: Record<string, BubbleItem[]>;
   projectLore: ProjectLoreLedger | null;
+  chapterIntelligence: ChapterIntelligence | null;
 
   // Tool & Drawer toggles
   isSettingsOpen: boolean;
@@ -44,7 +45,7 @@ interface WorkbenchState {
   isScanningSinglePage: boolean;
   isReviewingSinglePage: boolean;
 
-  // Actions
+  // Navigation & Lifecycle Actions
   setCurrentView: (view: CurrentView) => void;
   openChapter: (chapterId: string, folderId?: string | null, pageId?: string | null) => void;
   setActiveChapterId: (chapterId: string | null) => void;
@@ -67,7 +68,7 @@ interface WorkbenchState {
   resetZoom: () => void;
   setFeedFilter: (filter: FeedFilterMode) => void;
 
-  // Bubble actions
+  // Bubble manipulation actions (with edit protection & flag lifecycle)
   loadPageBubbles: (pageId: string) => Promise<void>;
   addManualBubble: (pageId: string, initialBox?: [number, number, number, number]) => void;
   updateBubble: (pageId: string, bubbleId: string, patch: Partial<BubbleItem>) => void;
@@ -78,7 +79,7 @@ interface WorkbenchState {
   revertSourceText: (pageId: string, bubbleId: string) => void;
   revertTranslatedText: (pageId: string, bubbleId: string) => void;
 
-  // Queue & QC Review Actions
+  // Four Core AI Operations
   startBatchScan: (
     pages: { pageId: string; pageIndex: number }[],
     projectId?: string | null,
@@ -114,6 +115,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   selectedBubbleId: null,
   bubblesByPage: {},
   projectLore: null,
+  chapterIntelligence: null,
 
   // Modals & Panels
   isSettingsOpen: false,
@@ -142,7 +144,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
       selectedBubbleId: null,
     }));
 
-    // If folderId is a project folder, hydrate project lore
+    // Hydrate Project Lore and Chapter Intelligence
     if (folderId && folderId !== 'folder-drafts') {
       getProjectLore(folderId).then((lore) => {
         set({ projectLore: lore });
@@ -150,6 +152,10 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     } else {
       set({ projectLore: null });
     }
+
+    getChapterIntelligence(chapterId).then((intel: ChapterIntelligence | null) => {
+      set({ chapterIntelligence: intel });
+    });
   },
 
   setActiveChapterId: (chapterId) => set({ activeChapterId: chapterId }),
@@ -195,7 +201,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
         },
       }));
     } catch (err) {
-      console.error('Failed to load page bubbles from IndexedDB', err);
+      console.error('[WorkbenchStore] Failed to load bubbles from IndexedDB', err);
       set((state) => ({
         bubblesByPage: {
           ...state.bubblesByPage,
@@ -220,6 +226,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     const newBubble: BubbleItem = {
       id: `bubble-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       pageId,
+      chapterId: state.activeChapterId || undefined,
       index: nextIndex,
       box_2d: initialBox || [350, 250, 550, 650],
       type: initialType,
@@ -229,6 +236,8 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
       translatedText: '',
       rawTranslatedText: '',
       reviewFlags: [],
+      isManuallyEdited: true,
+      updatedAt: Date.now(),
     };
 
     const updated = [...existing, newBubble];
@@ -242,7 +251,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     }));
 
     savePageBubbles(pageId, updated).catch((err) =>
-      console.error('Failed to save new bubble to IndexedDB', err)
+      console.error('[WorkbenchStore] Failed to save manual bubble to IDB', err)
     );
   },
 
@@ -251,20 +260,22 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     const existing = state.bubblesByPage[pageId] || [];
 
     let updatedPatch = { ...patch };
+
+    // Mark as manually edited if source or translation text is modified
+    if (patch.sourceText !== undefined || patch.translatedText !== undefined) {
+      updatedPatch.isManuallyEdited = true;
+    }
+    updatedPatch.updatedAt = Date.now();
+
+    // Canonical typer prefix synchronization
     if (patch.type && patch.typerPrefix === undefined) {
       if (patch.type === 'none') {
         updatedPatch.typerPrefix = '';
       } else {
         const typerSettings = loadTyperSettings();
-        const matched = typerSettings.typers.find((t) => t.id === patch.type);
-        if (matched) {
-          updatedPatch.typerPrefix = matched.prefix;
-        } else {
-          const typeConfig = BUBBLE_TYPE_CONFIG[patch.type as BubbleType];
-          if (typeConfig) {
-            updatedPatch.typerPrefix = typeConfig.prefix;
-          }
-        }
+        const resolved = resolveCanonicalTyper(patch.type, typerSettings.typers);
+        updatedPatch.type = resolved.id;
+        updatedPatch.typerPrefix = resolved.prefix;
       }
     }
 
@@ -281,7 +292,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     }));
 
     savePageBubbles(pageId, updated).catch((err) =>
-      console.error('Failed to update bubble in IndexedDB', err)
+      console.error('[WorkbenchStore] Failed to update bubble in IDB', err)
     );
   },
 
@@ -300,7 +311,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     }));
 
     savePageBubbles(pageId, reindexed).catch((err) =>
-      console.error('Failed to delete bubble in IndexedDB', err)
+      console.error('[WorkbenchStore] Failed to delete bubble in IDB', err)
     );
   },
 
@@ -331,10 +342,11 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     }));
 
     savePageBubbles(pageId, reindexed).catch((err) =>
-      console.error('Failed to save reordered bubbles to IndexedDB', err)
+      console.error('[WorkbenchStore] Failed to reorder bubbles in IDB', err)
     );
   },
 
+  // Finding Lifecycle: Accept Flag with History Preservation
   acceptFlag: (pageId: string, bubbleId: string, flagId: string) => {
     const state = get();
     const existing = state.bubblesByPage[pageId] || [];
@@ -359,19 +371,22 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
       newTranslated = targetFlag.suggestedTextAr;
     }
     if (targetFlag.suggestedType) {
-      newType = targetFlag.suggestedType;
       const typerSettings = loadTyperSettings();
-      const matched = typerSettings.typers.find((t) => t.id === newType);
-      if (matched) {
-        newPrefix = matched.prefix;
-      } else {
-        const cfg = BUBBLE_TYPE_CONFIG[newType];
-        if (cfg) newPrefix = cfg.prefix;
-      }
+      const resolved = resolveCanonicalTyper(targetFlag.suggestedType, typerSettings.typers);
+      newType = resolved.id;
+      newPrefix = resolved.prefix;
     }
 
-    // Remove ONLY this flag from reviewFlags
-    const remainingFlags = targetBubble.reviewFlags.filter((f) => f.id !== flagId);
+    // Mark flag as accepted in history rather than destroying evidence
+    const updatedFlags = targetBubble.reviewFlags.map((f) => {
+      if (f.id !== flagId) return f;
+      return {
+        ...f,
+        status: 'accepted' as const,
+        resolvedAt: Date.now(),
+        resolutionDetail: 'accepted_suggestion',
+      };
+    });
 
     const updated = existing.map((b) => {
       if (b.id !== bubbleId) return b;
@@ -380,11 +395,13 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
         translatedText: newTranslated,
         type: newType,
         typerPrefix: newPrefix,
-        reviewFlags: remainingFlags,
+        reviewFlags: updatedFlags.filter((f) => f.status === 'pending'), // Active feed shows pending flags
+        isManuallyEdited: true,
+        updatedAt: Date.now(),
       };
     });
 
-    // If suggestedOrderIndex exists and differs, handle reorder
+    // Handle suggested reordering if specified
     if (
       typeof targetFlag.suggestedOrderIndex === 'number' &&
       targetFlag.suggestedOrderIndex > 0 &&
@@ -407,21 +424,32 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     }));
 
     savePageBubbles(pageId, reindexed).catch((err) =>
-      console.error('Failed to save flag acceptance to DB', err)
+      console.error('[WorkbenchStore] Failed to save flag acceptance to IDB', err)
     );
   },
 
+  // Finding Lifecycle: Dismiss Flag with History Preservation
   dismissFlag: (pageId: string, bubbleId: string, flagId: string) => {
     const state = get();
     const existing = state.bubblesByPage[pageId] || [];
 
-    // Remove ONLY this flag without modifying text, tag, or order
     const updated = existing.map((b) => {
       if (b.id !== bubbleId) return b;
-      const remainingFlags = b.reviewFlags.filter((f) => f.id !== flagId);
+      // Mark as dismissed with timestamp
+      const updatedFlags = b.reviewFlags.map((f) => {
+        if (f.id !== flagId) return f;
+        return {
+          ...f,
+          status: 'dismissed' as const,
+          resolvedAt: Date.now(),
+          resolutionDetail: 'dismissed_by_user',
+        };
+      });
+
       return {
         ...b,
-        reviewFlags: remainingFlags,
+        reviewFlags: updatedFlags.filter((f) => f.status === 'pending'),
+        updatedAt: Date.now(),
       };
     });
 
@@ -433,7 +461,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     }));
 
     savePageBubbles(pageId, updated).catch((err) =>
-      console.error('Failed to save flag dismissal to DB', err)
+      console.error('[WorkbenchStore] Failed to save flag dismissal to IDB', err)
     );
   },
 
@@ -442,7 +470,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     const existing = state.bubblesByPage[pageId] || [];
     const updated = existing.map((b) => {
       if (b.id !== bubbleId) return b;
-      return { ...b, sourceText: b.originalSourceText };
+      return { ...b, sourceText: b.originalSourceText, updatedAt: Date.now() };
     });
 
     set((s) => ({
@@ -453,7 +481,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     }));
 
     savePageBubbles(pageId, updated).catch((err) =>
-      console.error('Failed to revert source text in DB', err)
+      console.error('[WorkbenchStore] Failed to revert source text in IDB', err)
     );
   },
 
@@ -462,7 +490,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     const existing = state.bubblesByPage[pageId] || [];
     const updated = existing.map((b) => {
       if (b.id !== bubbleId) return b;
-      return { ...b, translatedText: b.rawTranslatedText };
+      return { ...b, translatedText: b.rawTranslatedText, updatedAt: Date.now() };
     });
 
     set((s) => ({
@@ -473,21 +501,23 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     }));
 
     savePageBubbles(pageId, updated).catch((err) =>
-      console.error('Failed to revert translated text in DB', err)
+      console.error('[WorkbenchStore] Failed to revert translation in IDB', err)
     );
   },
 
-  // FIFO Queue & Realtime Scan Engine
+  // 1. Scan All (Batch Chapter Scan)
   startBatchScan: (pages, projectId = null, isDraft = false) => {
     const apiKey = localStorage.getItem('dragonfly44_gemini_api_key') || '';
-    const selectedModel = (localStorage.getItem('dragonfly44_selected_model') as GeminiModelKey) || 'gemini-3.1-flash-lite';
+    const selectedModel = (localStorage.getItem('dragonfly44_selected_model') as GeminiModelKey) || 'gemini-3.8-flash';
     const eloquenceLevel = Number(localStorage.getItem('dragonfly44_eloquence_level') || '2') as EloquenceLevel;
     const includeSFX = localStorage.getItem('dragonfly44_include_sfx') === 'true';
     const masterPromptOverride = localStorage.getItem('dragonfly44_master_prompt_override') || '';
     const isMasterPromptActive = localStorage.getItem('dragonfly44_master_prompt_active') !== 'false';
+    const chapterId = get().activeChapterId || undefined;
 
     const queueItems = pages.map((p) => ({
       pageId: p.pageId,
+      chapterId,
       pageIndex: p.pageIndex,
       options: {
         projectId,
@@ -501,7 +531,6 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
       },
     }));
 
-    // Subscribe to scanQueue progress
     scanQueue.subscribe((progress) => {
       const isBatch = progress.totalCount > 1;
       set({
@@ -533,10 +562,12 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     });
   },
 
+  // 2. Scan Page (Single Page Scan)
   scanSinglePage: (pageId, pageIndex, projectId = null, isDraft = false) => {
     get().startBatchScan([{ pageId, pageIndex }], projectId, isDraft);
   },
 
+  // 3. Single Bubble Translation
   translateSingleBubble: async (pageId, bubbleId, projectId = null, isDraft = false) => {
     const state = get();
     const pageBubbles = state.bubblesByPage[pageId] || [];
@@ -546,13 +577,15 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     }
 
     const apiKey = localStorage.getItem('dragonfly44_gemini_api_key') || '';
-    const selectedModel = (localStorage.getItem('dragonfly44_selected_model') as GeminiModelKey) || 'gemini-3.1-flash-lite';
+    const selectedModel = (localStorage.getItem('dragonfly44_selected_model') as GeminiModelKey) || 'gemini-3.8-flash';
     const eloquenceLevel = (Number(localStorage.getItem('dragonfly44_eloquence_level') || '2') as EloquenceLevel) || 2;
     const masterPromptOverride = localStorage.getItem('dragonfly44_master_prompt_override') || '';
     const isMasterPromptActive = localStorage.getItem('dragonfly44_master_prompt_active') !== 'false';
+    const chapterId = state.activeChapterId || undefined;
 
     const result = await translateSingleBubbleWithGemini({
       pageId,
+      chapterId,
       bubble: targetBubble,
       surroundingBubbles: pageBubbles,
       projectId,
@@ -567,6 +600,8 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     const patch: Partial<BubbleItem> = {
       translatedText: result.translatedText,
       rawTranslatedText: result.translatedText,
+      isManuallyEdited: true,
+      updatedAt: Date.now(),
     };
     if (result.sourceText && !targetBubble.sourceText) {
       patch.sourceText = result.sourceText;
@@ -576,7 +611,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     get().updateBubble(pageId, bubbleId, patch);
   },
 
-  // QC Audit Review Engine
+  // 4. Review Page / Review All (Multimodal Visual Review & Global Chapter QC)
   runChapterReview: async (chapterId, pages, projectId = null, isDraft = false) => {
     const apiKey = localStorage.getItem('dragonfly44_gemini_api_key') || '';
     const selectedModel = (localStorage.getItem('dragonfly44_selected_model') as GeminiModelKey) || 'gemini-3.8-flash';
@@ -592,18 +627,11 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     }
 
     try {
-      const state = get();
-      const payloadPages = pages.map((p) => ({
-        pageId: p.pageId,
-        pageIndex: p.pageIndex,
-        bubbles: state.bubblesByPage[p.pageId] || [],
-      }));
-
       const auditResult = await auditChapterWithGemini({
         chapterId,
         projectId,
         isDraft,
-        pages: payloadPages,
+        pages: pages.map((p) => ({ pageId: p.pageId, pageIndex: p.pageIndex })),
         apiKey,
         selectedModel,
         eloquenceLevel,
@@ -611,7 +639,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
         isMasterPromptActive,
       });
 
-      // Update bubbles across pages
+      // Synchronize updated bubbles across all audited pages
       set((s) => ({
         bubblesByPage: {
           ...s.bubblesByPage,
@@ -621,7 +649,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
         isReviewingSinglePage: false,
       }));
     } catch (err) {
-      console.error('Failed to run chapter review:', err);
+      console.error('[WorkbenchStore] Chapter review error:', err);
       set({ isReviewingChapter: false, isReviewingSinglePage: false });
       throw err;
     }

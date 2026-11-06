@@ -514,6 +514,13 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
                     {currentFlag.reasonAr}
                   </p>
 
+                  {/* Evidence — visual cue from artwork or text */}
+                  {currentFlag.evidence && (
+                    <p className="text-[11px] text-zinc-400 font-mono italic">
+                      Evidence: {currentFlag.evidence}
+                    </p>
+                  )}
+
                   {/* Suggested fix — in a box identical to the Arabic translation box */}
                   {currentFlag.suggestedTextAr && (
                     <div className="rounded-xl bg-[#08080a] border border-white/[0.05] px-3.5 py-2.5">

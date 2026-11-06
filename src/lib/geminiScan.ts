@@ -1,11 +1,14 @@
-import { getPageBlob, getProjectLore, saveProjectLore } from '../services/db';
-import type { BubbleItem, GeminiModelKey, EloquenceLevel, TermLore, CharacterLore } from '../types/workbench';
-import { loadTyperSettings } from '../types/typers';
+import { getPageBlob, getProjectLore } from '../services/db';
+import { getChapterIntelligence, ingestPageIntelligence } from '../services/intelligence';
+import type { BubbleItem, GeminiModelKey, EloquenceLevel } from '../types/workbench';
+import { loadTyperSettings, resolveCanonicalTyper } from '../types/typers';
 import { buildScanSystemInstruction } from './promptBuilder';
 import { humanizeArabicText } from './arabicHumanizer';
 
 export interface ScanPageOptions {
   pageId: string;
+  chapterId?: string;
+  pageIndex?: number;
   projectId?: string | null;
   isDraft?: boolean;
   apiKey: string;
@@ -14,6 +17,7 @@ export interface ScanPageOptions {
   includeSFX: boolean;
   masterPromptOverride?: string;
   isMasterPromptActive?: boolean;
+  precedingDialogueSnippet?: string;
 }
 
 export interface ScanResult {
@@ -25,7 +29,7 @@ export interface ScanResult {
 /**
  * Converts a Blob or File to a base64 string without data prefix
  */
-async function blobToBase64(blob: Blob): Promise<string> {
+export async function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onloadend = () => {
@@ -38,11 +42,33 @@ async function blobToBase64(blob: Blob): Promise<string> {
 }
 
 /**
- * Executes a 1-Pass Multimodal Vision Scan on a single comic page
+ * Validates and normalizes bounding box coordinates within [0, 1000].
+ */
+function normalizeBoundingBox(coords: any): [number, number, number, number] {
+  if (!Array.isArray(coords) || coords.length !== 4) {
+    return [200, 200, 400, 400];
+  }
+
+  let [ymin, xmin, ymax, xmax] = coords.map((val) => {
+    const num = Number(val);
+    if (isNaN(num)) return 0;
+    return Math.max(0, Math.min(1000, Math.round(num)));
+  });
+
+  if (ymin >= ymax) ymax = Math.min(1000, ymin + 50);
+  if (xmin >= xmax) xmax = Math.min(1000, xmin + 50);
+
+  return [ymin, xmin, ymax, xmax];
+}
+
+/**
+ * Executes a Multimodal Vision Scan with Chapter Context on a single comic page.
  */
 export async function scanPageWithGemini(options: ScanPageOptions): Promise<ScanResult> {
   const {
     pageId,
+    chapterId,
+    pageIndex = 1,
     projectId,
     isDraft = false,
     apiKey,
@@ -51,6 +77,7 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
     includeSFX,
     masterPromptOverride,
     isMasterPromptActive,
+    precedingDialogueSnippet,
   } = options;
 
   if (!apiKey || apiKey.trim().length === 0) {
@@ -67,23 +94,26 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
   const mimeType = blob.type || 'image/png';
   const base64Data = await blobToBase64(blob);
 
-  // 3. Fetch project lore if working in a Project (bypassed for Drafts)
+  // 3. Fetch project lore and chapter intelligence
   const projectLore = !isDraft && projectId ? await getProjectLore(projectId) : null;
+  const chapterIntelligence = chapterId ? await getChapterIntelligence(chapterId) : null;
 
   // 4. Fetch current configured typers
   const typerSettings = loadTyperSettings();
 
-  // 5. Assemble system prompt
+  // 5. Assemble system prompt with rolling context
   const systemInstruction = buildScanSystemInstruction({
     eloquenceLevel,
     includeSFX,
     projectLore,
+    chapterIntelligence,
+    rollingContextSnippet: precedingDialogueSnippet,
     masterPromptOverride,
     isMasterPromptActive,
     typers: typerSettings.typers,
   });
 
-  const effectiveModel = selectedModel || 'gemini-3.1-flash-lite';
+  const effectiveModel = selectedModel || 'gemini-3.8-flash';
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${effectiveModel}:generateContent?key=${apiKey}`;
 
   const payload = {
@@ -95,7 +125,7 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
         role: 'user',
         parts: [
           {
-            text: 'Extract all dialogue bubbles, boxes, shouts, thoughts, and text from this page. Provide bounding boxes [ymin, xmin, ymax, xmax] on a 0-1000 scale, accurate TypeR prefixes, and high-eloquence Arabic translations in structured JSON format.',
+            text: 'Extract all dialogue bubbles, narration boxes, shouts, thoughts, and text from this page. Provide bounding boxes [ymin, xmin, ymax, xmax] on a 0-1000 scale, accurate TypeR prefixes, and high-eloquence Arabic translations in structured JSON format.',
           },
           {
             inline_data: {
@@ -151,110 +181,60 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
   const detectedGlossaryTerms = Array.isArray(parsed.detectedGlossaryTerms)
     ? parsed.detectedGlossaryTerms
     : [];
+  const detectedCharacters = Array.isArray(parsed.detectedCharacters)
+    ? parsed.detectedCharacters
+    : [];
+  const detectedRelationships = Array.isArray(parsed.detectedRelationships)
+    ? parsed.detectedRelationships
+    : [];
 
-  // Map into BubbleItem schema with Humanizer post-processing
-  // Map against active configured typers with non-empty instructions
-  const eligibleTypersMap = new Map(
-    typerSettings.typers
-      .filter((t) => t.instructions && t.instructions.trim().length > 0)
-      .map((t) => [t.id, t])
-  );
-
+  // Map into BubbleItem schema with canonical typer resolution & humanizer
   const bubbles: BubbleItem[] = rawBubbles.map((item: any, idx: number) => {
     const rawArabic = item.translatedText || '';
-    const humanizedArabic = humanizeArabicText(rawArabic);
-    
-    // Check if the AI returned a valid configured typer ID
-    let finalType = 'none';
-    let finalPrefix = '';
+    const humanizedArabic = humanizeArabicText(rawArabic, eloquenceLevel);
 
-    const returnedType = typeof item.type === 'string' ? item.type.trim() : '';
-    if (eligibleTypersMap.has(returnedType)) {
-      const matched = eligibleTypersMap.get(returnedType)!;
-      finalType = matched.id;
-      finalPrefix = matched.prefix;
-    } else {
-      // Also try matching by name or by prefix if AI output slightly varied
-      const matchedByNameOrPrefix = Array.from(eligibleTypersMap.values()).find(
-        (t) =>
-          t.name.toLowerCase() === returnedType.toLowerCase() ||
-          t.id.toLowerCase() === returnedType.toLowerCase() ||
-          (t.prefix && item.typerPrefix && t.prefix.trim() === String(item.typerPrefix).trim())
-      );
-      if (matchedByNameOrPrefix) {
-        finalType = matchedByNameOrPrefix.id;
-        finalPrefix = matchedByNameOrPrefix.prefix;
-      } else {
-        // Untyped / none
-        finalType = 'none';
-        finalPrefix = '';
-      }
-    }
+    const canonicalTyper = resolveCanonicalTyper(item.type, typerSettings.typers);
+    const safeBox = normalizeBoundingBox(item.box_2d);
 
     return {
       id: `b-${Date.now()}-${idx + 1}-${Math.random().toString(36).substring(2, 6)}`,
       pageId,
+      chapterId,
       index: idx + 1,
-      box_2d: Array.isArray(item.box_2d) && item.box_2d.length === 4 ? item.box_2d : [200, 200, 400, 400],
-      type: finalType,
-      typerPrefix: finalPrefix,
+      box_2d: safeBox,
+      type: canonicalTyper.id,
+      typerPrefix: item.typerPrefix !== undefined ? item.typerPrefix : canonicalTyper.prefix,
       sourceLanguage: item.sourceLanguage || 'ja',
       sourceText: item.sourceText || '',
       originalSourceText: item.sourceText || '',
       translatedText: humanizedArabic,
       rawTranslatedText: rawArabic,
       reviewFlags: [],
+      confidence: 0.9,
+      isManuallyEdited: false,
+      updatedAt: Date.now(),
     };
   });
 
-  // If working in a Project, merge newly discovered glossary terms into ProjectLoreLedger
-  if (!isDraft && projectId && detectedGlossaryTerms.length > 0) {
+  // Ingest newly detected entities into Chapter Intelligence & Project Lore
+  if (chapterId) {
     try {
-      const existingLore = (await getProjectLore(projectId)) || {
+      await ingestPageIntelligence({
+        chapterId,
         projectId,
-        characters: [],
-        terms: [],
-        speakerRelationships: [],
-        lastUpdated: Date.now(),
-      };
-
-      const existingTermKeys = new Set(existingLore.terms.map((t) => t.termOriginal.toLowerCase()));
-      const existingCharKeys = new Set(existingLore.characters.map((c) => c.nameOriginal.toLowerCase()));
-
-      let updated = false;
-
-      for (const item of detectedGlossaryTerms) {
-        if (!item.source || !item.arabic) continue;
-        const key = item.source.toLowerCase();
-
-        if (item.category === 'character' && !existingCharKeys.has(key)) {
-          const newChar: CharacterLore = {
-            id: `char-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-            nameOriginal: item.source,
-            nameArabic: humanizeArabicText(item.arabic),
-          };
-          existingLore.characters.push(newChar);
-          existingCharKeys.add(key);
-          updated = true;
-        } else if (!existingTermKeys.has(key)) {
-          const newTerm: TermLore = {
-            id: `term-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-            termOriginal: item.source,
-            termArabic: humanizeArabicText(item.arabic),
-            category: item.category || 'term',
-          };
-          existingLore.terms.push(newTerm);
-          existingTermKeys.add(key);
-          updated = true;
-        }
-      }
-
-      if (updated) {
-        existingLore.lastUpdated = Date.now();
-        await saveProjectLore(projectId, existingLore);
-      }
+        pageId,
+        pageIndex,
+        sceneContext: parsed.pageContext || '',
+        detectedCharacters,
+        detectedTerms: detectedGlossaryTerms.map((g: any) => ({
+          termOriginal: g.source || '',
+          termArabic: g.arabic || '',
+          category: g.category || 'term',
+        })),
+        detectedRelationships,
+      });
     } catch (e) {
-      console.warn('Could not auto-merge glossary terms into ProjectLoreLedger', e);
+      console.warn('[GeminiScan] Could not ingest page intelligence:', e);
     }
   }
 
@@ -270,6 +250,7 @@ export interface TranslateSingleBubbleOptions {
   bubble: BubbleItem;
   surroundingBubbles?: BubbleItem[];
   projectId?: string | null;
+  chapterId?: string;
   isDraft?: boolean;
   apiKey: string;
   selectedModel: GeminiModelKey | string;
@@ -285,8 +266,7 @@ export interface SingleBubbleTranslationResult {
 
 /**
  * Translates a single bubble into Arabic using Gemini.
- * If sourceText is present, performs lightweight fast text translation.
- * If sourceText is empty and a page image is present, performs vision OCR + translation on the bubble area.
+ * Uses surrounding dialogue context and QC review notes.
  */
 export async function translateSingleBubbleWithGemini(
   options: TranslateSingleBubbleOptions
@@ -296,6 +276,7 @@ export async function translateSingleBubbleWithGemini(
     bubble,
     surroundingBubbles = [],
     projectId,
+    chapterId,
     isDraft = false,
     apiKey,
     selectedModel,
@@ -309,18 +290,21 @@ export async function translateSingleBubbleWithGemini(
   }
 
   const projectLore = !isDraft && projectId ? await getProjectLore(projectId) : null;
+  const chapterIntelligence = chapterId ? await getChapterIntelligence(chapterId) : null;
+
   const systemInstruction = buildScanSystemInstruction({
     eloquenceLevel,
     includeSFX: true,
     projectLore,
+    chapterIntelligence,
     masterPromptOverride,
     isMasterPromptActive,
   });
 
-  const effectiveModel = selectedModel || 'gemini-3.1-flash-lite';
+  const effectiveModel = selectedModel || 'gemini-3.8-flash';
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${effectiveModel}:generateContent?key=${apiKey}`;
 
-  // Assemble contextual dialogue history from other page bubbles (if present)
+  // Assemble contextual dialogue history from other page bubbles
   let pageContextText = '';
   if (surroundingBubbles && surroundingBubbles.length > 0) {
     const contextualLines = surroundingBubbles
@@ -336,16 +320,19 @@ export async function translateSingleBubbleWithGemini(
     }
   }
 
-  // Assemble audit / review feedback if previous review left flags
+  // Assemble review notes if previous review left flags
   let reviewFlagsText = '';
   if (bubble.reviewFlags && bubble.reviewFlags.length > 0) {
     const flagNotes = bubble.reviewFlags
+      .filter((f) => f.status === 'pending')
       .map(
         (f) =>
           `- [${f.category}]: Reason: ${f.reasonAr}${f.suggestedTextAr ? ` | Suggested fix: "${f.suggestedTextAr}"` : ''}`
       )
       .join('\n');
-    reviewFlagsText = `\n\nPrevious QC/Review Audit Notes for this bubble:\n${flagNotes}\nPlease address these QC notes in the translation.`;
+    if (flagNotes.length > 0) {
+      reviewFlagsText = `\n\nQC Audit Notes for this bubble:\n${flagNotes}\nPlease resolve these QC notes in the translation.`;
+    }
   }
 
   const hasSource = Boolean(bubble.sourceText && bubble.sourceText.trim().length > 0);
@@ -430,7 +417,7 @@ export async function translateSingleBubbleWithGemini(
   }
 
   const rawArabic = parsed.translatedText || parsed.arabic || '';
-  const humanized = humanizeArabicText(rawArabic);
+  const humanized = humanizeArabicText(rawArabic, eloquenceLevel);
 
   return {
     sourceText: parsed.sourceText ? String(parsed.sourceText).trim() : undefined,

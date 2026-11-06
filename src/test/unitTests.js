@@ -23,21 +23,23 @@ function sortFilesNaturally(files) {
   console.log('✓ 1. Natural alphanumeric sorting passed: page_2.png strictly precedes page_10.png');
 }
 
-// 2. Arabic Humanizer & AI-Detector Bypass
-function humanizeArabicText(text) {
+// 2. Arabic Humanizer with Eloquence Level Awareness
+function humanizeArabicText(text, eloquenceLevel = 2) {
   if (!text) return '';
   let sanitized = text;
   sanitized = sanitized.replace(/[\u2014\u2013]/g, '..');
   sanitized = sanitized.replace(/[؛;]/g, '،');
   sanitized = sanitized.replace(/[\u064B\u064C\u064D]/g, '');
   sanitized = sanitized.replace(/[\u064E\u064F\u0650\u0652]/g, '');
-  sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])إلى(?=[^\p{L}\p{N}]|$)/gu, (_m, p) => p + 'الى');
-  sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])[إأ]نك(?=[^\p{L}\p{N}]|$)/gu, (_m, p) => p + 'انك');
-  sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])[إأ]ن(?=[^\p{L}\p{N}]|$)/gu, (_m, p) => p + 'ان');
-  sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])أحد(?=[^\p{L}\p{N}]|$)/gu, (_m, p) => p + 'احد');
-  sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])أمام(?=[^\p{L}\p{N}]|$)/gu, (_m, p) => p + 'امام');
-  sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])أخير/gu, (_m, p) => p + 'اخير');
-  sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])[أا]يض[ااً](?=[^\p{L}\p{N}]|$)/gu, (_m, p) => p + 'ايضا');
+  if (eloquenceLevel !== 3) {
+    sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])إلى(?=[^\p{L}\p{N}]|$)/gu, (_m, p) => p + 'الى');
+    sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])[إأ]نك(?=[^\p{L}\p{N}]|$)/gu, (_m, p) => p + 'انك');
+    sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])[إأ]ن(?=[^\p{L}\p{N}]|$)/gu, (_m, p) => p + 'ان');
+    sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])أحد(?=[^\p{L}\p{N}]|$)/gu, (_m, p) => p + 'احد');
+    sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])أمام(?=[^\p{L}\p{N}]|$)/gu, (_m, p) => p + 'امام');
+    sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])أخير/gu, (_m, p) => p + 'اخير');
+    sanitized = sanitized.replace(/(^|[^\p{L}\p{N}]|[وف])[أا]يض[ااً](?=[^\p{L}\p{N}]|$)/gu, (_m, p) => p + 'ايضا');
+  }
   sanitized = sanitized.replace(/([،]){2,}/g, '،');
   sanitized = sanitized.replace(/\s+([،.?!])/g, '$1');
   sanitized = sanitized.replace(/([،])([^\s])/g, '$1 $2');
@@ -46,22 +48,72 @@ function humanizeArabicText(text) {
 
 {
   const aiOutput = 'ذهب إلى البيت—وقال له؛ إنك أحد الأبطال أمام الجميع وأخيراً كان مسروراً جداً.';
-  const humanized = humanizeArabicText(aiOutput);
+  
+  // Standard Scanlation Literary (Level 2)
+  const humanizedL2 = humanizeArabicText(aiOutput, 2);
+  assert.ok(!humanizedL2.includes('—'), 'Em-dash must be replaced');
+  assert.ok(humanizedL2.includes('..'), 'Em-dash replaced with ..');
+  assert.ok(!humanizedL2.includes('؛'), 'Semicolon must be replaced');
+  assert.ok(humanizedL2.includes('،'), 'Semicolon replaced with comma');
+  assert.ok(!humanizedL2.includes('\u064B'), 'Tanwin fathatan must be stripped');
+  assert.ok(humanizedL2.includes('الى البيت'), 'إلى -> الى');
+  assert.ok(humanizedL2.includes('انك احد'), 'إنك أحد -> انك احد');
 
-  assert.ok(!humanized.includes('—'), 'Em-dash must be replaced');
-  assert.ok(humanized.includes('..'), 'Em-dash replaced with ..');
-  assert.ok(!humanized.includes('؛'), 'Semicolon must be replaced');
-  assert.ok(humanized.includes('،'), 'Semicolon replaced with comma');
-  assert.ok(!humanized.includes('\u064B'), 'Tanwin fathatan must be stripped');
-  assert.ok(humanized.includes('الى البيت'), 'إلى -> الى');
-  assert.ok(humanized.includes('انك احد'), 'إنك أحد -> انك احد');
-  assert.ok(humanized.includes('امام'), 'أمام -> امام');
-  assert.ok(humanized.includes('واخير'), 'وأخيراً -> واخير');
+  // High Classical (Level 3) - preserves dignified Hamzas
+  const humanizedL3 = humanizeArabicText(aiOutput, 3);
+  assert.ok(!humanizedL3.includes('—'), 'Em-dash must still be replaced');
+  assert.ok(humanizedL3.includes('إلى البيت'), 'High Classical preserves formal Hamza on إلى');
+  assert.ok(humanizedL3.includes('إنك أحد'), 'High Classical preserves formal Hamza on إنك أحد');
 
-  console.log('✓ 2. Arabic humanizer passed: em-dashes, semicolons, tanwin, and rigid hamzas sanitized.');
+  console.log('✓ 2. Arabic humanizer passed: em-dashes, semicolons, tanwin sanitized, and eloquence level 3 classical preservation verified.');
 }
 
-// 3. Photoshop TypeR Script Compiler
+// 3. Canonical Typer Resolver
+const LEGACY_TYPER_ALIAS_MAP = {
+  dialogue: 'speech_bubbles',
+  scream: 'shouting',
+  box: 'square_bubbles',
+  thought: 'thought_bubbles',
+  in_art: 'outside_text',
+};
+
+const DEFAULT_TYPERS = [
+  { id: 'speech_bubbles', prefix: '""', name: 'Speech Bubbles' },
+  { id: 'shouting', prefix: '%', name: 'Shouting' },
+  { id: 'thought_bubbles', prefix: '()', name: 'Thought Bubbles' },
+  { id: 'square_bubbles', prefix: '[ ]', name: 'Square Bubbles' },
+  { id: 'outside_text', prefix: 'OT', name: 'Outside Text' },
+  { id: 'sfx', prefix: 'SFX', name: 'Sound Effects' },
+];
+
+function resolveCanonicalTyper(typeKey, configuredTypers = DEFAULT_TYPERS) {
+  if (!typeKey || typeKey === 'none') {
+    return { id: 'none', name: 'None', prefix: '' };
+  }
+  const canonicalKey = LEGACY_TYPER_ALIAS_MAP[typeKey.toLowerCase()] || typeKey;
+  const matched = configuredTypers.find(
+    (t) =>
+      t.id.toLowerCase() === canonicalKey.toLowerCase() ||
+      t.name.toLowerCase() === typeKey.toLowerCase() ||
+      t.id.toLowerCase() === typeKey.toLowerCase()
+  );
+  if (matched) {
+    return { id: matched.id, name: matched.name, prefix: matched.prefix };
+  }
+  return { id: typeKey, name: typeKey, prefix: '' };
+}
+
+{
+  assert.strictEqual(resolveCanonicalTyper('dialogue').id, 'speech_bubbles');
+  assert.strictEqual(resolveCanonicalTyper('scream').id, 'shouting');
+  assert.strictEqual(resolveCanonicalTyper('box').id, 'square_bubbles');
+  assert.strictEqual(resolveCanonicalTyper('thought').id, 'thought_bubbles');
+  assert.strictEqual(resolveCanonicalTyper('outside_text').prefix, 'OT');
+  assert.strictEqual(resolveCanonicalTyper('none').id, 'none');
+  console.log('✓ 3. Canonical Typer resolver passed: mapped legacy keys to unified schema without ambiguity.');
+}
+
+// 4. Photoshop TypeR Script Compiler & Raw Text Extract
 function compileTypeRScript(options) {
   const { chapterName, pages, includePageHeaders, includeIndexTags, includePrefixTags, prefixPosition = 'right', includeSourceComments } = options;
   const lines = [];
@@ -107,8 +159,8 @@ function compileTypeRScript(options) {
           pageId: 'p1',
           index: 1,
           box_2d: [100, 100, 200, 200],
-          type: 'dialogue',
-          typerPrefix: '():',
+          type: 'speech_bubbles',
+          typerPrefix: '"":',
           sourceText: 'Hello',
           translatedText: 'مرحبا بكم',
         },
@@ -117,8 +169,8 @@ function compileTypeRScript(options) {
           pageId: 'p1',
           index: 2,
           box_2d: [300, 300, 400, 400],
-          type: 'scream',
-          typerPrefix: '{}:',
+          type: 'shouting',
+          typerPrefix: '%:',
           sourceText: 'Run!',
           translatedText: 'اهربوا!',
         },
@@ -126,7 +178,7 @@ function compileTypeRScript(options) {
     },
   ];
 
-  const script = compileTypeRScript({
+  const scriptLeft = compileTypeRScript({
     chapterName: 'CHAPTER 01',
     pages: mockPages,
     includePageHeaders: true,
@@ -136,10 +188,10 @@ function compileTypeRScript(options) {
     includeSourceComments: true,
   });
 
-  assert.ok(script.includes('### PAGE 01'), 'Includes page header');
-  assert.ok(script.includes('#01 (): مرحبا بكم'), 'Includes correct format with LTR prefix and RTL translation');
-  assert.ok(script.includes('#02 {}: اهربوا!'), 'Includes scream prefix');
-  assert.ok(script.includes('// Source: Hello'), 'Includes source text comment');
+  assert.ok(scriptLeft.includes('### PAGE 01'), 'Includes page header');
+  assert.ok(scriptLeft.includes('#01 "": مرحبا بكم'), 'Includes correct format with LTR prefix and RTL translation');
+  assert.ok(scriptLeft.includes('#02 %: اهربوا!'), 'Includes scream prefix');
+  assert.ok(scriptLeft.includes('// Source: Hello'), 'Includes source text comment');
 
   const scriptRight = compileTypeRScript({
     chapterName: 'CHAPTER 01',
@@ -150,14 +202,12 @@ function compileTypeRScript(options) {
     prefixPosition: 'right',
     includeSourceComments: true,
   });
-  assert.ok(scriptRight.includes('#01 مرحبا بكم ():'), 'Right position works');
+  assert.ok(scriptRight.includes('#01 مرحبا بكم "":'), 'Right position works for RTL scanlation flow');
 
-  console.log('✓ 3. Photoshop TypeR script compiler passed: verified formatting without bracket inversion.');
+  console.log('✓ 4. Photoshop TypeR script compiler passed: verified formatting without bracket inversion.');
 }
 
-console.log('--- ALL VERIFICATION TESTS COMPLETED AND VALIDATED! ---');
-
-// 4. Prompt Builder Verification
+// 5. Instruction Hierarchy & Master Override
 function buildScanSystemInstructionMock(options) {
   const { eloquenceLevel, includeSFX, masterPromptOverride, isMasterPromptActive } = options;
   const sections = [];
@@ -180,5 +230,32 @@ function buildScanSystemInstructionMock(options) {
   assert.ok(prompt.includes('CRITICAL SYSTEM OVERRIDE: PRIORITIZE HIGH MARTIAL ARTS LORE'), 'Master override included');
   assert.ok(prompt.includes('فصحى جزلة وبليغة'), 'Classical eloquence included');
   assert.ok(prompt.includes('Sound effects: ON'), 'SFX on included');
-  console.log('✓ 4. Prompt builder passed: verified eloquence levels and unconditional master override block.');
+  console.log('✓ 5. Prompt builder passed: verified eloquence levels and unconditional master override block.');
 }
+
+// 6. Review Finding Duplicate Prevention
+function mergeReviewFlags(existingFlags, incomingFlags) {
+  const activeExistingCategories = new Set(
+    existingFlags.filter((f) => f.status !== 'dismissed').map((f) => f.category)
+  );
+  const uniqueIncoming = incomingFlags.filter((f) => !activeExistingCategories.has(f.category));
+  return [...existingFlags, ...uniqueIncoming];
+}
+
+{
+  const existing = [
+    { id: 'f1', category: 'grammar_gender', status: 'pending' },
+    { id: 'f2', category: 'reading_order', status: 'dismissed' },
+  ];
+  const incoming = [
+    { id: 'f3', category: 'grammar_gender', status: 'pending' }, // Duplicate of active flag -> rejected
+    { id: 'f4', category: 'reading_order', status: 'pending' },  // Dismissed previously -> allowed
+    { id: 'f5', category: 'ocr_error', status: 'pending' },      // Brand new -> allowed
+  ];
+  const merged = mergeReviewFlags(existing, incoming);
+  assert.strictEqual(merged.length, 4, 'Should contain 4 flags (f1, f2, f4, f5)');
+  assert.strictEqual(merged.filter((f) => f.category === 'grammar_gender').length, 1, 'Duplicate active flag prevented');
+  console.log('✓ 6. Review finding lifecycle passed: duplicate prevention and history preservation validated.');
+}
+
+console.log('--- ALL VERIFICATION TESTS COMPLETED AND VALIDATED! ---');

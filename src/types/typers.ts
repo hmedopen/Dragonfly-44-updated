@@ -97,6 +97,40 @@ export const DEFAULT_TYPER_SETTINGS: TyperSettings = {
 
 export const TYPER_SETTINGS_STORAGE_KEY = 'dragonfly44_typer_settings';
 
+// Legacy mapping bridge ensuring backward compatibility
+export const LEGACY_TYPER_ALIAS_MAP: Record<string, string> = {
+  dialogue: 'speech_bubbles',
+  scream: 'shouting',
+  box: 'square_bubbles',
+  thought: 'thought_bubbles',
+  in_art: 'outside_text',
+};
+
+export function resolveCanonicalTyper(
+  typeKey: string | undefined | null,
+  configuredTypers?: CustomTyperConfig[]
+): { id: string; name: string; prefix: string } {
+  if (!typeKey || typeKey === 'none') {
+    return { id: 'none', name: 'None', prefix: '' };
+  }
+
+  const typers = configuredTypers && configuredTypers.length > 0 ? configuredTypers : DEFAULT_TYPERS;
+  const canonicalKey = LEGACY_TYPER_ALIAS_MAP[typeKey.toLowerCase()] || typeKey;
+
+  const matched = typers.find(
+    (t) =>
+      t.id.toLowerCase() === canonicalKey.toLowerCase() ||
+      t.name.toLowerCase() === typeKey.toLowerCase() ||
+      t.id.toLowerCase() === typeKey.toLowerCase()
+  );
+
+  if (matched) {
+    return { id: matched.id, name: matched.name, prefix: matched.prefix };
+  }
+
+  return { id: typeKey, name: typeKey, prefix: '' };
+}
+
 export function loadTyperSettings(): TyperSettings {
   try {
     const raw = localStorage.getItem(TYPER_SETTINGS_STORAGE_KEY);
