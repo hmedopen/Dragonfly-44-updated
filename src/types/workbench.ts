@@ -31,6 +31,12 @@ export interface ReviewFlagItem {
   resolutionDetail?: string; // Description of how it was resolved (e.g. 'accepted_text_fix', 'manual_edit')
 }
 
+export interface TranslationHistoryEntry {
+  timestamp: number;
+  type: 'raw' | 'humanized' | 'manual';
+  text: string;
+}
+
 export interface BubbleItem {
   id: string;
   pageId: string;
@@ -42,8 +48,10 @@ export interface BubbleItem {
   sourceLanguage?: string;
   sourceText: string;
   originalSourceText: string;     // Cached from initial scan for 1-click revert
-  translatedText: string;
-  rawTranslatedText: string;      // Cached from initial scan for 1-click revert
+  translatedText: string;         // Current workspace translation (editable)
+  rawTranslatedText: string;      // Cached unmodified model output before post-processing
+  humanizedTranslatedText?: string;// Intermediate translation after humanizer
+  translationHistory?: TranslationHistoryEntry[]; // Reversible history of translations
   reviewFlags: ReviewFlagItem[];  // Supports multiple independent flags per bubble
   speakerCharacterId?: string;    // Linked to Chapter/Project Lore
   confidence?: number;            // 0.0 - 1.0 detection confidence
@@ -329,3 +337,138 @@ export const ELOQUENCE_CONFIG: Record<
 };
 
 export type PageScanStatus = 'unscanned' | 'scanning' | 'scanned' | 'error';
+
+// ==========================================
+// SYSTEM #2: AI INSTRUCTION & TRANSLATION ENGINE TYPES
+// ==========================================
+
+export type TranslationFidelity = 'faithful' | 'localized' | 'expressive';
+
+export const TRANSLATION_FIDELITY_CONFIG: Record<
+  TranslationFidelity,
+  { label: string; arabicLabel: string; description: string; directive: string }
+> = {
+  faithful: {
+    label: 'Faithful',
+    arabicLabel: 'دقيق ومخلص للأصل',
+    description: 'Preserves source meaning and structure as closely as natural Arabic permits.',
+    directive:
+      'Maintain close structural and semantic fidelity to the original dialogue. Preserve specific phrasings, pauses, and rhetorical cadence without adding unnecessary stylistic flourishes.',
+  },
+  localized: {
+    label: 'Localized',
+    arabicLabel: 'توطين درامي طبيعي',
+    description: 'Adapts idioms, cultural expressions, and spoken nuances for Arabic scanlation.',
+    directive:
+      'Prioritize authentic Arabic scanlation localization. Rephrase foreign idioms into natural Arabic equivalents and ensure dialogue flows organically while strictly preserving narrative intent and emotional weight.',
+  },
+  expressive: {
+    label: 'Expressive',
+    arabicLabel: 'تعبيري حيوي ومؤثر',
+    description: 'Maximizes emotional resonance, dramatic punch, and character personality.',
+    directive:
+      'Heighten dramatic tension, comedic punch, and character idiosyncrasies. Use evocative Arabic expressions that maximize emotional engagement while remaining faithful to the core scene meaning.',
+  },
+};
+
+export type HumanizerIntensity = 'light' | 'balanced' | 'strong' | 'maximum';
+
+export const HUMANIZER_INTENSITY_CONFIG: Record<
+  HumanizerIntensity,
+  { label: string; arabicLabel: string; description: string }
+> = {
+  light: {
+    label: 'Light',
+    arabicLabel: 'خفيف',
+    description: 'Minimal intervention; fixes only blatant AI sentence templates and corrupt spacing.',
+  },
+  balanced: {
+    label: 'Balanced',
+    arabicLabel: 'متوازن (موصى به)',
+    description: 'Standard scanlation polish; eliminates synthetic fillers while preserving source cadence and character voice.',
+  },
+  strong: {
+    label: 'Strong',
+    arabicLabel: 'قوي',
+    description: 'Substantial naturalization of rhythm, connectors, and spoken flow.',
+  },
+  maximum: {
+    label: 'Maximum',
+    arabicLabel: 'أقصى تنقيح',
+    description: 'Maximum effort to eliminate any trace of machine translation while strictly preserving meaning and terminology.',
+  },
+};
+
+export type OrthographyMode = 'correct_spelling' | 'relaxed';
+
+export const ORTHOGRAPHY_CONFIG: Record<
+  OrthographyMode,
+  { label: string; description: string }
+> = {
+  correct_spelling: {
+    label: 'Correct Arabic Orthography',
+    description: 'Strictly preserves legitimate hamza distinctions (أ، إ، آ، ؤ، ئ), shadda, and meaningful tanween.',
+  },
+  relaxed: {
+    label: 'Relaxed Comic Typography',
+    description: 'Permits informal typographical simplifications standard in fast webtoon typesetting while preventing corruption.',
+  },
+};
+
+export type HumanizerRuleCategory =
+  | 'ai_patterns'
+  | 'connectors'
+  | 'vocabulary'
+  | 'sentence_structure'
+  | 'redundancy'
+  | 'dialogue_naturalness'
+  | 'narration_naturalness'
+  | 'emotional_expression'
+  | 'grammar_agreement'
+  | 'punctuation'
+  | 'hamza_orthography'
+  | 'diacritics_tanween'
+  | 'repetition_rhythm'
+  | 'idioms_expressions'
+  | 'dialect_preservation'
+  | 'character_voice';
+
+export type RestrictionLevel = 'strict' | 'moderate' | 'light' | 'context_dependent';
+
+export interface HumanizerRule {
+  id: string;
+  category: HumanizerRuleCategory;
+  name: string;
+  description: string;
+  restrictionLevel: RestrictionLevel;
+  applicability: 'dialogue' | 'narration' | 'dialect' | 'all';
+  detectionConditions?: string;
+  preferredBehavior: string;
+  exceptions?: string;
+  badExample?: string;
+  goodExample?: string;
+  conflictBehavior?: string;
+}
+
+export interface System2Settings {
+  eloquenceLevel: EloquenceLevel;
+  translationFidelity: TranslationFidelity;
+  isHumanizerEnabled: boolean;
+  humanizerIntensity: HumanizerIntensity;
+  orthographyMode: OrthographyMode;
+  masterPromptOverride: string;
+  isMasterPromptActive: boolean;
+}
+
+export interface CompiledInstructionPackage {
+  systemInstruction: string;
+  effectiveEloquence: EloquenceLevel;
+  effectiveFidelity: TranslationFidelity;
+  effectiveIntensity: HumanizerIntensity;
+  isMasterPromptApplied: boolean;
+  isDialectActive: boolean;
+  detectedDialect?: string;
+  appliedRuleIds: string[];
+  outputContract: string;
+}
+
