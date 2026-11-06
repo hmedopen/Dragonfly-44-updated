@@ -5,7 +5,10 @@ import type {
   ProjectLoreLedger, 
   ChapterIntelligence,
   EloquenceLevel, 
-  GeminiModelKey 
+  GeminiModelKey,
+  TranslationFidelity,
+  HumanizerIntensity,
+  OrthographyMode
 } from '../types/workbench';
 import { loadTyperSettings, resolveCanonicalTyper } from '../types/typers';
 import { getPageBubbles, savePageBubbles, getProjectLore } from '../services/db';
@@ -78,6 +81,8 @@ interface WorkbenchState {
   dismissFlag: (pageId: string, bubbleId: string, flagId: string) => void;
   revertSourceText: (pageId: string, bubbleId: string) => void;
   revertTranslatedText: (pageId: string, bubbleId: string) => void;
+  revertToRawTranslation: (pageId: string, bubbleId: string) => void;
+  revertToHumanizedTranslation: (pageId: string, bubbleId: string) => void;
 
   // Four Core AI Operations
   startBatchScan: (
@@ -281,7 +286,11 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
 
     const updated = existing.map((b) => {
       if (b.id !== bubbleId) return b;
-      return { ...b, ...updatedPatch };
+      const history = [...(b.translationHistory || [])];
+      if (patch.translatedText !== undefined && patch.translatedText !== b.translatedText) {
+        history.push({ timestamp: Date.now(), type: 'manual', text: patch.translatedText });
+      }
+      return { ...b, ...updatedPatch, translationHistory: history };
     });
 
     set((s) => ({
@@ -488,9 +497,34 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   revertTranslatedText: (pageId: string, bubbleId: string) => {
     const state = get();
     const existing = state.bubblesByPage[pageId] || [];
+    const now = Date.now();
     const updated = existing.map((b) => {
       if (b.id !== bubbleId) return b;
-      return { ...b, translatedText: b.rawTranslatedText, updatedAt: Date.now() };
+      const history = [...(b.translationHistory || [])];
+
+      // Revert hierarchy:
+      // If user has edited manual text and humanized version exists, revert to humanized first.
+      // If already equal to humanized, revert to raw model output.
+      let targetText = b.rawTranslatedText || b.translatedText;
+      let targetType: 'humanized' | 'raw' = 'raw';
+
+      if (b.humanizedTranslatedText && b.translatedText !== b.humanizedTranslatedText) {
+        targetText = b.humanizedTranslatedText;
+        targetType = 'humanized';
+      } else if (b.rawTranslatedText && b.translatedText !== b.rawTranslatedText) {
+        targetText = b.rawTranslatedText;
+        targetType = 'raw';
+      }
+
+      history.push({ timestamp: now, type: targetType, text: targetText });
+
+      return {
+        ...b,
+        translatedText: targetText,
+        isManuallyEdited: false,
+        translationHistory: history,
+        updatedAt: now,
+      };
     });
 
     set((s) => ({
@@ -505,12 +539,74 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     );
   },
 
+  revertToRawTranslation: (pageId: string, bubbleId: string) => {
+    const state = get();
+    const existing = state.bubblesByPage[pageId] || [];
+    const now = Date.now();
+    const updated = existing.map((b) => {
+      if (b.id !== bubbleId) return b;
+      const targetText = b.rawTranslatedText || b.translatedText;
+      const history = [...(b.translationHistory || []), { timestamp: now, type: 'raw' as const, text: targetText }];
+      return {
+        ...b,
+        translatedText: targetText,
+        isManuallyEdited: false,
+        translationHistory: history,
+        updatedAt: now,
+      };
+    });
+
+    set((s) => ({
+      bubblesByPage: {
+        ...s.bubblesByPage,
+        [pageId]: updated,
+      },
+    }));
+
+    savePageBubbles(pageId, updated).catch((err) =>
+      console.error('[WorkbenchStore] Failed to revert to raw translation in IDB', err)
+    );
+  },
+
+  revertToHumanizedTranslation: (pageId: string, bubbleId: string) => {
+    const state = get();
+    const existing = state.bubblesByPage[pageId] || [];
+    const now = Date.now();
+    const updated = existing.map((b) => {
+      if (b.id !== bubbleId) return b;
+      const targetText = b.humanizedTranslatedText || b.rawTranslatedText || b.translatedText;
+      const history = [...(b.translationHistory || []), { timestamp: now, type: 'humanized' as const, text: targetText }];
+      return {
+        ...b,
+        translatedText: targetText,
+        isManuallyEdited: false,
+        translationHistory: history,
+        updatedAt: now,
+      };
+    });
+
+    set((s) => ({
+      bubblesByPage: {
+        ...s.bubblesByPage,
+        [pageId]: updated,
+      },
+    }));
+
+    savePageBubbles(pageId, updated).catch((err) =>
+      console.error('[WorkbenchStore] Failed to revert to humanized translation in IDB', err)
+    );
+  },
+
   // 1. Scan All (Batch Chapter Scan)
   startBatchScan: (pages, projectId = null, isDraft = false) => {
     const apiKey = localStorage.getItem('dragonfly44_gemini_api_key') || '';
     const selectedModel = (localStorage.getItem('dragonfly44_selected_model') as GeminiModelKey) || 'gemini-3.8-flash';
     const eloquenceLevel = Number(localStorage.getItem('dragonfly44_eloquence_level') || '2') as EloquenceLevel;
     const includeSFX = localStorage.getItem('dragonfly44_include_sfx') === 'true';
+    const translationFidelity = (localStorage.getItem('dragonfly44_translation_fidelity') as TranslationFidelity) || 'localized';
+    const isHumanizerEnabled = localStorage.getItem('dragonfly44_humanizer_enabled') !== 'false';
+    const humanizerIntensity = (localStorage.getItem('dragonfly44_humanizer_intensity') as HumanizerIntensity) || 'balanced';
+    const orthographyMode = (localStorage.getItem('dragonfly44_orthography_mode') as OrthographyMode) || 'correct_spelling';
     const masterPromptOverride = localStorage.getItem('dragonfly44_master_prompt_override') || '';
     const isMasterPromptActive = localStorage.getItem('dragonfly44_master_prompt_active') !== 'false';
     const chapterId = get().activeChapterId || undefined;
@@ -526,6 +622,10 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
         selectedModel,
         eloquenceLevel,
         includeSFX,
+        translationFidelity,
+        isHumanizerEnabled,
+        humanizerIntensity,
+        orthographyMode,
         masterPromptOverride,
         isMasterPromptActive,
       },
@@ -579,6 +679,10 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     const apiKey = localStorage.getItem('dragonfly44_gemini_api_key') || '';
     const selectedModel = (localStorage.getItem('dragonfly44_selected_model') as GeminiModelKey) || 'gemini-3.8-flash';
     const eloquenceLevel = (Number(localStorage.getItem('dragonfly44_eloquence_level') || '2') as EloquenceLevel) || 2;
+    const translationFidelity = (localStorage.getItem('dragonfly44_translation_fidelity') as TranslationFidelity) || 'localized';
+    const isHumanizerEnabled = localStorage.getItem('dragonfly44_humanizer_enabled') !== 'false';
+    const humanizerIntensity = (localStorage.getItem('dragonfly44_humanizer_intensity') as HumanizerIntensity) || 'balanced';
+    const orthographyMode = (localStorage.getItem('dragonfly44_orthography_mode') as OrthographyMode) || 'correct_spelling';
     const masterPromptOverride = localStorage.getItem('dragonfly44_master_prompt_override') || '';
     const isMasterPromptActive = localStorage.getItem('dragonfly44_master_prompt_active') !== 'false';
     const chapterId = state.activeChapterId || undefined;
@@ -593,15 +697,28 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
       apiKey,
       selectedModel,
       eloquenceLevel,
+      translationFidelity,
+      isHumanizerEnabled,
+      humanizerIntensity,
+      orthographyMode,
       masterPromptOverride,
       isMasterPromptActive,
     });
 
+    const now = Date.now();
+    const history = [...(targetBubble.translationHistory || [])];
+    history.push({ timestamp: now, type: 'raw', text: result.rawTranslatedText });
+    if (result.humanizedTranslatedText !== result.rawTranslatedText) {
+      history.push({ timestamp: now, type: 'humanized', text: result.humanizedTranslatedText });
+    }
+
     const patch: Partial<BubbleItem> = {
       translatedText: result.translatedText,
-      rawTranslatedText: result.translatedText,
-      isManuallyEdited: true,
-      updatedAt: Date.now(),
+      rawTranslatedText: result.rawTranslatedText,
+      humanizedTranslatedText: result.humanizedTranslatedText,
+      translationHistory: history,
+      isManuallyEdited: false,
+      updatedAt: now,
     };
     if (result.sourceText && !targetBubble.sourceText) {
       patch.sourceText = result.sourceText;

@@ -216,8 +216,9 @@ export async function auditPageVisuallyWithGemini(
           createdAt: Date.now(),
         };
 
+        const now = Date.now();
         const placeholder: BubbleItem = {
-          id: `missed-${Date.now()}-${nextIndex}-${Math.random().toString(36).substring(2, 6)}`,
+          id: `missed-${now}-${nextIndex}-${Math.random().toString(36).substring(2, 6)}`,
           pageId,
           chapterId,
           index: nextIndex,
@@ -228,10 +229,12 @@ export async function auditPageVisuallyWithGemini(
           originalSourceText: issue.sourceText || '',
           translatedText: suggestedAr,
           rawTranslatedText: suggestedAr,
+          humanizedTranslatedText: suggestedAr,
+          translationHistory: [{ timestamp: now, type: 'humanized', text: suggestedAr }],
           reviewFlags: [flagItem],
           confidence: 0.85,
           isManuallyEdited: false,
-          updatedAt: Date.now(),
+          updatedAt: now,
         };
         newMissedBubbles.push(placeholder);
       }

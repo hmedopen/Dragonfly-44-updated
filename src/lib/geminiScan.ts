@@ -1,9 +1,17 @@
 import { getPageBlob, getProjectLore } from '../services/db';
 import { getChapterIntelligence, ingestPageIntelligence } from '../services/intelligence';
-import type { BubbleItem, GeminiModelKey, EloquenceLevel } from '../types/workbench';
+import type {
+  BubbleItem,
+  GeminiModelKey,
+  EloquenceLevel,
+  TranslationFidelity,
+  HumanizerIntensity,
+  OrthographyMode,
+} from '../types/workbench';
 import { loadTyperSettings, resolveCanonicalTyper } from '../types/typers';
-import { buildScanSystemInstruction } from './promptBuilder';
+import { compileInstructions } from './instructionCompiler';
 import { humanizeArabicText } from './arabicHumanizer';
+import { validatePageScanOutput, validateSingleBubbleOutput } from './translationValidator';
 
 export interface ScanPageOptions {
   pageId: string;
@@ -15,6 +23,10 @@ export interface ScanPageOptions {
   selectedModel: GeminiModelKey | string;
   eloquenceLevel: EloquenceLevel;
   includeSFX: boolean;
+  translationFidelity?: TranslationFidelity;
+  isHumanizerEnabled?: boolean;
+  humanizerIntensity?: HumanizerIntensity;
+  orthographyMode?: OrthographyMode;
   masterPromptOverride?: string;
   isMasterPromptActive?: boolean;
   precedingDialogueSnippet?: string;
@@ -75,6 +87,10 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
     selectedModel,
     eloquenceLevel,
     includeSFX,
+    translationFidelity = 'localized',
+    isHumanizerEnabled = true,
+    humanizerIntensity = 'balanced',
+    orthographyMode = 'correct_spelling',
     masterPromptOverride,
     isMasterPromptActive,
     precedingDialogueSnippet,
@@ -101,9 +117,14 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
   // 4. Fetch current configured typers
   const typerSettings = loadTyperSettings();
 
-  // 5. Assemble system prompt with rolling context
-  const systemInstruction = buildScanSystemInstruction({
+  // 5. Assemble system instruction via Instruction Compiler
+  const compiled = compileInstructions({
+    task: 'page_scan',
     eloquenceLevel,
+    translationFidelity,
+    isHumanizerEnabled,
+    humanizerIntensity,
+    orthographyMode,
     includeSFX,
     projectLore,
     chapterIntelligence,
@@ -118,14 +139,14 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
 
   const payload = {
     system_instruction: {
-      parts: [{ text: systemInstruction }],
+      parts: [{ text: compiled.systemInstruction }],
     },
     contents: [
       {
         role: 'user',
         parts: [
           {
-            text: 'Extract all dialogue bubbles, narration boxes, shouts, thoughts, and text from this page. Provide bounding boxes [ymin, xmin, ymax, xmax] on a 0-1000 scale, accurate TypeR prefixes, and high-eloquence Arabic translations in structured JSON format.',
+            text: 'Extract all dialogue bubbles, narration boxes, shouts, thoughts, and text from this page. Provide bounding boxes [ymin, xmin, ymax, xmax] on a 0-1000 scale, accurate TypeR prefixes, and natural Arabic translations in structured JSON format.',
           },
           {
             inline_data: {
@@ -157,47 +178,32 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
   const result = await response.json();
   const rawText = result?.candidates?.[0]?.content?.parts?.[0]?.text;
 
-  if (!rawText) {
-    throw new Error('Gemini returned an empty response candidate.');
+  // Validate structural output locally
+  const validated = validatePageScanOutput(rawText || '');
+  if (!validated.isValid || !validated.data) {
+    throw new Error(validated.errors[0] || 'Failed to parse structured JSON from Gemini response.');
   }
 
-  // Strip markdown codeblock backticks if present
-  let cleanJson = rawText.trim();
-  if (cleanJson.startsWith('```json')) {
-    cleanJson = cleanJson.replace(/^```json\s*/, '').replace(/\s*```$/, '');
-  } else if (cleanJson.startsWith('```')) {
-    cleanJson = cleanJson.replace(/^```\s*/, '').replace(/\s*```$/, '');
-  }
+  const { bubbles: rawBubbles, pageContext, detectedGlossaryTerms, detectedCharacters, detectedRelationships } = validated.data;
 
-  let parsed: any;
-  try {
-    parsed = JSON.parse(cleanJson);
-  } catch (err) {
-    console.error('Failed to parse Gemini JSON output:', cleanJson, err);
-    throw new Error('Failed to parse structured JSON from Gemini response.');
-  }
-
-  const rawBubbles = Array.isArray(parsed.bubbles) ? parsed.bubbles : [];
-  const detectedGlossaryTerms = Array.isArray(parsed.detectedGlossaryTerms)
-    ? parsed.detectedGlossaryTerms
-    : [];
-  const detectedCharacters = Array.isArray(parsed.detectedCharacters)
-    ? parsed.detectedCharacters
-    : [];
-  const detectedRelationships = Array.isArray(parsed.detectedRelationships)
-    ? parsed.detectedRelationships
-    : [];
-
-  // Map into BubbleItem schema with canonical typer resolution & humanizer
+  // Map into BubbleItem schema with canonical typer resolution & non-destructive humanizer
   const bubbles: BubbleItem[] = rawBubbles.map((item: any, idx: number) => {
     const rawArabic = item.translatedText || '';
-    const humanizedArabic = humanizeArabicText(rawArabic, eloquenceLevel);
+    const humanizedArabic = isHumanizerEnabled
+      ? humanizeArabicText(rawArabic, {
+          eloquenceLevel,
+          intensity: humanizerIntensity,
+          orthographyMode,
+          isDialectActive: compiled.isDialectActive,
+        })
+      : rawArabic;
 
     const canonicalTyper = resolveCanonicalTyper(item.type, typerSettings.typers);
     const safeBox = normalizeBoundingBox(item.box_2d);
 
+    const now = Date.now();
     return {
-      id: `b-${Date.now()}-${idx + 1}-${Math.random().toString(36).substring(2, 6)}`,
+      id: `b-${now}-${idx + 1}-${Math.random().toString(36).substring(2, 6)}`,
       pageId,
       chapterId,
       index: idx + 1,
@@ -209,10 +215,15 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
       originalSourceText: item.sourceText || '',
       translatedText: humanizedArabic,
       rawTranslatedText: rawArabic,
+      humanizedTranslatedText: humanizedArabic,
+      translationHistory: [
+        { timestamp: now, type: 'raw', text: rawArabic },
+        { timestamp: now, type: 'humanized', text: humanizedArabic },
+      ],
       reviewFlags: [],
       confidence: 0.9,
       isManuallyEdited: false,
-      updatedAt: Date.now(),
+      updatedAt: now,
     };
   });
 
@@ -224,7 +235,7 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
         projectId,
         pageId,
         pageIndex,
-        sceneContext: parsed.pageContext || '',
+        sceneContext: pageContext || '',
         detectedCharacters,
         detectedTerms: detectedGlossaryTerms.map((g: any) => ({
           termOriginal: g.source || '',
@@ -240,7 +251,7 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
 
   return {
     bubbles,
-    pageContext: parsed.pageContext || '',
+    pageContext,
     detectedGlossaryTerms,
   };
 }
@@ -255,18 +266,24 @@ export interface TranslateSingleBubbleOptions {
   apiKey: string;
   selectedModel: GeminiModelKey | string;
   eloquenceLevel: EloquenceLevel;
+  translationFidelity?: TranslationFidelity;
+  isHumanizerEnabled?: boolean;
+  humanizerIntensity?: HumanizerIntensity;
+  orthographyMode?: OrthographyMode;
   masterPromptOverride?: string;
   isMasterPromptActive?: boolean;
 }
 
 export interface SingleBubbleTranslationResult {
   sourceText?: string;
+  rawTranslatedText: string;
+  humanizedTranslatedText: string;
   translatedText: string;
 }
 
 /**
  * Translates a single bubble into Arabic using Gemini.
- * Uses surrounding dialogue context and QC review notes.
+ * Uses targeted single-bubble compilation, surrounding dialogue context, and QC review notes.
  */
 export async function translateSingleBubbleWithGemini(
   options: TranslateSingleBubbleOptions
@@ -281,6 +298,10 @@ export async function translateSingleBubbleWithGemini(
     apiKey,
     selectedModel,
     eloquenceLevel,
+    translationFidelity = 'localized',
+    isHumanizerEnabled = true,
+    humanizerIntensity = 'balanced',
+    orthographyMode = 'correct_spelling',
     masterPromptOverride,
     isMasterPromptActive,
   } = options;
@@ -291,18 +312,6 @@ export async function translateSingleBubbleWithGemini(
 
   const projectLore = !isDraft && projectId ? await getProjectLore(projectId) : null;
   const chapterIntelligence = chapterId ? await getChapterIntelligence(chapterId) : null;
-
-  const systemInstruction = buildScanSystemInstruction({
-    eloquenceLevel,
-    includeSFX: true,
-    projectLore,
-    chapterIntelligence,
-    masterPromptOverride,
-    isMasterPromptActive,
-  });
-
-  const effectiveModel = selectedModel || 'gemini-3.8-flash';
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${effectiveModel}:generateContent?key=${apiKey}`;
 
   // Assemble contextual dialogue history from other page bubbles
   let pageContextText = '';
@@ -335,6 +344,31 @@ export async function translateSingleBubbleWithGemini(
     }
   }
 
+  // Compile targeted single bubble instruction package
+  const compiled = compileInstructions({
+    task: 'single_bubble',
+    eloquenceLevel,
+    translationFidelity,
+    isHumanizerEnabled,
+    humanizerIntensity,
+    orthographyMode,
+    masterPromptOverride,
+    isMasterPromptActive,
+    projectLore,
+    chapterIntelligence,
+    singleBubbleContext: {
+      index: bubble.index,
+      type: bubble.type,
+      typerPrefix: bubble.typerPrefix,
+      sourceText: bubble.sourceText,
+      pageContextText,
+      reviewNotesText: reviewFlagsText,
+    },
+  });
+
+  const effectiveModel = selectedModel || 'gemini-3.8-flash';
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${effectiveModel}:generateContent?key=${apiKey}`;
+
   const hasSource = Boolean(bubble.sourceText && bubble.sourceText.trim().length > 0);
   let userParts: any[] = [];
 
@@ -345,7 +379,7 @@ export async function translateSingleBubbleWithGemini(
       },
     ];
   } else {
-    // If no source text, try vision extraction from page image blob
+    // If no source text, extract visually from page image blob
     const blob = await getPageBlob(pageId);
     if (!blob) {
       throw new Error('No source dialogue text entered and scan page image not available.');
@@ -355,7 +389,7 @@ export async function translateSingleBubbleWithGemini(
 
     userParts = [
       {
-        text: `Look at the comic dialogue bubble at normalized box [ymin, xmin, ymax, xmax] = [${bubble.box_2d.join(', ')}] on 0-1000 scale.\nTranscribe its original dialogue as sourceText, and translate it into high-eloquence Arabic as translatedText.${pageContextText}${reviewFlagsText}\n\nReturn strictly valid JSON:\n{\n  "sourceText": "Original text",\n  "translatedText": "Humanized Arabic translation"\n}`,
+        text: `Look at the comic dialogue bubble at normalized box [ymin, xmin, ymax, xmax] = [${bubble.box_2d.join(', ')}] on 0-1000 scale.\nTranscribe its original dialogue as sourceText, and translate it into natural Arabic as translatedText.${pageContextText}${reviewFlagsText}\n\nReturn strictly valid JSON:\n{\n  "sourceText": "Original text",\n  "translatedText": "Humanized Arabic translation"\n}`,
       },
       {
         inline_data: {
@@ -368,7 +402,7 @@ export async function translateSingleBubbleWithGemini(
 
   const payload = {
     system_instruction: {
-      parts: [{ text: systemInstruction }],
+      parts: [{ text: compiled.systemInstruction }],
     },
     contents: [
       {
@@ -397,30 +431,26 @@ export async function translateSingleBubbleWithGemini(
   const result = await response.json();
   const rawText = result?.candidates?.[0]?.content?.parts?.[0]?.text;
 
-  if (!rawText) {
-    throw new Error('Gemini returned an empty response.');
+  // Validate structural output locally
+  const validated = validateSingleBubbleOutput(rawText || '', bubble.sourceText);
+  if (!validated.isValid || !validated.data) {
+    throw new Error(validated.errors[0] || 'Failed to parse structured JSON from Gemini response.');
   }
 
-  let cleanJson = rawText.trim();
-  if (cleanJson.startsWith('```json')) {
-    cleanJson = cleanJson.replace(/^```json\s*/, '').replace(/\s*```$/, '');
-  } else if (cleanJson.startsWith('```')) {
-    cleanJson = cleanJson.replace(/^```\s*/, '').replace(/\s*```$/, '');
-  }
-
-  let parsed: any;
-  try {
-    parsed = JSON.parse(cleanJson);
-  } catch (err) {
-    console.error('Failed to parse Gemini single translation JSON:', cleanJson, err);
-    throw new Error('Failed to parse structured JSON from Gemini response.');
-  }
-
-  const rawArabic = parsed.translatedText || parsed.arabic || '';
-  const humanized = humanizeArabicText(rawArabic, eloquenceLevel);
+  const rawArabic = validated.data.translatedText;
+  const humanizedArabic = isHumanizerEnabled
+    ? humanizeArabicText(rawArabic, {
+        eloquenceLevel,
+        intensity: humanizerIntensity,
+        orthographyMode,
+        isDialectActive: compiled.isDialectActive,
+      })
+    : rawArabic;
 
   return {
-    sourceText: parsed.sourceText ? String(parsed.sourceText).trim() : undefined,
-    translatedText: humanized,
+    sourceText: validated.data.sourceText,
+    rawTranslatedText: rawArabic,
+    humanizedTranslatedText: humanizedArabic,
+    translatedText: humanizedArabic,
   };
 }
