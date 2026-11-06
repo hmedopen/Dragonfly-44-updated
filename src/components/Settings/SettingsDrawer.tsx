@@ -14,8 +14,19 @@ import {
   Trash2,
   Type
 } from 'lucide-react';
-import type { GeminiModelKey, EloquenceLevel } from '../../types/workbench';
-import { GEMINI_MODEL_PROFILES } from '../../types/workbench';
+import type { 
+  GeminiModelKey, 
+  EloquenceLevel,
+  TranslationFidelity,
+  HumanizerIntensity,
+  OrthographyMode
+} from '../../types/workbench';
+import { 
+  GEMINI_MODEL_PROFILES,
+  TRANSLATION_FIDELITY_CONFIG,
+  HUMANIZER_INTENSITY_CONFIG,
+  ORTHOGRAPHY_CONFIG
+} from '../../types/workbench';
 import type { CustomTyperConfig, PrefixPosition, TyperSettings } from '../../types/typers';
 import { loadTyperSettings, saveTyperSettings, DEFAULT_TYPERS } from '../../types/typers';
 
@@ -74,6 +85,20 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({ isOpen, onClose 
     return localStorage.getItem('dragonfly44_include_sfx') === 'true';
   });
 
+  // 4b. System #2: Translation Fidelity, Arabic Humanizer & Orthography
+  const [translationFidelity, setTranslationFidelity] = useState<TranslationFidelity>(() => {
+    return (localStorage.getItem('dragonfly44_translation_fidelity') as TranslationFidelity) || 'localized';
+  });
+  const [isHumanizerEnabled, setIsHumanizerEnabled] = useState<boolean>(() => {
+    return localStorage.getItem('dragonfly44_humanizer_enabled') !== 'false';
+  });
+  const [humanizerIntensity, setHumanizerIntensity] = useState<HumanizerIntensity>(() => {
+    return (localStorage.getItem('dragonfly44_humanizer_intensity') as HumanizerIntensity) || 'balanced';
+  });
+  const [orthographyMode, setOrthographyMode] = useState<OrthographyMode>(() => {
+    return (localStorage.getItem('dragonfly44_orthography_mode') as OrthographyMode) || 'correct_spelling';
+  });
+
   // 5. Master Prompt Override Terminal
   const [masterPromptOverride, setMasterPromptOverride] = useState(() => {
     return localStorage.getItem('dragonfly44_master_prompt_override') || '';
@@ -105,6 +130,22 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({ isOpen, onClose 
   useEffect(() => {
     localStorage.setItem('dragonfly44_include_sfx', String(includeSFX));
   }, [includeSFX]);
+
+  useEffect(() => {
+    localStorage.setItem('dragonfly44_translation_fidelity', translationFidelity);
+  }, [translationFidelity]);
+
+  useEffect(() => {
+    localStorage.setItem('dragonfly44_humanizer_enabled', String(isHumanizerEnabled));
+  }, [isHumanizerEnabled]);
+
+  useEffect(() => {
+    localStorage.setItem('dragonfly44_humanizer_intensity', humanizerIntensity);
+  }, [humanizerIntensity]);
+
+  useEffect(() => {
+    localStorage.setItem('dragonfly44_orthography_mode', orthographyMode);
+  }, [orthographyMode]);
 
   useEffect(() => {
     localStorage.setItem('dragonfly44_master_prompt_override', masterPromptOverride);
@@ -405,6 +446,9 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({ isOpen, onClose 
               <label className="text-[11px] font-mono uppercase tracking-wider text-zinc-400 font-semibold">
                 Arabic Eloquence
               </label>
+              <span className="text-[10px] font-mono text-amber-400">
+                {eloquenceLevel === 1 ? 'Casual Modern' : eloquenceLevel === 2 ? 'Standard Literary' : 'High Classical'}
+              </span>
             </div>
 
             <div className="relative pt-2 pb-1 px-2">
@@ -440,6 +484,131 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({ isOpen, onClose 
             </div>
           </div>
 
+          {/* Section 4b: Translation Fidelity */}
+          <div className="flex flex-col gap-2.5 p-3.5 rounded-xl bg-[#09090c] border border-white/[0.08]">
+            <div className="flex items-center justify-between">
+              <label className="text-[11px] font-mono uppercase tracking-wider text-zinc-400 font-semibold">
+                Translation Fidelity
+              </label>
+              <span className="text-[10px] font-mono text-amber-400">
+                {TRANSLATION_FIDELITY_CONFIG[translationFidelity].label}
+              </span>
+            </div>
+            <div className="grid grid-cols-3 gap-1.5 p-1 rounded-lg bg-[#050508] border border-white/[0.06]">
+              {(['faithful', 'localized', 'expressive'] as TranslationFidelity[]).map((f) => {
+                const cfg = TRANSLATION_FIDELITY_CONFIG[f];
+                const isActive = translationFidelity === f;
+                return (
+                  <button
+                    key={f}
+                    type="button"
+                    onClick={() => setTranslationFidelity(f)}
+                    className={`py-1.5 px-2 rounded font-mono text-[10px] transition-all cursor-pointer text-center ${
+                      isActive
+                        ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 font-semibold'
+                        : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
+                    }`}
+                  >
+                    {cfg.label}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-[10px] text-zinc-500 font-mono leading-relaxed">
+              {TRANSLATION_FIDELITY_CONFIG[translationFidelity].description}
+            </p>
+          </div>
+
+          {/* Section 4c: Arabic Humanizer Engine */}
+          <div className="flex flex-col gap-3 p-3.5 rounded-xl bg-[#09090c] border border-white/[0.08]">
+            <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-0.5">
+                <span className="text-[11px] font-mono uppercase tracking-wider text-zinc-300 font-semibold">
+                  Arabic Humanizer & Natural Cadence
+                </span>
+                <span className="text-[10px] text-zinc-500 font-mono">
+                  16 rule groups • Strips AI templates • Preserves scanlator flow
+                </span>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={isHumanizerEnabled}
+                  onChange={(e) => setIsHumanizerEnabled(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-10 h-5 bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-zinc-300 after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-amber-600 peer-checked:after:bg-white" />
+              </label>
+            </div>
+
+            {isHumanizerEnabled && (
+              <div className="flex flex-col gap-2 pt-2 border-t border-white/[0.05]">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-mono uppercase text-zinc-400">
+                    Intensity Profile
+                  </span>
+                  <span className="text-[10px] font-mono text-amber-400">
+                    {HUMANIZER_INTENSITY_CONFIG[humanizerIntensity].label}
+                  </span>
+                </div>
+                <div className="grid grid-cols-4 gap-1 p-1 rounded-lg bg-[#050508] border border-white/[0.06]">
+                  {(['light', 'balanced', 'strong', 'maximum'] as HumanizerIntensity[]).map((intensity) => {
+                    const cfg = HUMANIZER_INTENSITY_CONFIG[intensity];
+                    const isActive = humanizerIntensity === intensity;
+                    return (
+                      <button
+                        key={intensity}
+                        type="button"
+                        onClick={() => setHumanizerIntensity(intensity)}
+                        className={`py-1 px-1.5 rounded font-mono text-[10px] transition-all cursor-pointer text-center ${
+                          isActive
+                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 font-semibold'
+                            : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
+                        }`}
+                      >
+                        {cfg.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[10px] text-zinc-500 font-mono">
+                  {HUMANIZER_INTENSITY_CONFIG[humanizerIntensity].description}
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Section 4d: Orthography Preservation */}
+          <div className="flex flex-col gap-2 p-3.5 rounded-xl bg-[#09090c] border border-white/[0.08]">
+            <div className="flex items-center justify-between">
+              <label className="text-[11px] font-mono uppercase tracking-wider text-zinc-400 font-semibold">
+                Arabic Orthography Mode
+              </label>
+            </div>
+            <div className="grid grid-cols-2 gap-1.5 p-1 rounded-lg bg-[#050508] border border-white/[0.06]">
+              {(['correct_spelling', 'relaxed'] as OrthographyMode[]).map((mode) => {
+                const isActive = orthographyMode === mode;
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setOrthographyMode(mode)}
+                    className={`py-1.5 px-2 rounded font-mono text-[10px] transition-all cursor-pointer text-center ${
+                      isActive
+                        ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 font-semibold'
+                        : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
+                    }`}
+                  >
+                    {mode === 'correct_spelling' ? 'Correct Hamzas & Tanween' : 'Relaxed Typography'}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-[10px] text-zinc-500 font-mono">
+              {ORTHOGRAPHY_CONFIG[orthographyMode].description}
+            </p>
+          </div>
+
           {/* Section 5: SFX vs. In-Art Vocalization Filter */}
           <div className="flex items-center justify-between p-3.5 rounded-xl bg-[#09090c] border border-white/[0.08]">
             <div className="flex flex-col gap-0.5 max-w-[340px]">
@@ -468,18 +637,27 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({ isOpen, onClose 
                 </label>
               </div>
 
-              {/* [ ARMED ] Status Badge */}
-              {isOverrideArmed && (
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setIsMasterPromptActive((prev) => !prev)}
-                    className="px-2 py-0.5 rounded font-mono text-[10px] font-bold border transition-colors cursor-pointer bg-emerald-500/20 text-emerald-300 border-emerald-500/40 animate-pulse"
-                  >
-                    ● OVERRIDE ARMED
-                  </button>
-                </div>
-              )}
+              {/* Robust Arm / Disarm Status Toggle Button */}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsMasterPromptActive((prev) => !prev)}
+                  className={`px-2.5 py-0.5 rounded font-mono text-[10px] font-bold border transition-all cursor-pointer ${
+                    isOverrideArmed
+                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 animate-pulse'
+                      : isMasterPromptActive
+                      ? 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                      : 'bg-amber-950/40 text-amber-400 border-amber-800/40'
+                  }`}
+                  title={isMasterPromptActive ? 'Click to disarm master prompt' : 'Click to arm master prompt'}
+                >
+                  {isOverrideArmed
+                    ? '● OVERRIDE ARMED'
+                    : isMasterPromptActive
+                    ? '● ARMED (EMPTY)'
+                    : '○ DISARMED'}
+                </button>
+              </div>
             </div>
 
             {/* Sunken Monospace Textarea */}

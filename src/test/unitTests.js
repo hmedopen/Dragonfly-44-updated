@@ -24,10 +24,8 @@ function sortFilesNaturally(files) {
 }
 
 // 2. Arabic Humanizer with Correct Orthography Preservation (System #2)
-function humanizeArabicText(text, optionsOrEloquence = 2) {
+function humanizeArabicText(text, _optionsOrEloquence = 2) {
   if (!text) return '';
-  const options = typeof optionsOrEloquence === 'number' ? { eloquenceLevel: optionsOrEloquence } : optionsOrEloquence;
-  const { eloquenceLevel = 2, orthographyMode = 'correct_spelling', isDialectActive = false } = options;
   let sanitized = text;
 
   // 1. Comic punctuation

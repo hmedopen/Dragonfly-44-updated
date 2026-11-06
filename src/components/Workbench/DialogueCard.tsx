@@ -143,8 +143,19 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
     bubble.originalSourceText && bubble.sourceText !== bubble.originalSourceText
   );
   const canRevertTranslation = Boolean(
-    bubble.rawTranslatedText && bubble.translatedText !== bubble.rawTranslatedText
+    (bubble.humanizedTranslatedText && bubble.translatedText !== bubble.humanizedTranslatedText) ||
+    (bubble.rawTranslatedText && bubble.translatedText !== bubble.rawTranslatedText)
   );
+
+  const revertTranslationLabel = useMemo(() => {
+    if (bubble.humanizedTranslatedText && bubble.translatedText !== bubble.humanizedTranslatedText) {
+      return 'Revert (Humanized)';
+    }
+    if (bubble.rawTranslatedText && bubble.translatedText !== bubble.rawTranslatedText) {
+      return 'Revert (Raw)';
+    }
+    return 'Revert';
+  }, [bubble.translatedText, bubble.humanizedTranslatedText, bubble.rawTranslatedText]);
 
   const handleTypeSelect = (typeKey: string, prefix: string) => {
     onUpdate(bubble.id, {
@@ -407,10 +418,10 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
                   onRevertTranslation?.();
                 }}
                 className="flex items-center gap-1 text-[10px] text-amber-400 hover:text-amber-300 cursor-pointer transition-colors"
-                title="Restore initial raw translation text"
+                title="Restore prior translation version without losing edit history"
               >
                 <RotateCcw className="w-2.5 h-2.5" />
-                <span>Revert</span>
+                <span>{revertTranslationLabel}</span>
               </button>
             )}
           </div>
