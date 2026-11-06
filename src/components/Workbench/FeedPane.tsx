@@ -42,10 +42,18 @@ export const FeedPane: React.FC<FeedPaneProps> = ({
 }) => {
   const draggedIndexRef = useRef<number | null>(null);
 
-  const displayedBubbles =
-    feedFilter === 'flagged'
-      ? bubbles.filter((b) => b.reviewFlags && b.reviewFlags.length > 0)
-      : bubbles;
+  const includeSFX = typeof window !== 'undefined' ? localStorage.getItem('dragonfly44_include_sfx') === 'true' : true;
+
+  let filtered = bubbles;
+  // If SFX filter is OFF in settings, hide SFX bubbles from the feed display while keeping them in scan data
+  if (!includeSFX) {
+    filtered = filtered.filter((b) => b.type !== 'sfx');
+  }
+  if (feedFilter === 'flagged') {
+    filtered = filtered.filter((b) => b.reviewFlags && b.reviewFlags.length > 0);
+  }
+
+  const displayedBubbles = filtered;
 
   const handleDragStart = (e: React.DragEvent, index: number) => {
     draggedIndexRef.current = index;

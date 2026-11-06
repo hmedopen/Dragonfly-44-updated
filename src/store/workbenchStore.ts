@@ -11,11 +11,14 @@ import type {
   OrthographyMode
 } from '../types/workbench';
 import { loadTyperSettings, resolveCanonicalTyper } from '../types/typers';
-import { getPageBubbles, savePageBubbles, getProjectLore } from '../services/db';
+import { getPageBubbles, savePageBubbles, getProjectLore, updateReviewFindingStatus } from '../services/db';
 import { getChapterIntelligence } from '../services/intelligence';
+import { projectMemory } from '../services/projectMemory';
+import type { KnowledgeCandidate, KnowledgeConflictSet } from '../types/memory';
 import { scanQueue } from '../lib/scanQueue';
 import { auditChapterWithGemini } from '../lib/reviewEngine';
 import { translateSingleBubbleWithGemini } from '../lib/geminiScan';
+import { settingsService } from '../services/settings/settingsService';
 
 export type CurrentView = 'hub' | 'workbench';
 export type ViewportMode = 'manga-flip' | 'webtoon-strip';
@@ -31,6 +34,8 @@ interface WorkbenchState {
   bubblesByPage: Record<string, BubbleItem[]>;
   projectLore: ProjectLoreLedger | null;
   chapterIntelligence: ChapterIntelligence | null;
+  memoryCandidates: KnowledgeCandidate[];
+  memoryConflicts: KnowledgeConflictSet[];
 
   // Tool & Drawer toggles
   isSettingsOpen: boolean;
@@ -109,6 +114,10 @@ interface WorkbenchState {
     projectId?: string | null,
     isDraft?: boolean
   ) => Promise<void>;
+  loadMemoryCandidates: (projectId: string) => Promise<void>;
+  approveMemoryCandidate: (candidateId: string) => Promise<void>;
+  rejectMemoryCandidate: (candidateId: string, reason?: string) => Promise<void>;
+  resolveMemoryConflict: (conflictId: string, decision: string, value: any) => Promise<void>;
 }
 
 export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
@@ -121,6 +130,8 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   bubblesByPage: {},
   projectLore: null,
   chapterIntelligence: null,
+  memoryCandidates: [],
+  memoryConflicts: [],
 
   // Modals & Panels
   isSettingsOpen: false,
@@ -154,8 +165,9 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
       getProjectLore(folderId).then((lore) => {
         set({ projectLore: lore });
       });
+      get().loadMemoryCandidates(folderId);
     } else {
-      set({ projectLore: null });
+      set({ projectLore: null, memoryCandidates: [], memoryConflicts: [] });
     }
 
     getChapterIntelligence(chapterId).then((intel: ChapterIntelligence | null) => {
@@ -435,6 +447,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     savePageBubbles(pageId, reindexed).catch((err) =>
       console.error('[WorkbenchStore] Failed to save flag acceptance to IDB', err)
     );
+    updateReviewFindingStatus(flagId, 'accepted', 'Accepted by user', 'user').catch(() => {});
   },
 
   // Finding Lifecycle: Dismiss Flag with History Preservation
@@ -472,6 +485,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     savePageBubbles(pageId, updated).catch((err) =>
       console.error('[WorkbenchStore] Failed to save flag dismissal to IDB', err)
     );
+    updateReviewFindingStatus(flagId, 'rejected', 'Dismissed by user', 'user').catch(() => {});
   },
 
   revertSourceText: (pageId: string, bubbleId: string) => {
@@ -599,17 +613,19 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
 
   // 1. Scan All (Batch Chapter Scan)
   startBatchScan: (pages, projectId = null, isDraft = false) => {
-    const apiKey = localStorage.getItem('dragonfly44_gemini_api_key') || '';
-    const selectedModel = (localStorage.getItem('dragonfly44_selected_model') as GeminiModelKey) || 'gemini-3.8-flash';
-    const eloquenceLevel = Number(localStorage.getItem('dragonfly44_eloquence_level') || '2') as EloquenceLevel;
-    const includeSFX = localStorage.getItem('dragonfly44_include_sfx') === 'true';
-    const translationFidelity = (localStorage.getItem('dragonfly44_translation_fidelity') as TranslationFidelity) || 'localized';
-    const isHumanizerEnabled = localStorage.getItem('dragonfly44_humanizer_enabled') !== 'false';
-    const humanizerIntensity = (localStorage.getItem('dragonfly44_humanizer_intensity') as HumanizerIntensity) || 'balanced';
-    const orthographyMode = (localStorage.getItem('dragonfly44_orthography_mode') as OrthographyMode) || 'correct_spelling';
-    const masterPromptOverride = localStorage.getItem('dragonfly44_master_prompt_override') || '';
-    const isMasterPromptActive = localStorage.getItem('dragonfly44_master_prompt_active') !== 'false';
     const chapterId = get().activeChapterId || undefined;
+    const snapshot = settingsService.createOperationSnapshot({ projectId, chapterId });
+    const apiKey = snapshot.values['general.gemini_api_key'] || '';
+    const selectedModel = (snapshot.values['translation.model'] as GeminiModelKey) || 'gemini-3.8-flash';
+    const eloquenceLevel = (snapshot.values['translation.eloquence'] as EloquenceLevel) || 2;
+    const includeSFX = Boolean(snapshot.values['scanning.include_sfx']);
+    const translationFidelity = (snapshot.values['translation.fidelity'] as TranslationFidelity) || 'localized';
+    const isHumanizerEnabled = Boolean(snapshot.values['translation.humanizer_enabled']);
+    const humanizerIntensity = (snapshot.values['translation.humanizer_intensity'] as HumanizerIntensity) || 'balanced';
+    const orthographyMode = (snapshot.values['translation.orthography_mode'] as OrthographyMode) || 'correct_spelling';
+    const masterPromptOverride = snapshot.values['translation.master_prompt_override'] || '';
+    const isMasterPromptActive = Boolean(snapshot.values['translation.master_prompt_active']);
+    const readingConvention = (snapshot.values['scanning.reading_convention'] as any) || 'auto';
 
     const queueItems = pages.map((p) => ({
       pageId: p.pageId,
@@ -622,6 +638,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
         selectedModel,
         eloquenceLevel,
         includeSFX,
+        readingConvention,
         translationFidelity,
         isHumanizerEnabled,
         humanizerIntensity,
@@ -676,16 +693,17 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
       throw new Error('Target bubble not found.');
     }
 
-    const apiKey = localStorage.getItem('dragonfly44_gemini_api_key') || '';
-    const selectedModel = (localStorage.getItem('dragonfly44_selected_model') as GeminiModelKey) || 'gemini-3.8-flash';
-    const eloquenceLevel = (Number(localStorage.getItem('dragonfly44_eloquence_level') || '2') as EloquenceLevel) || 2;
-    const translationFidelity = (localStorage.getItem('dragonfly44_translation_fidelity') as TranslationFidelity) || 'localized';
-    const isHumanizerEnabled = localStorage.getItem('dragonfly44_humanizer_enabled') !== 'false';
-    const humanizerIntensity = (localStorage.getItem('dragonfly44_humanizer_intensity') as HumanizerIntensity) || 'balanced';
-    const orthographyMode = (localStorage.getItem('dragonfly44_orthography_mode') as OrthographyMode) || 'correct_spelling';
-    const masterPromptOverride = localStorage.getItem('dragonfly44_master_prompt_override') || '';
-    const isMasterPromptActive = localStorage.getItem('dragonfly44_master_prompt_active') !== 'false';
     const chapterId = state.activeChapterId || undefined;
+    const snapshot = settingsService.createOperationSnapshot({ projectId, chapterId });
+    const apiKey = snapshot.values['general.gemini_api_key'] || '';
+    const selectedModel = (snapshot.values['translation.model'] as GeminiModelKey) || 'gemini-3.8-flash';
+    const eloquenceLevel = (snapshot.values['translation.eloquence'] as EloquenceLevel) || 2;
+    const translationFidelity = (snapshot.values['translation.fidelity'] as TranslationFidelity) || 'localized';
+    const isHumanizerEnabled = Boolean(snapshot.values['translation.humanizer_enabled']);
+    const humanizerIntensity = (snapshot.values['translation.humanizer_intensity'] as HumanizerIntensity) || 'balanced';
+    const orthographyMode = (snapshot.values['translation.orthography_mode'] as OrthographyMode) || 'correct_spelling';
+    const masterPromptOverride = snapshot.values['translation.master_prompt_override'] || '';
+    const isMasterPromptActive = Boolean(snapshot.values['translation.master_prompt_active']);
 
     const result = await translateSingleBubbleWithGemini({
       pageId,
@@ -730,11 +748,12 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
 
   // 4. Review Page / Review All (Multimodal Visual Review & Global Chapter QC)
   runChapterReview: async (chapterId, pages, projectId = null, isDraft = false) => {
-    const apiKey = localStorage.getItem('dragonfly44_gemini_api_key') || '';
-    const selectedModel = (localStorage.getItem('dragonfly44_selected_model') as GeminiModelKey) || 'gemini-3.8-flash';
-    const eloquenceLevel = Number(localStorage.getItem('dragonfly44_eloquence_level') || '2') as EloquenceLevel;
-    const masterPromptOverride = localStorage.getItem('dragonfly44_master_prompt_override') || '';
-    const isMasterPromptActive = localStorage.getItem('dragonfly44_master_prompt_active') !== 'false';
+    const snapshot = settingsService.createOperationSnapshot({ projectId, chapterId });
+    const apiKey = snapshot.values['general.gemini_api_key'] || '';
+    const selectedModel = (snapshot.values['translation.model'] as GeminiModelKey) || 'gemini-3.8-flash';
+    const eloquenceLevel = (snapshot.values['translation.eloquence'] as EloquenceLevel) || 2;
+    const masterPromptOverride = snapshot.values['translation.master_prompt_override'] || '';
+    const isMasterPromptActive = Boolean(snapshot.values['translation.master_prompt_active']);
 
     const isSinglePage = pages.length === 1;
     if (isSinglePage) {
@@ -769,6 +788,62 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
       console.error('[WorkbenchStore] Chapter review error:', err);
       set({ isReviewingChapter: false, isReviewingSinglePage: false });
       throw err;
+    }
+  },
+
+  loadMemoryCandidates: async (projectId: string) => {
+    try {
+      const driver = projectMemory.getDriver();
+      const candidates = await driver.getCandidatesByProject(projectId);
+      const conflicts = await driver.getConflictsByProject(projectId);
+      set({
+        memoryCandidates: candidates.filter((c) => c.review_state === 'ready_for_approval'),
+        memoryConflicts: conflicts.filter((c) => c.status === 'unresolved'),
+      });
+    } catch (err) {
+      console.warn('[WorkbenchStore] Failed to load memory candidates:', err);
+    }
+  },
+
+  approveMemoryCandidate: async (candidateId: string) => {
+    try {
+      const res = await projectMemory.approveKnowledgeCandidate(candidateId);
+      if (res.status === 'success' && res.data) {
+        const folderId = get().activeFolderId;
+        if (folderId) {
+          await get().loadMemoryCandidates(folderId);
+          const lore = await getProjectLore(folderId);
+          set({ projectLore: lore });
+        }
+      }
+    } catch (err) {
+      console.error('[WorkbenchStore] Failed to approve memory candidate:', err);
+    }
+  },
+
+  rejectMemoryCandidate: async (candidateId: string, reason: string = 'Dismissed by user') => {
+    try {
+      await projectMemory.rejectKnowledgeCandidate(candidateId, reason);
+      const folderId = get().activeFolderId;
+      if (folderId) {
+        await get().loadMemoryCandidates(folderId);
+      }
+    } catch (err) {
+      console.error('[WorkbenchStore] Failed to reject memory candidate:', err);
+    }
+  },
+
+  resolveMemoryConflict: async (conflictId: string, decision: string, value: any) => {
+    try {
+      await projectMemory.resolveKnowledgeConflict(conflictId, decision, value);
+      const folderId = get().activeFolderId;
+      if (folderId) {
+        await get().loadMemoryCandidates(folderId);
+        const lore = await getProjectLore(folderId);
+        set({ projectLore: lore });
+      }
+    } catch (err) {
+      console.error('[WorkbenchStore] Failed to resolve memory conflict:', err);
     }
   },
 }));

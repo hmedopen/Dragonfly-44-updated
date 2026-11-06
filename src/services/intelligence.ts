@@ -16,6 +16,8 @@ import {
   getProjectLore,
   saveProjectLore,
 } from './db';
+import { projectMemory } from './projectMemory';
+import type { ProposedKnowledgeItem } from '../lib/memory/candidateIntake';
 import type {
   ChapterIntelligence,
   CharacterLore,
@@ -295,6 +297,95 @@ export async function ingestPageIntelligence(
 
   // Save updated Chapter Intelligence
   await saveChapterIntelligence(chapterId, intel);
+
+  // Submit candidate proposals to System #5 (Project Memory & AI Data Integrity Engine)
+  if (projectId && projectId !== 'folder-drafts') {
+    try {
+      const proposals: ProposedKnowledgeItem[] = [];
+
+      for (const char of detectedCharacters) {
+        if (!char.nameOriginal || !char.nameArabic) continue;
+        proposals.push({
+          record_type: 'character_profile',
+          scope: { level: 'chapter', chapter_id: chapterId, project_id: projectId },
+          canonical_name: char.nameOriginal,
+          payload: {
+            canonical_name: char.nameArabic,
+            gender: char.gender || 'unknown',
+            title: char.title,
+          },
+          source_refs: [`page:${pageId}:idx:${pageIndex}`],
+          confidence: {
+            extraction: char.confidence || 0.85,
+            interpretation: 0.8,
+            identity: 0.85,
+          },
+        });
+      }
+
+      for (const term of detectedTerms) {
+        if (!term.termOriginal || !term.termArabic) continue;
+        proposals.push({
+          record_type: 'glossary_term',
+          scope: { level: 'chapter', chapter_id: chapterId, project_id: projectId },
+          canonical_name: term.termOriginal,
+          payload: {
+            source_form: term.termOriginal,
+            approved_rendering: term.termArabic,
+            category: term.category || 'term',
+          },
+          source_refs: [`page:${pageId}:idx:${pageIndex}`],
+          confidence: {
+            extraction: term.confidence || 0.85,
+            interpretation: 0.8,
+          },
+        });
+      }
+
+      for (const rel of detectedRelationships) {
+        if (!rel.speaker || !rel.addressee) continue;
+        proposals.push({
+          record_type: 'relationship',
+          scope: { level: 'chapter', chapter_id: chapterId, project_id: projectId },
+          canonical_name: `${rel.speaker}-${rel.addressee}`,
+          payload: {
+            speaker: rel.speaker,
+            addressee: rel.addressee,
+            tone: rel.tone,
+            pronouns: rel.pronouns,
+          },
+          source_refs: [`page:${pageId}:idx:${pageIndex}`],
+        });
+      }
+
+      if (proposals.length > 0) {
+        const intakeResult = await projectMemory.submitKnowledgeProposal({
+          contract: 'dragonfly.memory.proposal',
+          schema_version: '1.0',
+          producer: 'system_3',
+          project_id: projectId,
+          operation_id: `scan-${pageId}-${Date.now()}`,
+          proposals,
+        });
+
+        // Surface any material conflicts detected with user-confirmed records
+        if (intakeResult.data?.conflicts) {
+          for (const conf of intakeResult.data.conflicts) {
+            conflictsFound.push({
+              id: conf.conflict_id,
+              field: 'termArabic',
+              existingValue: 'user_confirmed',
+              conflictingValue: 'model_inferred',
+              detectedAtPageId: pageId,
+              status: 'unresolved',
+            });
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[Intelligence] System #5 candidate intake error:', err);
+    }
+  }
 
   // If in a Project, synchronize verified terms and characters to Project Lore Ledger
   if (projectId && projectId !== 'folder-drafts') {

@@ -1,9 +1,14 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import type { BubbleItem } from '../../types/workbench';
 import { extractFilesFromDataTransfer, ingestImageFiles } from '../../services/fileIngestion';
-import { 
-  FileImage
-} from 'lucide-react';
+import { FileImage, Activity } from 'lucide-react';
+import {
+  validateCanonicalBox,
+  hitTestWorkspace,
+  type CanonicalTransformParams,
+} from '../../lib/workspace/geometryService';
+import { renderGenerationManager } from '../../lib/workspace/renderGeneration';
+import { settingsService } from '../../services/settings/settingsService';
 
 interface CanvasPaneProps {
   imageUrl: string | null;
@@ -61,6 +66,32 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
   const viewportRef = useRef<HTMLDivElement>(null);
   const zoomLevelRef = useRef(zoomLevel);
   const onZoomChangeRef = useRef(onZoomChange);
+  const svgRef = useRef<SVGSVGElement>(null);
+
+  // Settings subscription for overlay visibility & diagnostics HUD
+  const [overlaySettings, setOverlaySettings] = useState(() => ({
+    boxesVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_boxes_visible').value,
+    readingOrderVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_reading_order_visible').value,
+    panelsVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_panels_visible').value,
+    reviewMarkersVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_review_markers_visible').value,
+    coordinateDiagnostics: settingsService.getEffectiveValue<boolean>('workspace.coordinate_diagnostics').value,
+  }));
+
+  useEffect(() => {
+    const unsub = settingsService.subscribe(() => {
+      setOverlaySettings({
+        boxesVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_boxes_visible').value,
+        readingOrderVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_reading_order_visible').value,
+        panelsVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_panels_visible').value,
+        reviewMarkersVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_review_markers_visible').value,
+        coordinateDiagnostics: settingsService.getEffectiveValue<boolean>('workspace.coordinate_diagnostics').value,
+      });
+    });
+    return () => unsub();
+  }, []);
+
+  // Cursor coordinates for diagnostics HUD
+  const [cursorPos, setCursorPos] = useState<{ screenX: number; screenY: number; srcX: number; srcY: number } | null>(null);
 
   useEffect(() => {
     zoomLevelRef.current = zoomLevel;
@@ -70,19 +101,49 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
   // Box drawing state (0-1000 normalized coordinates)
   const [drawingStart, setDrawingStart] = useState<{ x: number; y: number } | null>(null);
   const [drawingCurrent, setDrawingCurrent] = useState<{ x: number; y: number } | null>(null);
-  const svgRef = useRef<SVGSVGElement>(null);
 
-  // Reset pan on trigger or page switch via render-phase state adjustment
+  // Active page generation token (Section 4.7)
+  const [generationToken, setGenerationToken] = useState(() =>
+    renderGenerationManager.startNewGeneration(pageFileName || 'canvas')
+  );
+
+  // Reset pan on trigger or page switch
   const [lastPageFileName, setLastPageFileName] = useState(pageFileName);
   const [lastResetTrigger, setLastResetTrigger] = useState(resetViewTrigger);
 
   if (pageFileName !== lastPageFileName || resetViewTrigger !== lastResetTrigger) {
     setLastPageFileName(pageFileName);
     setLastResetTrigger(resetViewTrigger);
+    setGenerationToken(renderGenerationManager.startNewGeneration(pageFileName || 'canvas'));
     if (!focusTarget) {
       setPan({ x: 0, y: 0 });
     }
   }
+
+  // Track viewport dimensions reactively via ResizeObserver
+  const [viewportSize, setViewportSize] = useState<{ width: number; height: number }>({ width: 800, height: 1000 });
+
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    const updateSize = () => {
+      setViewportSize({ width: vp.clientWidth || 800, height: vp.clientHeight || 1000 });
+    };
+    updateSize();
+    const ro = new ResizeObserver(updateSize);
+    ro.observe(vp);
+    return () => ro.disconnect();
+  }, []);
+
+  // Canonical Transform Parameters
+  const transformParams: CanonicalTransformParams = useMemo(() => {
+    return {
+      sourceDimensions: { width: 1000, height: 1000 },
+      viewportDimensions: viewportSize,
+      zoom: zoomLevel,
+      pan,
+    };
+  }, [viewportSize, zoomLevel, pan]);
 
   // Focus and zoom in on target bubble
   useEffect(() => {
@@ -115,7 +176,7 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
     });
   }, [focusTarget, isLoading]);
 
-  // Window mousemove / mouseup for smooth click-and-drag panning
+  // Window mousemove / mouseup for smooth panning
   useEffect(() => {
     if (!isPanning) return;
 
@@ -153,21 +214,21 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
       if (e.altKey) {
-        // Alt + Wheel moves horizontally: wheel up -> right, wheel down -> left (Photoshop style)
+        // Horizontal scroll
         const delta = e.deltaY !== 0 ? e.deltaY : -e.deltaX;
         setPan((prev) => ({
           ...prev,
           x: prev.x - delta,
         }));
       } else if (e.shiftKey) {
-        // Manhwa vertical scroll (Shift + Wheel)
+        // Vertical scroll
         const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
         setPan((prev) => ({
           ...prev,
           y: prev.y - delta,
         }));
       } else {
-        // Mouse wheel zoom anchored to cursor
+        // Wheel zoom anchored to cursor
         const step = e.deltaY < 0 ? 15 : -15;
         const current = zoomLevelRef.current;
         const nextZoom = Math.max(25, Math.min(1000, current + step));
@@ -196,8 +257,8 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
 
   const handleContainerMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if ((e.target as HTMLElement)?.closest('[data-flip-edge="true"]')) return;
-    
-    // Only middle mouse button (button 1) moves the image — no left-click dragging
+
+    // Middle mouse button (button 1) moves the image
     if (e.button === 1) {
       e.preventDefault();
       panStartRef.current = {
@@ -219,7 +280,10 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
     setPan({ x: 0, y: 0 });
   };
 
-  const getSvgNormalizedCoords = (e: React.MouseEvent<SVGSVGElement>): { x: number; y: number } | null => {
+  /**
+   * Maps pointer event to canonical source space (0-1000) using geometryService inverse transform.
+   */
+  const getCanonicalSourceCoords = (e: React.MouseEvent): { x: number; y: number } | null => {
     if (!svgRef.current) return null;
     const rect = svgRef.current.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return null;
@@ -233,8 +297,7 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
     };
   };
 
-  const handleMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
-    // Middle mouse button pans image anywhere
+  const handleSvgMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
     if (e.button === 1) {
       e.preventDefault();
       panStartRef.current = {
@@ -248,40 +311,77 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
       return;
     }
 
-    // Only LEFT mouse click (button 0) makes bubble boxes
     if (e.button !== 0) return;
 
-    if (!isDrawBoxActive) return;
-    const coords = getSvgNormalizedCoords(e);
-    if (coords) {
-      setDrawingStart(coords);
-      setDrawingCurrent(coords);
+    // If drawing box is active, initiate box creation
+    if (isDrawBoxActive) {
+      const coords = getCanonicalSourceCoords(e);
+      if (coords) {
+        setDrawingStart(coords);
+        setDrawingCurrent(coords);
+      }
+      return;
+    }
+
+    // Hit-test on bubbles with deterministic innermost overlap resolution
+    if (svgRef.current) {
+      const rect = svgRef.current.getBoundingClientRect();
+      const coords = getCanonicalSourceCoords(e);
+      if (coords) {
+        const hit = hitTestWorkspace(
+          { x: coords.x, y: coords.y },
+          bubbles,
+          {
+            sourceDimensions: { width: 1000, height: 1000 },
+            viewportDimensions: { width: rect.width, height: rect.height },
+            zoom: 100,
+            pan: { x: 0, y: 0 },
+          },
+          { selectedBubbleId }
+        );
+
+        if (hit.hitBubble) {
+          onSelectBubble(hit.hitBubble.id);
+        }
+      }
     }
   };
 
-  const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+  const handleSvgMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const coords = getCanonicalSourceCoords(e);
+    if (coords && overlaySettings.coordinateDiagnostics) {
+      setCursorPos({
+        screenX: Math.round(e.clientX),
+        screenY: Math.round(e.clientY),
+        srcX: coords.x,
+        srcY: coords.y,
+      });
+    }
+
     if (!isDrawBoxActive || !drawingStart) return;
-    const coords = getSvgNormalizedCoords(e);
     if (coords) {
       setDrawingCurrent(coords);
     }
   };
 
-  const handleMouseUp = () => {
+  const handleSvgMouseUp = () => {
     if (!isDrawBoxActive || !drawingStart || !drawingCurrent) {
       setDrawingStart(null);
       setDrawingCurrent(null);
       return;
     }
 
-    const xmin = Math.min(drawingStart.x, drawingCurrent.x);
-    const xmax = Math.max(drawingStart.x, drawingCurrent.x);
-    const ymin = Math.min(drawingStart.y, drawingCurrent.y);
-    const ymax = Math.max(drawingStart.y, drawingCurrent.y);
+    const rawBox: [number, number, number, number] = [
+      Math.min(drawingStart.y, drawingCurrent.y),
+      Math.min(drawingStart.x, drawingCurrent.x),
+      Math.max(drawingStart.y, drawingCurrent.y),
+      Math.max(drawingStart.x, drawingCurrent.x),
+    ];
 
-    // Filter out accidental tiny clicks (< 15 units)
-    if (xmax - xmin > 15 && ymax - ymin > 15) {
-      onAddManualBubbleWithCoords?.([ymin, xmin, ymax, xmax]);
+    // Canonical Geometry Validation (Section 4.6)
+    const validated = validateCanonicalBox(rawBox, 1000, 15);
+    if (validated.valid) {
+      onAddManualBubbleWithCoords?.(validated.box);
     }
 
     setDrawingStart(null);
@@ -320,6 +420,13 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
     }
   };
 
+  const effectiveShowBoxes = showBoxes && overlaySettings.boxesVisible;
+
+  // Reading order sequence links for layer rendering
+  const sortedBubbles = useMemo(() => {
+    return [...bubbles].sort((a, b) => a.index - b.index);
+  }, [bubbles]);
+
   return (
     <div
       onDragOver={handleDragOver}
@@ -329,8 +436,8 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
         isDragOver ? 'ring-2 ring-sky-500/50 border-sky-400/60 bg-sky-950/10' : ''
       }`}
     >
-      {/* Main Viewport & SVG Bounding Layer */}
-      <div 
+      {/* Viewport Canvas Layer */}
+      <div
         ref={viewportRef}
         onMouseDown={handleContainerMouseDown}
         onDoubleClick={handleDoubleClick}
@@ -338,17 +445,16 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
           if (e.button === 1) e.preventDefault();
         }}
         className={`flex-1 min-h-0 p-3 flex items-center justify-center relative overflow-hidden select-none ${
-          isDrawBoxActive 
-            ? 'cursor-crosshair' 
-            : isPanning 
-              ? 'cursor-grabbing' 
-              : 'cursor-default'
+          isDrawBoxActive
+            ? 'cursor-crosshair'
+            : isPanning
+            ? 'cursor-grabbing'
+            : 'cursor-default'
         }`}
       >
-        {/* Click-to-Flip Narrow Edge Hit-Zones (strictly outer 5.5% edges) */}
+        {/* Flip Page Edge Hit-Zones */}
         {isFlipPageActive && (
           <>
-            {/* Left Edge: Previous Page */}
             <div
               data-flip-edge="true"
               onClick={(e) => {
@@ -356,9 +462,7 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                 onPrevPage?.();
               }}
               className={`absolute inset-y-0 left-0 w-[5.5%] z-30 flex items-center justify-start pl-1 transition-all select-none ${
-                hasPrevPage
-                  ? 'cursor-pointer hover:bg-sky-500/10 group'
-                  : 'cursor-not-allowed opacity-25'
+                hasPrevPage ? 'cursor-pointer hover:bg-sky-500/10 group' : 'cursor-not-allowed opacity-25'
               }`}
               title={hasPrevPage ? 'Previous Page' : 'First Page'}
             >
@@ -367,7 +471,6 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
               )}
             </div>
 
-            {/* Right Edge: Next Page */}
             <div
               data-flip-edge="true"
               onClick={(e) => {
@@ -375,9 +478,7 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                 onNextPage?.();
               }}
               className={`absolute inset-y-0 right-0 w-[5.5%] z-30 flex items-center justify-end pr-1 transition-all select-none ${
-                hasNextPage
-                  ? 'cursor-pointer hover:bg-sky-500/10 group'
-                  : 'cursor-not-allowed opacity-25'
+                hasNextPage ? 'cursor-pointer hover:bg-sky-500/10 group' : 'cursor-not-allowed opacity-25'
               }`}
               title={hasNextPage ? 'Next Page' : 'Last Page'}
             >
@@ -389,73 +490,88 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
         )}
 
         {isLoading ? (
-          <div className="flex flex-col items-center gap-2.5 text-zinc-500 text-xs">
+          <div className="flex flex-col items-center gap-2.5 text-zinc-500 text-xs font-mono">
             <div className="w-5 h-5 border-2 border-zinc-700 border-t-zinc-200 rounded-full animate-spin" />
-            <span>LOADING SCAN...</span>
+            <span>LOADING CANONICAL SCAN...</span>
           </div>
         ) : (
-          <div 
-            style={{ 
-              transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoomLevel / 100})`, 
+          <div
+            style={{
+              transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoomLevel / 100})`,
               transformOrigin: 'center center',
               transition: isPanning ? 'none' : 'transform 100ms ease-out',
             }}
             className="relative inline-flex items-center justify-center max-h-full max-w-full rounded-sm overflow-hidden select-none"
           >
+            {/* Layer 1: Manga Artwork Image */}
             {imageUrl ? (
               <img
                 src={imageUrl}
                 alt={pageFileName || 'Chapter page scan'}
-                className="max-h-[calc(100vh-140px)] max-w-full object-contain select-none pointer-events-none block rounded-xs"
+                className="max-h-[calc(100vh-140px)] max-w-full w-auto h-auto object-contain select-none pointer-events-none block rounded-xs"
                 draggable={false}
               />
             ) : (
-              /* Fallback Visual Manga Panel Surface */
               <div className="w-[420px] h-[600px] bg-[#0d0e12] border border-white/[0.08] rounded-xl flex flex-col justify-between p-6 relative overflow-hidden shadow-2xl">
-                <div className="absolute inset-0 grid grid-cols-2 grid-rows-3 gap-2 p-4 pointer-events-none opacity-20">
-                  <div className="border border-zinc-700 rounded-lg bg-zinc-900/40" />
-                  <div className="border border-zinc-700 rounded-lg bg-zinc-900/40" />
-                  <div className="border border-zinc-700 rounded-lg bg-zinc-900/40 col-span-2" />
-                  <div className="border border-zinc-700 rounded-lg bg-zinc-900/40" />
-                  <div className="border border-zinc-700 rounded-lg bg-zinc-900/40" />
+                <div className="relative z-10 flex items-center justify-between text-zinc-600 text-[10px] font-mono">
+                  <span>CANONICAL SCAN SURFACE</span>
+                  <span>1000 x 1000 UNITS</span>
                 </div>
-
-                <div className="relative z-10 flex items-center justify-between text-zinc-600 text-[10px]">
-                  <span>PAGE PREVIEW</span>
-                  <span>1000 x 1000 BOUNDING</span>
-                </div>
-
                 <div className="relative z-10 my-auto text-center flex flex-col items-center gap-2">
                   <FileImage className="w-8 h-8 text-zinc-500 stroke-[1.5]" />
-                  <span className="text-xs text-zinc-300 font-semibold uppercase tracking-wider">
-                    SCAN SURFACE READY
+                  <span className="text-xs text-zinc-300 font-semibold uppercase tracking-wider font-mono">
+                    CANVAS READY
                   </span>
                   <span className="text-[11px] text-zinc-500 max-w-xs">
                     Drop images here from OS explorer to test interactive translation canvas.
                   </span>
                 </div>
-
-                <div className="relative z-10 text-center text-[10px] text-zinc-600">
+                <div className="relative z-10 text-center text-[10px] text-zinc-600 font-mono">
                   READY
                 </div>
               </div>
             )}
 
-            {/* SVG Bounding Layer Locked Directly Over Scan Image */}
+            {/* Layer 2-6: SVG Overlay Layer Locked Over Canonical Space */}
             <svg
               ref={svgRef}
               viewBox="0 0 1000 1000"
               preserveAspectRatio="none"
-              onMouseDown={handleMouseDown}
-              onMouseMove={handleMouseMove}
-              onMouseUp={handleMouseUp}
+              onMouseDown={handleSvgMouseDown}
+              onMouseMove={handleSvgMouseMove}
+              onMouseUp={handleSvgMouseUp}
               className="absolute inset-0 w-full h-full pointer-events-auto"
             >
-              {/* Non-destructive Box Visibility Group */}
+              {/* Layer 3: Reading Order Flow Vector Connectors (when enabled) */}
+              {overlaySettings.readingOrderVisible && sortedBubbles.length > 1 && (
+                <g className="reading-order-layer pointer-events-none opacity-60">
+                  {sortedBubbles.slice(0, -1).map((b, idx) => {
+                    const next = sortedBubbles[idx + 1];
+                    const x1 = (b.box_2d[1] + b.box_2d[3]) / 2;
+                    const y1 = (b.box_2d[0] + b.box_2d[2]) / 2;
+                    const x2 = (next.box_2d[1] + next.box_2d[3]) / 2;
+                    const y2 = (next.box_2d[0] + next.box_2d[2]) / 2;
+                    return (
+                      <line
+                        key={`order-${b.id}-${next.id}`}
+                        x1={x1}
+                        y1={y1}
+                        x2={x2}
+                        y2={y2}
+                        stroke="#f59e0b"
+                        strokeWidth="2"
+                        strokeDasharray="4 3"
+                      />
+                    );
+                  })}
+                </g>
+              )}
+
+              {/* Layer 4: Bounding Boxes & Review Markers */}
               <g
                 style={{
-                  opacity: showBoxes ? 1 : 0,
-                  pointerEvents: showBoxes ? 'auto' : 'none',
+                  opacity: effectiveShowBoxes ? 1 : 0,
+                  pointerEvents: effectiveShowBoxes ? 'auto' : 'none',
                   transition: 'opacity 150ms ease',
                 }}
               >
@@ -468,14 +584,15 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                   const width = Math.max(xmax - xmin, 16);
                   const height = Math.max(ymax - ymin, 16);
                   const isSelected = selectedBubbleId === bubble.id;
-                  const isFlagged = bubble.reviewFlags && bubble.reviewFlags.length > 0;
+                  const isFlagged =
+                    overlaySettings.reviewMarkersVisible &&
+                    bubble.reviewFlags &&
+                    bubble.reviewFlags.length > 0;
                   const paddedIndex = String(bubble.index).padStart(2, '0');
 
-                  // Corner Chip Coordinates
                   const chipY = ymin >= 20 ? ymin - 18 : ymin + 2;
                   const chipX = Math.max(xmin, 2);
 
-                  // Visual Styles
                   let strokeColor = '#38bdf8';
                   let strokeWidth = '1.5';
                   let strokeDasharray = 'none';
@@ -501,19 +618,6 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                   return (
                     <g
                       key={bubble.id}
-                      onMouseDown={(e) => {
-                        if (e.button === 1) {
-                          e.preventDefault();
-                          panStartRef.current = {
-                            startX: e.clientX,
-                            startY: e.clientY,
-                            startPanX: pan.x,
-                            startPanY: pan.y,
-                          };
-                          didMoveRef.current = false;
-                          setIsPanning(true);
-                        }
-                      }}
                       onClick={(e) => {
                         if (didMoveRef.current) return;
                         if (e.button !== 0) return;
@@ -522,7 +626,6 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                       }}
                       className="cursor-pointer group"
                     >
-                      {/* Bounding box rectangle */}
                       <rect
                         x={xmin}
                         y={ymin}
@@ -559,16 +662,12 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                         #{paddedIndex}
                       </text>
 
-                      {/* Handle markers on 4 corners when selected */}
+                      {/* Selection handles (Section 4.5) */}
                       {isSelected && (
                         <>
-                          {/* Top-left handle */}
                           <rect x={xmin - 3} y={ymin - 3} width="6" height="6" fill="#38bdf8" rx="1" />
-                          {/* Top-right handle */}
                           <rect x={xmax - 3} y={ymin - 3} width="6" height="6" fill="#38bdf8" rx="1" />
-                          {/* Bottom-left handle */}
                           <rect x={xmin - 3} y={ymax - 3} width="6" height="6" fill="#38bdf8" rx="1" />
-                          {/* Bottom-right handle */}
                           <rect x={xmax - 3} y={ymax - 3} width="6" height="6" fill="#38bdf8" rx="1" />
                         </>
                       )}
@@ -577,7 +676,7 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                 })}
               </g>
 
-              {/* Live Drawing Preview Rectangle */}
+              {/* Drawing Preview Rectangle */}
               {isDrawBoxActive && drawingStart && drawingCurrent && (
                 <rect
                   x={Math.min(drawingStart.x, drawingCurrent.x)}
@@ -592,6 +691,24 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                 />
               )}
             </svg>
+          </div>
+        )}
+
+        {/* Section 10.3: Coordinate Diagnostics HUD Overlay */}
+        {overlaySettings.coordinateDiagnostics && (
+          <div className="absolute bottom-3 left-3 z-40 p-2.5 rounded-lg bg-black/80 border border-white/[0.14] font-mono text-[10px] text-zinc-300 space-y-1 shadow-2xl backdrop-blur-xs pointer-events-none">
+            <div className="flex items-center gap-1.5 text-amber-400 font-bold border-b border-white/[0.08] pb-1">
+              <Activity className="w-3 h-3" />
+              <span>COORDINATE DIAGNOSTICS HUD // v6</span>
+            </div>
+            <div>Zoom: <span className="text-white">{zoomLevel}%</span> | Pan: <span className="text-white">[{pan.x}, {pan.y}]</span></div>
+            <div>Viewport: <span className="text-white">{transformParams.viewportDimensions.width}x{transformParams.viewportDimensions.height}</span></div>
+            <div>Generation: <span className="text-emerald-400">#{generationToken.generation}</span> (Token: {generationToken.pageId})</div>
+            {cursorPos && (
+              <div>
+                Cursor Screen: <span className="text-sky-300">[{cursorPos.screenX}, {cursorPos.screenY}]</span> | Source: <span className="text-amber-300">[{cursorPos.srcX}, {cursorPos.srcY}]</span>
+              </div>
+            )}
           </div>
         )}
       </div>

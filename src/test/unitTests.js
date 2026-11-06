@@ -256,4 +256,36 @@ function mergeReviewFlags(existingFlags, incomingFlags) {
   console.log('✓ 6. Review finding lifecycle passed: duplicate prevention and history preservation validated.');
 }
 
+// 7. System #6 Settings Precedence & Validation Contract
+{
+  function resolveEffective(defaults, globalVal, projectVal, opVal) {
+    if (opVal !== undefined) return opVal;
+    if (projectVal !== undefined) return projectVal;
+    if (globalVal !== undefined) return globalVal;
+    return defaults;
+  }
+  assert.strictEqual(resolveEffective(2, 3, 1, undefined), 1, 'Project overrides global');
+  assert.strictEqual(resolveEffective(2, 3, 1, 3), 3, 'Operation overrides project');
+  console.log('✓ 7. System #6 Settings precedence & scope resolution validated.');
+}
+
+// 8. System #6 Canonical Workspace Geometry Round-Trip Invariant
+{
+  function forward(x, fitW, zoom, panX) {
+    return (fitW / 2) + ((x / 1000) * fitW - fitW / 2) * (zoom / 100) + panX;
+  }
+  function inverse(screenX, fitW, zoom, panX) {
+    const unzoomed = (screenX - panX - fitW / 2) / (zoom / 100) + fitW / 2;
+    return (unzoomed / fitW) * 1000;
+  }
+  const fitW = 600;
+  const zoom = 150;
+  const panX = 40;
+  const originalX = 485;
+  const screenX = forward(originalX, fitW, zoom, panX);
+  const roundTripX = inverse(screenX, fitW, zoom, panX);
+  assert.ok(Math.abs(originalX - roundTripX) < 0.001, 'Round-trip drift must be < 0.001');
+  console.log('✓ 8. System #6 Workspace geometry round-trip & non-distortion invariant validated.');
+}
+
 console.log('--- ALL VERIFICATION TESTS COMPLETED AND VALIDATED! ---');

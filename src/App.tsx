@@ -3,6 +3,8 @@ import { ChapterList } from './components/ChapterList';
 import { FolderGrid } from './components/FolderGrid';
 import { Workbench } from './components/Workbench/Workbench';
 import { TitleBar } from './components/TitleBar';
+import { SettingsModal } from './components/Settings/SettingsModal';
+import { BenchmarkScreen } from './components/Benchmark/BenchmarkScreen';
 import { useWorkbenchStore } from './store/workbenchStore';
 import { initialFolders } from './mockData';
 import type { Folder, Chapter, PageMetadata } from './types';
@@ -73,6 +75,20 @@ export function App() {
 
   const [selectedChapterId, setSelectedChapterId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [isGlobalSettingsOpen, setIsGlobalSettingsOpen] = useState(false);
+  const [isBenchmarkOpen, setIsBenchmarkOpen] = useState(false);
+
+  // Global Ctrl+, shortcut for Settings
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.key === ',') {
+        e.preventDefault();
+        setIsGlobalSettingsOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // Persist folders
   useEffect(() => {
@@ -475,7 +491,11 @@ export function App() {
   return (
     <div className="flex flex-col h-screen w-screen bg-[#09090b] text-zinc-100 overflow-hidden font-sans select-none">
       {/* Desktop Frameless Window Titlebar */}
-      <TitleBar activeFolderName={activeFolder ? activeFolder.name : 'No project selected'} />
+      <TitleBar
+        activeFolderName={activeFolder ? activeFolder.name : 'No project selected'}
+        onOpenSettings={() => setIsGlobalSettingsOpen(true)}
+        onOpenBenchmark={() => setIsBenchmarkOpen(true)}
+      />
 
       {/* Main Workspace */}
       <div className="flex-1 flex flex-col p-6 overflow-hidden">
@@ -535,6 +555,20 @@ export function App() {
           <span>{toastMessage}</span>
         </div>
       )}
+
+      {/* System #6 Settings Modal */}
+      <SettingsModal
+        isOpen={isGlobalSettingsOpen}
+        onClose={() => setIsGlobalSettingsOpen(false)}
+        onOpenBenchmark={() => setIsBenchmarkOpen(true)}
+        projectId={activeFolder?.id}
+      />
+
+      {/* System #6 Quality Benchmark Screen */}
+      <BenchmarkScreen
+        isOpen={isBenchmarkOpen}
+        onClose={() => setIsBenchmarkOpen(false)}
+      />
     </div>
   );
 }

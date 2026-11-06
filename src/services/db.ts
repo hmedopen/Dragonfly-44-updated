@@ -13,14 +13,31 @@
  *   - migration_journal: Audit log of storage migrations
  */
 
-import type { BubbleItem, ProjectLoreLedger, ChapterIntelligence } from '../types/workbench';
+import type {
+  BubbleItem,
+  ProjectLoreLedger,
+  ChapterIntelligence,
+  ReviewFlagItem,
+  ReviewFlagCategory,
+  ReviewFlagSeverity,
+} from '../types/workbench';
+import type { PageScanResult } from '../types/scanning';
 import type { Folder } from '../types';
+import type {
+  ReviewFinding,
+  ReviewSnapshot,
+  ReviewAuditRecord,
+  FindingStatus,
+  ReviewSeverity,
+  ReviewDomain,
+} from '../types/review';
 
 const DB_NAME = 'dragonfly44_db';
-const DB_VERSION = 4;
+const DB_VERSION = 7;
 
 const STORE_PAGE_BLOBS = 'page_blobs';
 const STORE_PAGE_BUBBLES = 'page_bubbles';
+const STORE_PAGE_SCANS = 'page_scans';
 const STORE_PROJECT_LORE = 'project_lore';
 const STORE_CHAPTER_INTELLIGENCE = 'chapter_intelligence';
 const STORE_PROJECTS = 'projects';
@@ -28,6 +45,17 @@ const STORE_CHAPTERS = 'chapters';
 const STORE_PAGES = 'pages';
 const STORE_SNAPSHOTS = 'chapter_snapshots';
 const STORE_MIGRATION_JOURNAL = 'migration_journal';
+const STORE_REVIEW_FINDINGS = 'review_findings';
+const STORE_REVIEW_SNAPSHOTS = 'review_snapshots';
+const STORE_REVIEW_AUDIT = 'review_audit';
+const STORE_KNOWLEDGE_RECORDS = 'knowledge_records';
+const STORE_KNOWLEDGE_REVISIONS = 'knowledge_revisions';
+const STORE_KNOWLEDGE_CANDIDATES = 'knowledge_candidates';
+const STORE_KNOWLEDGE_AUDIT = 'knowledge_audit';
+const STORE_KNOWLEDGE_QUARANTINE = 'knowledge_quarantine';
+const STORE_KNOWLEDGE_CONFLICTS = 'knowledge_conflicts';
+const STORE_KNOWLEDGE_IDEMPOTENCY = 'knowledge_idempotency';
+const STORE_MEMORY_SETTINGS = 'memory_settings';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -46,6 +74,9 @@ export function getDatabase(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(STORE_PAGE_BUBBLES)) {
         db.createObjectStore(STORE_PAGE_BUBBLES);
+      }
+      if (!db.objectStoreNames.contains(STORE_PAGE_SCANS)) {
+        db.createObjectStore(STORE_PAGE_SCANS);
       }
       if (!db.objectStoreNames.contains(STORE_PROJECT_LORE)) {
         db.createObjectStore(STORE_PROJECT_LORE);
@@ -73,6 +104,72 @@ export function getDatabase(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(STORE_MIGRATION_JOURNAL)) {
         db.createObjectStore(STORE_MIGRATION_JOURNAL, { keyPath: 'key' });
+      }
+
+      // 3. New v6 Review & Quality Control stores (System #4)
+      if (!db.objectStoreNames.contains(STORE_REVIEW_FINDINGS)) {
+        const findingStore = db.createObjectStore(STORE_REVIEW_FINDINGS, { keyPath: 'findingId' });
+        findingStore.createIndex('pageId', 'affectedEntity.pageId', { unique: false });
+        findingStore.createIndex('bubbleId', 'affectedEntity.bubbleId', { unique: false });
+        findingStore.createIndex('domain', 'domain', { unique: false });
+        findingStore.createIndex('status', 'status', { unique: false });
+        findingStore.createIndex('issueCode', 'issueCode', { unique: false });
+      }
+      if (!db.objectStoreNames.contains(STORE_REVIEW_SNAPSHOTS)) {
+        const revSnapStore = db.createObjectStore(STORE_REVIEW_SNAPSHOTS, { keyPath: 'snapshotId' });
+        revSnapStore.createIndex('pageId', 'pageId', { unique: false });
+        revSnapStore.createIndex('chapterId', 'chapterId', { unique: false });
+      }
+      if (!db.objectStoreNames.contains(STORE_REVIEW_AUDIT)) {
+        const auditStore = db.createObjectStore(STORE_REVIEW_AUDIT, { keyPath: 'auditId' });
+        auditStore.createIndex('snapshotId', 'snapshotId', { unique: false });
+        auditStore.createIndex('findingId', 'findingId', { unique: false });
+        auditStore.createIndex('jobId', 'jobId', { unique: false });
+      }
+
+      // 4. New v7 Project Memory & AI Data Integrity stores (System #5)
+      if (!db.objectStoreNames.contains(STORE_KNOWLEDGE_RECORDS)) {
+        const recordStore = db.createObjectStore(STORE_KNOWLEDGE_RECORDS, { keyPath: 'record_id' });
+        recordStore.createIndex('projectId', 'project_id', { unique: false });
+        recordStore.createIndex('recordType', 'record_type', { unique: false });
+        recordStore.createIndex('canonicalKey', 'canonical_key', { unique: false });
+        recordStore.createIndex('status', 'status', { unique: false });
+      }
+      if (!db.objectStoreNames.contains(STORE_KNOWLEDGE_REVISIONS)) {
+        const revStore = db.createObjectStore(STORE_KNOWLEDGE_REVISIONS, { keyPath: 'revision_id' });
+        revStore.createIndex('recordId', 'record_id', { unique: false });
+        revStore.createIndex('projectId', 'project_id', { unique: false });
+      }
+      if (!db.objectStoreNames.contains(STORE_KNOWLEDGE_CANDIDATES)) {
+        const candStore = db.createObjectStore(STORE_KNOWLEDGE_CANDIDATES, { keyPath: 'candidate_id' });
+        candStore.createIndex('projectId', 'project_id', { unique: false });
+        candStore.createIndex('dedupeKey', 'dedupe_key', { unique: false });
+        candStore.createIndex('status', 'status', { unique: false });
+        candStore.createIndex('reviewState', 'review_state', { unique: false });
+      }
+      if (!db.objectStoreNames.contains(STORE_KNOWLEDGE_AUDIT)) {
+        const knowAuditStore = db.createObjectStore(STORE_KNOWLEDGE_AUDIT, { keyPath: 'event_id' });
+        knowAuditStore.createIndex('projectId', 'project_id', { unique: false });
+        knowAuditStore.createIndex('recordId', 'record_id', { unique: false });
+        knowAuditStore.createIndex('correlationId', 'correlation_id', { unique: false });
+        knowAuditStore.createIndex('timestamp', 'timestamp', { unique: false });
+      }
+      if (!db.objectStoreNames.contains(STORE_KNOWLEDGE_QUARANTINE)) {
+        const quarStore = db.createObjectStore(STORE_KNOWLEDGE_QUARANTINE, { keyPath: 'quarantine_id' });
+        quarStore.createIndex('projectId', 'project_id', { unique: false });
+        quarStore.createIndex('producer', 'producer', { unique: false });
+      }
+      if (!db.objectStoreNames.contains(STORE_KNOWLEDGE_CONFLICTS)) {
+        const confStore = db.createObjectStore(STORE_KNOWLEDGE_CONFLICTS, { keyPath: 'conflict_id' });
+        confStore.createIndex('projectId', 'project_id', { unique: false });
+        confStore.createIndex('canonicalKey', 'canonical_key', { unique: false });
+        confStore.createIndex('status', 'status', { unique: false });
+      }
+      if (!db.objectStoreNames.contains(STORE_KNOWLEDGE_IDEMPOTENCY)) {
+        db.createObjectStore(STORE_KNOWLEDGE_IDEMPOTENCY, { keyPath: 'key' });
+      }
+      if (!db.objectStoreNames.contains(STORE_MEMORY_SETTINGS)) {
+        db.createObjectStore(STORE_MEMORY_SETTINGS, { keyPath: 'project_id' });
       }
     };
 
@@ -227,6 +324,54 @@ export async function deletePageBubbles(pageId: string): Promise<void> {
 }
 
 // ==========================================
+// SYSTEM #3: CANONICAL PAGE SCANS
+// ==========================================
+
+export async function savePageScan(pageId: string, scan: PageScanResult): Promise<void> {
+  const db = await getDatabase();
+  const key = `page-scan:${pageId}`;
+
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_PAGE_SCANS, 'readwrite');
+    const store = tx.objectStore(STORE_PAGE_SCANS);
+    const request = store.put(scan, key);
+
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function getPageScan(pageId: string): Promise<PageScanResult | null> {
+  const db = await getDatabase();
+  const key = `page-scan:${pageId}`;
+
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_PAGE_SCANS, 'readonly');
+    const store = tx.objectStore(STORE_PAGE_SCANS);
+    const request = store.get(key);
+
+    request.onsuccess = () => {
+      resolve(request.result || null);
+    };
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function deletePageScan(pageId: string): Promise<void> {
+  const db = await getDatabase();
+  const key = `page-scan:${pageId}`;
+
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_PAGE_SCANS, 'readwrite');
+    const store = tx.objectStore(STORE_PAGE_SCANS);
+    const request = store.delete(key);
+
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
+// ==========================================
 // PROJECT LORE LEDGER
 // ==========================================
 
@@ -373,6 +518,329 @@ export async function restoreChapterSnapshot(snapshotId: string): Promise<Chapte
   }
 
   return snapshot;
+}
+
+// ==========================================
+// SYSTEM #4: CANONICAL REVIEW FINDINGS & AUDIT (IndexedDB v6)
+// ==========================================
+
+export async function saveReviewFinding(finding: ReviewFinding): Promise<void> {
+  const db = await getDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_REVIEW_FINDINGS, 'readwrite');
+    const store = tx.objectStore(STORE_REVIEW_FINDINGS);
+    const request = store.put(finding);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function saveReviewFindings(findings: ReviewFinding[]): Promise<void> {
+  if (!findings || findings.length === 0) return;
+  const db = await getDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_REVIEW_FINDINGS, 'readwrite');
+    const store = tx.objectStore(STORE_REVIEW_FINDINGS);
+    for (const f of findings) {
+      store.put(f);
+    }
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(new Error('Transaction aborted saving review findings'));
+  });
+}
+
+export async function getReviewFindingsForPage(pageId: string): Promise<ReviewFinding[]> {
+  const db = await getDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_REVIEW_FINDINGS, 'readonly');
+    const store = tx.objectStore(STORE_REVIEW_FINDINGS);
+    const index = store.index('pageId');
+    const request = index.getAll(pageId);
+    request.onsuccess = () => resolve(request.result || []);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function getReviewFindingsForBubble(bubbleId: string): Promise<ReviewFinding[]> {
+  const db = await getDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_REVIEW_FINDINGS, 'readonly');
+    const store = tx.objectStore(STORE_REVIEW_FINDINGS);
+    const index = store.index('bubbleId');
+    const request = index.getAll(bubbleId);
+    request.onsuccess = () => resolve(request.result || []);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function getReviewFinding(findingId: string): Promise<ReviewFinding | null> {
+  const db = await getDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_REVIEW_FINDINGS, 'readonly');
+    const store = tx.objectStore(STORE_REVIEW_FINDINGS);
+    const request = store.get(findingId);
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function updateReviewFindingStatus(
+  findingId: string,
+  status: FindingStatus,
+  resolutionDetail?: string,
+  resolvedBy: 'user' | 'system' = 'user'
+): Promise<void> {
+  const db = await getDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_REVIEW_FINDINGS, 'readwrite');
+    const store = tx.objectStore(STORE_REVIEW_FINDINGS);
+    const getReq = store.get(findingId);
+
+    getReq.onsuccess = () => {
+      const finding: ReviewFinding = getReq.result;
+      if (!finding) {
+        resolve();
+        return;
+      }
+      finding.status = status;
+      finding.resolvedAt = Date.now();
+      finding.resolvedBy = resolvedBy;
+      if (resolutionDetail) {
+        finding.resolutionDetail = resolutionDetail;
+      }
+      const putReq = store.put(finding);
+      putReq.onsuccess = () => resolve();
+      putReq.onerror = () => reject(putReq.error);
+    };
+    getReq.onerror = () => reject(getReq.error);
+  });
+}
+
+export async function deleteReviewFindingsForPage(pageId: string): Promise<void> {
+  const db = await getDatabase();
+  const findings = await getReviewFindingsForPage(pageId);
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_REVIEW_FINDINGS, 'readwrite');
+    const store = tx.objectStore(STORE_REVIEW_FINDINGS);
+    for (const f of findings) {
+      store.delete(f.findingId);
+    }
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+export async function saveReviewSnapshot(snapshot: ReviewSnapshot): Promise<void> {
+  const db = await getDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_REVIEW_SNAPSHOTS, 'readwrite');
+    const store = tx.objectStore(STORE_REVIEW_SNAPSHOTS);
+    const request = store.put(snapshot);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function getReviewSnapshot(snapshotId: string): Promise<ReviewSnapshot | null> {
+  const db = await getDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_REVIEW_SNAPSHOTS, 'readonly');
+    const store = tx.objectStore(STORE_REVIEW_SNAPSHOTS);
+    const request = store.get(snapshotId);
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function saveReviewAuditRecord(record: ReviewAuditRecord): Promise<void> {
+  const db = await getDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_REVIEW_AUDIT, 'readwrite');
+    const store = tx.objectStore(STORE_REVIEW_AUDIT);
+    const request = store.put(record);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function getReviewAuditRecords(findingId: string): Promise<ReviewAuditRecord[]> {
+  const db = await getDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_REVIEW_AUDIT, 'readonly');
+    const store = tx.objectStore(STORE_REVIEW_AUDIT);
+    const index = store.index('findingId');
+    const request = index.getAll(findingId);
+    request.onsuccess = () => resolve(request.result || []);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function getReviewAuditRecordsForJob(jobId: string): Promise<ReviewAuditRecord[]> {
+  const db = await getDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_REVIEW_AUDIT, 'readonly');
+    const store = tx.objectStore(STORE_REVIEW_AUDIT);
+    const index = store.index('jobId');
+    const request = index.getAll(jobId);
+    request.onsuccess = () => resolve(request.result || []);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+// ==========================================
+// CANONICAL FINDINGS <-> WORKSPACE FLAG ADAPTER
+// ==========================================
+
+export function mapSeverityToReviewSeverity(severity?: string): ReviewSeverity {
+  switch (severity) {
+    case 'blocker':
+    case 'critical':
+      return 'critical';
+    case 'major':
+      return 'major';
+    case 'warning':
+    case 'moderate':
+      return 'moderate';
+    case 'minor':
+      return 'minor';
+    case 'suggestion':
+    case 'informational':
+    default:
+      return 'informational';
+  }
+}
+
+export function mapReviewSeverityToFlagSeverity(severity: ReviewSeverity): ReviewFlagSeverity {
+  switch (severity) {
+    case 'critical':
+      return 'blocker';
+    case 'major':
+    case 'moderate':
+      return 'warning';
+    case 'minor':
+    case 'informational':
+    default:
+      return 'suggestion';
+  }
+}
+
+export function mapCategoryToReviewDomain(category: ReviewFlagCategory): ReviewDomain {
+  switch (category) {
+    case 'missed_bubble':
+    case 'remove_bubble':
+      return 'visual';
+    case 'ocr_error':
+      return 'ocr';
+    case 'reading_order':
+      return 'reading_order';
+    case 'typer_tag':
+      return 'classification';
+    case 'grammar_gender':
+    case 'ambiguous_flow':
+    case 'name_inconsistency':
+      return 'translation';
+    case 'overflow_warning':
+    default:
+      return 'cross_layer';
+  }
+}
+
+export function reviewFindingToReviewFlagItem(finding: ReviewFinding): ReviewFlagItem {
+  // Convert domain + issueCode to existing ReviewFlagCategory for UI backward compatibility
+  let category: ReviewFlagCategory = 'ambiguous_flow';
+  if (finding.domain === 'ocr' || finding.issueCode.includes('OCR')) {
+    category = 'ocr_error';
+  } else if (finding.issueCode === 'MISSED_TEXT_IN_ART' || finding.issueCode === 'MISSED_BUBBLE') {
+    category = 'missed_bubble';
+  } else if (finding.issueCode === 'REMOVE_BUBBLE') {
+    category = 'remove_bubble';
+  } else if (finding.domain === 'reading_order' || finding.issueCode.includes('ORDER')) {
+    category = 'reading_order';
+  } else if (finding.domain === 'classification' || finding.issueCode.includes('TYPE')) {
+    category = 'typer_tag';
+  } else if (finding.issueCode === 'NAME_INCONSISTENCY' || finding.issueCode === 'TERMINOLOGY_INCONSISTENCY') {
+    category = 'name_inconsistency';
+  } else if (finding.issueCode.includes('GENDER') || finding.issueCode === 'GRAMMAR_ERROR') {
+    category = 'grammar_gender';
+  } else if (finding.issueCode === 'TEXT_CLIPPED' || finding.issueCode === 'OVERFLOW_WARNING') {
+    category = 'overflow_warning';
+  }
+
+  const confidenceScore =
+    finding.confidence.finding === 'high' ? 0.95 :
+    finding.confidence.finding === 'moderate' ? 0.75 : 0.5;
+
+  return {
+    id: finding.findingId,
+    category,
+    severity: mapReviewSeverityToFlagSeverity(finding.severity),
+    reasonAr: finding.observation,
+    evidence: finding.evidence.rationale || finding.evidence.sourceSpan || finding.evidence.detectedOCR,
+    suggestedTextAr: finding.proposedCorrection?.targetField === 'translatedText'
+      ? String(finding.proposedCorrection.suggestedValue || '')
+      : undefined,
+    suggestedType: finding.proposedCorrection?.targetField === 'type'
+      ? String(finding.proposedCorrection.suggestedValue || '')
+      : undefined,
+    suggestedOrderIndex: finding.proposedCorrection?.targetField === 'orderIndex'
+      ? Number(finding.proposedCorrection.suggestedValue)
+      : undefined,
+    status: finding.status === 'accepted' ? 'accepted' : finding.status === 'rejected' ? 'dismissed' : 'pending',
+    confidence: confidenceScore,
+    createdAt: finding.createdAt,
+    resolvedAt: finding.resolvedAt,
+    resolutionDetail: finding.resolutionDetail,
+  };
+}
+
+export function reviewFlagItemToReviewFinding(
+  flag: ReviewFlagItem,
+  pageId: string,
+  bubbleId?: string,
+  snapshotVersion: string = 'v1'
+): ReviewFinding {
+  const domain = mapCategoryToReviewDomain(flag.category);
+  const severity = mapSeverityToReviewSeverity(flag.severity);
+
+  return {
+    findingId: flag.id,
+    domain,
+    issueCode: flag.category.toUpperCase(),
+    severity,
+    status: flag.status === 'accepted' ? 'accepted' : flag.status === 'dismissed' ? 'rejected' : 'open',
+    affectedEntity: {
+      type: bubbleId ? 'bubble' : 'page',
+      pageId,
+      bubbleId,
+    },
+    observation: flag.reasonAr,
+    expectedBehavior: 'Satisfy scanlation and translation quality criteria.',
+    evidence: {
+      rationale: flag.evidence || flag.reasonAr,
+    },
+    confidence: {
+      sourceOCR: 'moderate',
+      finding: flag.confidence && flag.confidence > 0.8 ? 'high' : 'moderate',
+      correction: flag.suggestedTextAr ? 'moderate' : 'not_assessed',
+    },
+    proposedAction: flag.suggestedTextAr ? 'edit' : 'inspect',
+    proposedCorrection: flag.suggestedTextAr
+      ? {
+          correctionId: `corr-${flag.id}`,
+          targetField: 'translatedText',
+          currentValue: '',
+          suggestedValue: flag.suggestedTextAr,
+          isEligibleForAuto: false,
+          validationStatus: 'pending',
+        }
+      : undefined,
+    ruleVersion: 'system4-v1.0',
+    createdAt: flag.createdAt || Date.now(),
+    resolvedAt: flag.resolvedAt,
+    resolutionDetail: flag.resolutionDetail,
+    snapshotVersion,
+  };
 }
 
 // ==========================================

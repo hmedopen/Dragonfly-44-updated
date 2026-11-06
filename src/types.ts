@@ -5,6 +5,8 @@ export interface PageMetadata {
   fileName: string;
   index: number; // 1-based index (1, 2, 3...)
   scanStatus?: PageScanStatus;
+  width?: number;
+  height?: number;
 }
 
 export interface Chapter {
@@ -31,3 +33,4 @@ export type SortMode = 'alphabetical-asc' | 'alphabetical-desc' | 'newest' | 'ol
 
 export * from './types/workbench';
 export * from './types/typers';
+export * from './types/scanning';

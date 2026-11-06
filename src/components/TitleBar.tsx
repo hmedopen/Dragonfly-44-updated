@@ -1,11 +1,17 @@
 import React, { useState } from 'react';
-import { Layers, Minus, Square, X } from 'lucide-react';
+import { Layers, Minus, Square, X, Sliders, Activity } from 'lucide-react';
 
 interface TitleBarProps {
   activeFolderName: string;
+  onOpenSettings?: () => void;
+  onOpenBenchmark?: () => void;
 }
 
-export const TitleBar: React.FC<TitleBarProps> = ({ activeFolderName }) => {
+export const TitleBar: React.FC<TitleBarProps> = ({
+  activeFolderName,
+  onOpenSettings,
+  onOpenBenchmark,
+}) => {
   const [isMaximized, setIsMaximized] = useState(false);
 
   const handleMinimize = async () => {
@@ -62,11 +68,34 @@ export const TitleBar: React.FC<TitleBarProps> = ({ activeFolderName }) => {
       </div>
 
       {/* Right Controls: Workspace Ready Badge & Frameless Window Controls */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2">
         <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-mono tracking-tight bg-zinc-900 border border-white/[0.06] text-zinc-400 pointer-events-none">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500/80 animate-pulse" />
           Workspace Ready
         </span>
+
+        {onOpenBenchmark && (
+          <button
+            type="button"
+            onClick={onOpenBenchmark}
+            className="flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-mono text-zinc-300 hover:text-white bg-zinc-900 hover:bg-zinc-800 border border-white/[0.08] transition-colors cursor-pointer"
+            title="Quality Benchmark Engine (System #6)"
+          >
+            <Activity className="w-3.5 h-3.5 text-amber-400" />
+            <span>Benchmark</span>
+          </button>
+        )}
+
+        {onOpenSettings && (
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            className="p-1 rounded text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors cursor-pointer"
+            title="Settings (Ctrl+,)"
+          >
+            <Sliders className="w-3.5 h-3.5" />
+          </button>
+        )}
 
         {/* Frameless Desktop Window Controls */}
         <div className="flex items-center gap-1 border-l border-white/[0.08] pl-2 ml-1">

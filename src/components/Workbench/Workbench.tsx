@@ -5,7 +5,8 @@ import { useWorkbenchStore } from '../../store/workbenchStore';
 import { getPageBlob } from '../../services/db';
 import { CanvasPane } from './CanvasPane';
 import { FeedPane } from './FeedPane';
-import { SettingsDrawer } from '../Settings/SettingsDrawer';
+import { SettingsModal } from '../Settings/SettingsModal';
+import { BenchmarkScreen } from '../Benchmark/BenchmarkScreen';
 import { VirtualKeyboard } from '../Tools/VirtualKeyboard';
 import { TypeRModal } from '../Export/TypeRModal';
 import { ingestImageFiles, pickImageFiles } from '../../services/fileIngestion';
@@ -25,7 +26,8 @@ import {
   BoxSelect,
   SquareDashed,
   BookOpen,
-  X
+  X,
+  Activity
 } from 'lucide-react';
 import { ToolbarTooltip } from './ToolbarTooltip';
 
@@ -108,6 +110,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
   const pendingFocusRef = useRef<{ bubbleId: string; pageId: string } | null>(null);
   const zoomMenuRef = useRef<HTMLDivElement>(null);
   const [deletingPageId, setDeletingPageId] = useState<string | null>(null);
+  const [isBenchmarkOpen, setIsBenchmarkOpen] = useState(false);
 
   const pages = chapter?.pageList || [];
   const effectivePageId = activePageId || pages[0]?.id || null;
@@ -552,6 +555,16 @@ export const Workbench: React.FC<WorkbenchProps> = ({
 
           <button
             type="button"
+            onClick={() => setIsBenchmarkOpen(true)}
+            className={`p-1.5 rounded-full text-xs transition-colors cursor-pointer ${
+              isBenchmarkOpen ? 'bg-amber-500/20 text-amber-300' : 'text-zinc-500 hover:text-white'
+            }`}
+            title="Quality Benchmark Engine (System #6)"
+          >
+            <Activity className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
             onClick={toggleKeyboard}
             className={`p-1.5 rounded-full text-xs transition-colors cursor-pointer ${
               isKeyboardOpen ? 'bg-sky-500/20 text-sky-300' : 'text-zinc-500 hover:text-white'
@@ -891,10 +904,18 @@ export const Workbench: React.FC<WorkbenchProps> = ({
         </div>
       </div>
 
-      {/* 4. Sliding Hardware Settings Drawer */}
-      <SettingsDrawer
+      {/* 4. System #6 Settings Modal */}
+      <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
+        onOpenBenchmark={() => setIsBenchmarkOpen(true)}
+        projectId={folder?.id}
+      />
+
+      {/* System #6 Quality Benchmark Screen */}
+      <BenchmarkScreen
+        isOpen={isBenchmarkOpen}
+        onClose={() => setIsBenchmarkOpen(false)}
       />
 
       {/* 5. TypeR / Text Export Modal */}

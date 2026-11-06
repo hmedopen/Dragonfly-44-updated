@@ -31,6 +31,7 @@ export interface InstructionCompilerOptions {
   isMasterPromptActive?: boolean;
   projectLore?: ProjectLoreLedger | null;
   chapterIntelligence?: ChapterIntelligence | null;
+  projectMemoryPromptContext?: string;
   rollingContextSnippet?: string;
   typers?: CustomTyperConfig[];
   includeSFX?: boolean;
@@ -108,6 +109,7 @@ export function compileInstructions(options: InstructionCompilerOptions): Compil
     isMasterPromptActive = true,
     projectLore,
     chapterIntelligence,
+    projectMemoryPromptContext,
     rollingContextSnippet,
     typers = [],
     includeSFX = false,
@@ -241,43 +243,46 @@ Use this preceding context to maintain conversational continuity, character pron
   }
 
   // 8. Project Lore & Character Continuity
-  const characters = [
-    ...(projectLore?.characters || []),
-    ...(chapterIntelligence?.characterRoster || []),
-  ];
-  const terms = [
-    ...(projectLore?.terms || []),
-    ...(chapterIntelligence?.termsHarvested || []),
-  ];
-  const relationships = [
-    ...(projectLore?.speakerRelationships || []),
-    ...(chapterIntelligence?.speakerPairs || []),
-  ];
+  if (projectMemoryPromptContext && projectMemoryPromptContext.trim().length > 0) {
+    sections.push(projectMemoryPromptContext.trim());
+  } else {
+    const characters = [
+      ...(projectLore?.characters || []),
+      ...(chapterIntelligence?.characterRoster || []),
+    ];
+    const terms = [
+      ...(projectLore?.terms || []),
+      ...(chapterIntelligence?.termsHarvested || []),
+    ];
+    const relationships = [
+      ...(projectLore?.speakerRelationships || []),
+      ...(chapterIntelligence?.speakerPairs || []),
+    ];
 
-  if (characters.length > 0 || terms.length > 0 || relationships.length > 0) {
-    const charList = Array.from(
-      new Set(
-        characters.map(
-          (c) =>
-            `- ${c.nameOriginal} => ${c.nameArabic} (${c.gender || 'unknown'}${c.title ? `, ${c.title}` : ''})`
+    if (characters.length > 0 || terms.length > 0 || relationships.length > 0) {
+      const charList = Array.from(
+        new Set(
+          characters.map(
+            (c) =>
+              `- ${c.nameOriginal} => ${c.nameArabic} (${c.gender || 'unknown'}${c.title ? `, ${c.title}` : ''})`
+          )
         )
-      )
-    ).join('\n');
+      ).join('\n');
 
-    const termList = Array.from(
-      new Set(terms.map((t) => `- ${t.termOriginal} => ${t.termArabic} [${t.category}]`))
-    ).join('\n');
+      const termList = Array.from(
+        new Set(terms.map((t) => `- ${t.termOriginal} => ${t.termArabic} [${t.category}]`))
+      ).join('\n');
 
-    const relList = Array.from(
-      new Set(
-        relationships.map(
-          (r) =>
-            `- ${r.speaker} to ${r.addressee}: Tone: ${r.tone}${r.pronouns ? `, Pronouns: ${r.pronouns}` : ''}`
+      const relList = Array.from(
+        new Set(
+          relationships.map(
+            (r) =>
+              `- ${r.speaker} to ${r.addressee}: Tone: ${r.tone}${r.pronouns ? `, Pronouns: ${r.pronouns}` : ''}`
+          )
         )
-      )
-    ).join('\n');
+      ).join('\n');
 
-    sections.push(`
+      sections.push(`
 LORE & GLOSSARY MEMORY (Strict Continuity):
 Characters:
 ${charList || 'None'}
@@ -288,6 +293,7 @@ ${termList || 'None'}
 Speaker Relationships:
 ${relList || 'None'}
 `.trim());
+    }
   }
 
   // 9. Output Schema Contract

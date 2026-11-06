@@ -159,6 +159,41 @@ export interface IngestionResult {
 }
 
 /**
+ * Extracts intrinsic image dimensions using createImageBitmap or fallback offscreen image.
+ */
+export async function extractImageDimensions(blob: Blob): Promise<{ width: number; height: number }> {
+  try {
+    if (typeof createImageBitmap === 'function') {
+      const bmp = await createImageBitmap(blob);
+      const width = bmp.width;
+      const height = bmp.height;
+      bmp.close();
+      return { width, height };
+    }
+  } catch (_e) {
+    // Fallback below
+  }
+
+  return new Promise((resolve) => {
+    if (typeof Image === 'undefined') {
+      resolve({ width: 1000, height: 1000 });
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve({ width: img.naturalWidth || 1000, height: img.naturalHeight || 1000 });
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve({ width: 1000, height: 1000 });
+    };
+    img.src = url;
+  });
+}
+
+/**
  * Natural sorts files, persists each binary Blob to IndexedDB,
  * and generates the PageMetadata list (with 1-based index).
  */
@@ -181,11 +216,15 @@ export async function ingestImageFiles(files: File[]): Promise<IngestionResult> 
     // Store raw Blob/File directly under key page-blob:${pageId}
     await savePageBlob(pageId, file);
 
+    const dims = await extractImageDimensions(file);
+
     pages.push({
       id: pageId,
       fileName: file.name,
       index,
       scanStatus: 'unscanned',
+      width: dims.width,
+      height: dims.height,
     });
   }
 

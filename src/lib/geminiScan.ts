@@ -1,4 +1,4 @@
-import { getPageBlob, getProjectLore } from '../services/db';
+import { getPageBlob, getPageBubbles, savePageBubbles, savePageScan, getProjectLore } from '../services/db';
 import { getChapterIntelligence, ingestPageIntelligence } from '../services/intelligence';
 import type {
   BubbleItem,
@@ -8,10 +8,14 @@ import type {
   HumanizerIntensity,
   OrthographyMode,
 } from '../types/workbench';
-import { loadTyperSettings, resolveCanonicalTyper } from '../types/typers';
+import type { ReadingConvention, PageScanResult } from '../types/scanning';
+import { loadTyperSettings } from '../types/typers';
 import { compileInstructions } from './instructionCompiler';
 import { humanizeArabicText } from './arabicHumanizer';
-import { validatePageScanOutput, validateSingleBubbleOutput } from './translationValidator';
+import { validateSingleBubbleOutput } from './translationValidator';
+import { scanMangaPage } from './mangaScanner';
+import { mergeScanWithExistingState } from './rescanMerge';
+import { batchTranslateBubbles } from './batchTranslation';
 
 export interface ScanPageOptions {
   pageId: string;
@@ -23,6 +27,7 @@ export interface ScanPageOptions {
   selectedModel: GeminiModelKey | string;
   eloquenceLevel: EloquenceLevel;
   includeSFX: boolean;
+  readingConvention?: ReadingConvention;
   translationFidelity?: TranslationFidelity;
   isHumanizerEnabled?: boolean;
   humanizerIntensity?: HumanizerIntensity;
@@ -36,6 +41,7 @@ export interface ScanResult {
   bubbles: BubbleItem[];
   pageContext: string;
   detectedGlossaryTerms: Array<{ source: string; arabic: string; category: string }>;
+  scanResult?: PageScanResult;
 }
 
 /**
@@ -54,27 +60,9 @@ export async function blobToBase64(blob: Blob): Promise<string> {
 }
 
 /**
- * Validates and normalizes bounding box coordinates within [0, 1000].
- */
-function normalizeBoundingBox(coords: any): [number, number, number, number] {
-  if (!Array.isArray(coords) || coords.length !== 4) {
-    return [200, 200, 400, 400];
-  }
-
-  let [ymin, xmin, ymax, xmax] = coords.map((val) => {
-    const num = Number(val);
-    if (isNaN(num)) return 0;
-    return Math.max(0, Math.min(1000, Math.round(num)));
-  });
-
-  if (ymin >= ymax) ymax = Math.min(1000, ymin + 50);
-  if (xmin >= xmax) xmax = Math.min(1000, xmin + 50);
-
-  return [ymin, xmin, ymax, xmax];
-}
-
-/**
- * Executes a Multimodal Vision Scan with Chapter Context on a single comic page.
+ * Executes an Orchestrated Manga Scan & Translation pass on a single comic page.
+ * Keeps System #3 (Scanning & Classification) and System #2 (Translation & Eloquence)
+ * as clean, separate engine responsibilities while preserving the seamless one-click workflow.
  */
 export async function scanPageWithGemini(options: ScanPageOptions): Promise<ScanResult> {
   const {
@@ -87,6 +75,7 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
     selectedModel,
     eloquenceLevel,
     includeSFX,
+    readingConvention = 'auto',
     translationFidelity = 'localized',
     isHumanizerEnabled = true,
     humanizerIntensity = 'balanced',
@@ -100,134 +89,78 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
     throw new Error('Gemini API key is required. Please set it in Hardware Settings (Ctrl+,).');
   }
 
-  // 1. Retrieve the binary Blob from IndexedDB
-  const blob = await getPageBlob(pageId);
-  if (!blob) {
-    throw new Error(`Page image blob not found in IndexedDB for ID: ${pageId}`);
-  }
+  // 1. SYSTEM #3: Canonical Multimodal Scan & Classification Pass
+  const scanResult = await scanMangaPage({
+    pageId,
+    apiKey,
+    selectedModel: selectedModel ? String(selectedModel) : 'gemini-3.8-flash',
+    readingConvention,
+    includeSFX,
+    enableTargetedRetries: true,
+  });
 
-  // 2. Convert to base64 inlineData payload
-  const mimeType = blob.type || 'image/png';
-  const base64Data = await blobToBase64(blob);
+  // 2. Fetch existing bubbles & Typer configurations for non-destructive rescan merge
+  const existingBubbles = await getPageBubbles(pageId);
+  const typerSettings = loadTyperSettings();
 
-  // 3. Fetch project lore and chapter intelligence
+  // 3. Multi-signal merge: preserves manual edits, user typers, manual ordering, and user-drawn boxes
+  const mergeResult = mergeScanWithExistingState({
+    newScan: scanResult,
+    existingBubbles,
+    typerSettings,
+  });
+
+  // 4. SYSTEM #2: Batch Translation Pass for un-translated dialogue
   const projectLore = !isDraft && projectId ? await getProjectLore(projectId) : null;
   const chapterIntelligence = chapterId ? await getChapterIntelligence(chapterId) : null;
 
-  // 4. Fetch current configured typers
-  const typerSettings = loadTyperSettings();
-
-  // 5. Assemble system instruction via Instruction Compiler
-  const compiled = compileInstructions({
-    task: 'page_scan',
+  const translationMap = await batchTranslateBubbles({
+    bubbles: mergeResult.mergedBubbles,
+    pageContext: scanResult.visualContext || '',
+    apiKey,
+    selectedModel: selectedModel ? String(selectedModel) : 'gemini-3.8-flash',
     eloquenceLevel,
     translationFidelity,
     isHumanizerEnabled,
     humanizerIntensity,
     orthographyMode,
-    includeSFX,
+    masterPromptOverride,
+    isMasterPromptActive,
     projectLore,
     chapterIntelligence,
     rollingContextSnippet: precedingDialogueSnippet,
-    masterPromptOverride,
-    isMasterPromptActive,
-    typers: typerSettings.typers,
   });
 
-  const effectiveModel = selectedModel || 'gemini-3.8-flash';
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${effectiveModel}:generateContent?key=${apiKey}`;
+  // 5. Apply translations to non-manually-edited bubbles
+  const now = Date.now();
+  const finalBubbles = mergeResult.mergedBubbles.map((bubble) => {
+    const translation = translationMap.get(bubble.id);
+    if (!translation) return bubble;
 
-  const payload = {
-    system_instruction: {
-      parts: [{ text: compiled.systemInstruction }],
-    },
-    contents: [
-      {
-        role: 'user',
-        parts: [
-          {
-            text: 'Extract all dialogue bubbles, narration boxes, shouts, thoughts, and text from this page. Provide bounding boxes [ymin, xmin, ymax, xmax] on a 0-1000 scale, accurate TypeR prefixes, and natural Arabic translations in structured JSON format.',
-          },
-          {
-            inline_data: {
-              mime_type: mimeType,
-              data: base64Data,
-            },
-          },
-        ],
-      },
-    ],
-    generation_config: {
-      response_mime_type: 'application/json',
-      temperature: 0.2,
-    },
-  };
+    // Never overwrite translations the user manually edited
+    if (bubble.isManuallyEdited && bubble.translatedText && bubble.translatedText.trim().length > 0) {
+      return bubble;
+    }
 
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
+    const history = [...(bubble.translationHistory || [])];
+    history.push({ timestamp: now, type: 'raw', text: translation.rawText });
+    history.push({ timestamp: now, type: 'humanized', text: translation.humanizedText });
 
-  if (!response.ok) {
-    const errorBody = await response.json().catch(() => null);
-    const errorMsg = errorBody?.error?.message || `HTTP ${response.status}: ${response.statusText}`;
-    throw new Error(errorMsg);
-  }
-
-  const result = await response.json();
-  const rawText = result?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-  // Validate structural output locally
-  const validated = validatePageScanOutput(rawText || '');
-  if (!validated.isValid || !validated.data) {
-    throw new Error(validated.errors[0] || 'Failed to parse structured JSON from Gemini response.');
-  }
-
-  const { bubbles: rawBubbles, pageContext, detectedGlossaryTerms, detectedCharacters, detectedRelationships } = validated.data;
-
-  // Map into BubbleItem schema with canonical typer resolution & non-destructive humanizer
-  const bubbles: BubbleItem[] = rawBubbles.map((item: any, idx: number) => {
-    const rawArabic = item.translatedText || '';
-    const humanizedArabic = isHumanizerEnabled
-      ? humanizeArabicText(rawArabic, {
-          eloquenceLevel,
-          intensity: humanizerIntensity,
-          orthographyMode,
-          isDialectActive: compiled.isDialectActive,
-        })
-      : rawArabic;
-
-    const canonicalTyper = resolveCanonicalTyper(item.type, typerSettings.typers);
-    const safeBox = normalizeBoundingBox(item.box_2d);
-
-    const now = Date.now();
     return {
-      id: `b-${now}-${idx + 1}-${Math.random().toString(36).substring(2, 6)}`,
-      pageId,
-      chapterId,
-      index: idx + 1,
-      box_2d: safeBox,
-      type: canonicalTyper.id,
-      typerPrefix: item.typerPrefix !== undefined ? item.typerPrefix : canonicalTyper.prefix,
-      sourceLanguage: item.sourceLanguage || 'ja',
-      sourceText: item.sourceText || '',
-      originalSourceText: item.sourceText || '',
-      translatedText: humanizedArabic,
-      rawTranslatedText: rawArabic,
-      humanizedTranslatedText: humanizedArabic,
-      translationHistory: [
-        { timestamp: now, type: 'raw', text: rawArabic },
-        { timestamp: now, type: 'humanized', text: humanizedArabic },
-      ],
-      reviewFlags: [],
-      confidence: 0.9,
-      isManuallyEdited: false,
+      ...bubble,
+      translatedText: translation.humanizedText,
+      rawTranslatedText: translation.rawText,
+      humanizedTranslatedText: translation.humanizedText,
+      translationHistory: history,
       updatedAt: now,
     };
   });
 
-  // Ingest newly detected entities into Chapter Intelligence & Project Lore
+  // 6. Persist Canonical Scan Record & Workspace Bubbles to IndexedDB
+  await savePageScan(pageId, mergeResult.updatedScanResult);
+  await savePageBubbles(pageId, finalBubbles);
+
+  // 7. Ingest newly detected entities into Chapter Intelligence (System #5)
   if (chapterId) {
     try {
       await ingestPageIntelligence({
@@ -235,14 +168,19 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
         projectId,
         pageId,
         pageIndex,
-        sceneContext: pageContext || '',
-        detectedCharacters,
-        detectedTerms: detectedGlossaryTerms.map((g: any) => ({
+        sceneContext: scanResult.visualContext || '',
+        detectedCharacters: (scanResult.detectedCharacters || []).map((c) => ({
+          nameOriginal: c.nameOriginal,
+          nameArabic: c.nameArabic,
+          gender: c.gender === 'male' || c.gender === 'female' || c.gender === 'other' ? c.gender : 'unknown',
+          title: c.title,
+        })),
+        detectedTerms: (scanResult.detectedGlossaryTerms || []).map((g: any) => ({
           termOriginal: g.source || '',
           termArabic: g.arabic || '',
           category: g.category || 'term',
         })),
-        detectedRelationships,
+        detectedRelationships: scanResult.detectedRelationships || [],
       });
     } catch (e) {
       console.warn('[GeminiScan] Could not ingest page intelligence:', e);
@@ -250,9 +188,10 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
   }
 
   return {
-    bubbles,
-    pageContext,
-    detectedGlossaryTerms,
+    bubbles: finalBubbles,
+    pageContext: scanResult.visualContext || '',
+    detectedGlossaryTerms: scanResult.detectedGlossaryTerms || [],
+    scanResult: mergeResult.updatedScanResult,
   };
 }
 

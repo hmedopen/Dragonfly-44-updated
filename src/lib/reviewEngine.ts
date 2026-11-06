@@ -467,29 +467,53 @@ export async function auditChapterContinuityWithGemini(
   };
 }
 
+import { runReviewEngine } from './reviewOrchestrator';
+
+export { runReviewEngine } from './reviewOrchestrator';
+export { applyGuardedCorrection, rollbackCorrection, checkCorrectionEligibility } from './reviewCorrectionGuard';
+export { captureReviewSnapshot, verifySnapshotNotStale } from './reviewSnapshot';
+export { runDeterministicIntegrityChecks } from './reviewIntegrity';
+export { evaluateVisualAndScan } from './reviewScanEvaluator';
+export { evaluateTranslationAndLinguistics } from './reviewTranslationEvaluator';
+export { normalizeAndDeduplicateFindings } from './reviewNormalizer';
+
 /**
  * Unified Chapter Review Orchestrator:
- * Automatically uses multimodal visual review for single-page requests,
- * and full-script continuity audit for multi-page requests.
+ * Employs System #4 Canonical Multi-Stage Engine:
+ * - Deterministic integrity checks (local zero-model-cost)
+ * - Multimodal visual inspection on page artwork
+ * - Linguistic, semantic & instruction compliance (Master Prompt + dialect protection)
+ * - Finding normalization and deduplication
+ * - Optimistic concurrency protection
+ * - IndexedDB v6 canonical finding persistence + workspace bubble synchronization
  */
 export async function auditChapterWithGemini(
   options: ChapterReviewOptions
 ): Promise<ReviewAuditResult> {
   const isSinglePage = options.pages.length === 1;
 
-  if (isSinglePage) {
-    return auditPageVisuallyWithGemini({
-      pageId: options.pages[0].pageId,
-      chapterId: options.chapterId,
-      projectId: options.projectId,
-      isDraft: options.isDraft,
-      apiKey: options.apiKey,
-      selectedModel: options.selectedModel,
-      eloquenceLevel: options.eloquenceLevel,
-      masterPromptOverride: options.masterPromptOverride,
-      isMasterPromptActive: options.isMasterPromptActive,
-    });
+  const jobResult = await runReviewEngine({
+    scope: isSinglePage ? 'single_page' : 'chapter',
+    chapterId: options.chapterId,
+    pages: options.pages.map((p) => ({ pageId: p.pageId, pageIndex: p.pageIndex })),
+    apiKey: options.apiKey,
+    selectedModel: String(options.selectedModel || 'gemini-3.8-flash'),
+    eloquenceLevel: options.eloquenceLevel,
+    masterPromptOverride: options.masterPromptOverride,
+    isMasterPromptActive: options.isMasterPromptActive,
+  });
+
+  const updatedBubblesByPage: Record<string, BubbleItem[]> = {};
+  for (const page of options.pages) {
+    updatedBubblesByPage[page.pageId] = await getPageBubbles(page.pageId);
   }
 
-  return auditChapterContinuityWithGemini(options);
+  return {
+    chapterSummary:
+      jobResult.chapterSummary ||
+      jobResult.pageSummaries[options.pages[0]?.pageId] ||
+      `Found ${jobResult.findings.length} findings across audited scope.`,
+    updatedBubblesByPage,
+    totalFlagsFound: jobResult.findings.length,
+  };
 }
