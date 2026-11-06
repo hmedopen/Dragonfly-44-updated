@@ -8,9 +8,11 @@ import type {
   GeminiModelKey 
 } from '../types/workbench';
 import { BUBBLE_TYPE_CONFIG } from '../types/workbench';
+import { loadTyperSettings } from '../types/typers';
 import { getPageBubbles, savePageBubbles, getProjectLore } from '../services/db';
 import { scanQueue } from '../lib/scanQueue';
 import { auditChapterWithGemini } from '../lib/reviewEngine';
+import { translateSingleBubbleWithGemini } from '../lib/geminiScan';
 
 export type CurrentView = 'hub' | 'workbench';
 export type ViewportMode = 'manga-flip' | 'webtoon-strip';
@@ -89,6 +91,12 @@ interface WorkbenchState {
     projectId?: string | null,
     isDraft?: boolean
   ) => void;
+  translateSingleBubble: (
+    pageId: string,
+    bubbleId: string,
+    projectId?: string | null,
+    isDraft?: boolean
+  ) => Promise<void>;
   runChapterReview: (
     chapterId: string,
     pages: { pageId: string; pageIndex: number }[],
@@ -168,7 +176,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   toggleTypeRModal: () => set((s) => ({ isTypeRModalOpen: !s.isTypeRModalOpen })),
   setIsDrawBoxActive: (active) => set({ isDrawBoxActive: active }),
   toggleDrawBox: () => set((s) => ({ isDrawBoxActive: !s.isDrawBoxActive })),
-  setZoomLevel: (zoom) => set({ zoomLevel: Math.max(25, Math.min(zoom, 400)) }),
+  setZoomLevel: (zoom) => set({ zoomLevel: Math.max(25, Math.min(zoom, 1000)) }),
   resetZoom: () => set({ zoomLevel: 100 }),
   setFeedFilter: (filter) => set({ feedFilter: filter }),
 
@@ -202,13 +210,20 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     const existing = state.bubblesByPage[pageId] || [];
     const nextIndex = existing.length + 1;
 
+    const typerSettings = loadTyperSettings();
+    const defaultSpeechTyper = typerSettings.typers.find(
+      (t) => t.id === 'speech_bubbles' || t.name.toLowerCase() === 'speech bubbles'
+    );
+    const initialType = defaultSpeechTyper ? defaultSpeechTyper.id : (typerSettings.typers[0]?.id || 'none');
+    const initialPrefix = defaultSpeechTyper ? defaultSpeechTyper.prefix : (typerSettings.typers[0]?.prefix || '');
+
     const newBubble: BubbleItem = {
       id: `bubble-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       pageId,
       index: nextIndex,
       box_2d: initialBox || [350, 250, 550, 650],
-      type: 'dialogue',
-      typerPrefix: '():',
+      type: initialType,
+      typerPrefix: initialPrefix,
       sourceText: '',
       originalSourceText: '',
       translatedText: '',
@@ -236,10 +251,20 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     const existing = state.bubblesByPage[pageId] || [];
 
     let updatedPatch = { ...patch };
-    if (patch.type && !patch.typerPrefix) {
-      const typeConfig = BUBBLE_TYPE_CONFIG[patch.type as BubbleType];
-      if (typeConfig) {
-        updatedPatch.typerPrefix = typeConfig.prefix;
+    if (patch.type && patch.typerPrefix === undefined) {
+      if (patch.type === 'none') {
+        updatedPatch.typerPrefix = '';
+      } else {
+        const typerSettings = loadTyperSettings();
+        const matched = typerSettings.typers.find((t) => t.id === patch.type);
+        if (matched) {
+          updatedPatch.typerPrefix = matched.prefix;
+        } else {
+          const typeConfig = BUBBLE_TYPE_CONFIG[patch.type as BubbleType];
+          if (typeConfig) {
+            updatedPatch.typerPrefix = typeConfig.prefix;
+          }
+        }
       }
     }
 
@@ -335,8 +360,14 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     }
     if (targetFlag.suggestedType) {
       newType = targetFlag.suggestedType;
-      const cfg = BUBBLE_TYPE_CONFIG[newType];
-      if (cfg) newPrefix = cfg.prefix;
+      const typerSettings = loadTyperSettings();
+      const matched = typerSettings.typers.find((t) => t.id === newType);
+      if (matched) {
+        newPrefix = matched.prefix;
+      } else {
+        const cfg = BUBBLE_TYPE_CONFIG[newType];
+        if (cfg) newPrefix = cfg.prefix;
+      }
     }
 
     // Remove ONLY this flag from reviewFlags
@@ -478,7 +509,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
         isScanningSinglePage: !isBatch && progress.isScanning,
         pageStatuses: progress.pageStatuses,
         scanProgressText: isBatch && progress.isScanning
-          ? `SCANNING ${progress.completedCount + 1}/${progress.totalCount} - CANCEL`
+          ? `${progress.completedCount + 1}/${progress.totalCount} - CANCEL`
           : null,
       });
     });
@@ -504,6 +535,45 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
 
   scanSinglePage: (pageId, pageIndex, projectId = null, isDraft = false) => {
     get().startBatchScan([{ pageId, pageIndex }], projectId, isDraft);
+  },
+
+  translateSingleBubble: async (pageId, bubbleId, projectId = null, isDraft = false) => {
+    const state = get();
+    const pageBubbles = state.bubblesByPage[pageId] || [];
+    const targetBubble = pageBubbles.find((b) => b.id === bubbleId);
+    if (!targetBubble) {
+      throw new Error('Target bubble not found.');
+    }
+
+    const apiKey = localStorage.getItem('dragonfly44_gemini_api_key') || '';
+    const selectedModel = (localStorage.getItem('dragonfly44_selected_model') as GeminiModelKey) || 'gemini-3.1-flash-lite';
+    const eloquenceLevel = (Number(localStorage.getItem('dragonfly44_eloquence_level') || '2') as EloquenceLevel) || 2;
+    const masterPromptOverride = localStorage.getItem('dragonfly44_master_prompt_override') || '';
+    const isMasterPromptActive = localStorage.getItem('dragonfly44_master_prompt_active') !== 'false';
+
+    const result = await translateSingleBubbleWithGemini({
+      pageId,
+      bubble: targetBubble,
+      surroundingBubbles: pageBubbles,
+      projectId,
+      isDraft,
+      apiKey,
+      selectedModel,
+      eloquenceLevel,
+      masterPromptOverride,
+      isMasterPromptActive,
+    });
+
+    const patch: Partial<BubbleItem> = {
+      translatedText: result.translatedText,
+      rawTranslatedText: result.translatedText,
+    };
+    if (result.sourceText && !targetBubble.sourceText) {
+      patch.sourceText = result.sourceText;
+      patch.originalSourceText = result.sourceText;
+    }
+
+    get().updateBubble(pageId, bubbleId, patch);
   },
 
   // QC Audit Review Engine

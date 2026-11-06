@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import type { Folder, Chapter } from '../../types';
+import type { BubbleItem } from '../../types/workbench';
 import { useWorkbenchStore } from '../../store/workbenchStore';
 import { getPageBlob } from '../../services/db';
 import { CanvasPane } from './CanvasPane';
@@ -9,19 +10,24 @@ import { VirtualKeyboard } from '../Tools/VirtualKeyboard';
 import { TypeRModal } from '../Export/TypeRModal';
 import { ingestImageFiles, pickImageFiles } from '../../services/fileIngestion';
 import { compileRawTextExtract } from '../../lib/compileTypeR';
+import { loadTyperSettings } from '../../types/typers';
 import { 
   ArrowLeft, 
   Menu, 
   FileText, 
   Keyboard,
-  Search,
   RotateCcw,
   ChevronDown,
-  Copy,
-  Check,
   Plus,
-  Sparkles
+  Sparkles,
+  Search,
+  MessageSquarePlus,
+  BoxSelect,
+  SquareDashed,
+  BookOpen,
+  X
 } from 'lucide-react';
+import { ToolbarTooltip } from './ToolbarTooltip';
 
 interface WorkbenchProps {
   folder: Folder | null;
@@ -29,6 +35,7 @@ interface WorkbenchProps {
   onBack: () => void;
   onAddManualBubble?: () => void;
   onAppendPages?: (newPages: any[]) => void;
+  onDeletePage?: (pageId: string) => void;
 }
 
 export const Workbench: React.FC<WorkbenchProps> = ({
@@ -37,6 +44,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
   onBack,
   onAddManualBubble,
   onAppendPages,
+  onDeletePage,
 }) => {
   const {
     activePageId,
@@ -82,6 +90,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
     isScanningSinglePage,
     isReviewingSinglePage,
     runChapterReview,
+    translateSingleBubble,
   } = useWorkbenchStore();
 
   const [loadedBlobState, setLoadedBlobState] = useState<{ pageId: string | null; url: string | null }>({
@@ -91,12 +100,47 @@ export const Workbench: React.FC<WorkbenchProps> = ({
   const [isZoomDropdownOpen, setIsZoomDropdownOpen] = useState(false);
   const [exportModalScope, setExportModalScope] = useState<'entire' | 'active'>('entire');
   const [exportModalMode, setExportModalMode] = useState<'raw_text' | 'typer_script'>('raw_text');
+  const [isConfirmingExit, setIsConfirmingExit] = useState(false);
+  const [showBoxes, setShowBoxes] = useState(true);
+  const [isFlipPageActive, setIsFlipPageActive] = useState(false);
+  const [canvasViewResetKey, setCanvasViewResetKey] = useState(0);
+  const [focusTarget, setFocusTarget] = useState<{ bubbleId: string; box_2d: [number, number, number, number]; trigger: number } | null>(null);
+  const pendingFocusRef = useRef<{ bubbleId: string; pageId: string } | null>(null);
   const zoomMenuRef = useRef<HTMLDivElement>(null);
+  const [deletingPageId, setDeletingPageId] = useState<string | null>(null);
 
   const pages = chapter?.pageList || [];
   const effectivePageId = activePageId || pages[0]?.id || null;
   const currentPageIndex = effectivePageId ? pages.findIndex((p) => p.id === effectivePageId) : -1;
   const activePageNum = currentPageIndex >= 0 ? currentPageIndex + 1 : 0;
+
+  const hasPrevPage = currentPageIndex > 0;
+  const hasNextPage = currentPageIndex >= 0 && currentPageIndex < pages.length - 1;
+
+  const handlePrevPage = () => {
+    if (hasPrevPage) {
+      setActivePageId(pages[currentPageIndex - 1].id);
+    }
+  };
+
+  const handleNextPage = () => {
+    if (hasNextPage) {
+      setActivePageId(pages[currentPageIndex + 1].id);
+    }
+  };
+
+  const handleBackClick = () => {
+    if (isConfirmingExit) {
+      onBack();
+    } else {
+      setIsConfirmingExit(true);
+    }
+  };
+
+  const handleResetZoom = () => {
+    resetZoom();
+    setCanvasViewResetKey((k) => k + 1);
+  };
 
   const isLoadingBlob = Boolean(
     effectivePageId &&
@@ -278,11 +322,15 @@ export const Workbench: React.FC<WorkbenchProps> = ({
     setExportModalScope('active');
     setExportModalMode('raw_text');
     setIsTypeRModalOpen(true);
+    const typerCfg = loadTyperSettings();
     const text = compileRawTextExtract({
       chapterName: chapter?.name || 'CHAPTER 01',
       pages: [{ pageIndex: activePageNum, bubbles: currentBubbles }],
       includePageHeaders: false,
       includeIndexTags: true,
+      includePrefixTags: typerCfg.includeTyperSymbols,
+      prefixPosition: typerCfg.prefixPosition,
+      tagPlacement: typerCfg.prefixPosition === 'left' ? 'prefix' : 'suffix',
     });
     if (text) {
       navigator.clipboard?.writeText(text).catch(() => {});
@@ -293,16 +341,55 @@ export const Workbench: React.FC<WorkbenchProps> = ({
     setExportModalScope('entire');
     setExportModalMode('raw_text');
     setIsTypeRModalOpen(true);
+    const typerCfg = loadTyperSettings();
     const text = compileRawTextExtract({
       chapterName: chapter?.name || 'CHAPTER 01',
       pages: allChapterPagesForExport,
       includePageHeaders: true,
       includeIndexTags: true,
+      includePrefixTags: typerCfg.includeTyperSymbols,
+      prefixPosition: typerCfg.prefixPosition,
+      tagPlacement: typerCfg.prefixPosition === 'left' ? 'prefix' : 'suffix',
     });
     if (text) {
       navigator.clipboard?.writeText(text).catch(() => {});
     }
   };
+
+  const handleTranslateBubble = async (bubbleId: string) => {
+    if (effectivePageId) {
+      await translateSingleBubble(effectivePageId, bubbleId, folder?.id, isDraftChapter);
+    }
+  };
+
+  const handleFocusBubble = (bubble: BubbleItem) => {
+    setSelectedBubbleId(bubble.id);
+    if (bubble.pageId && bubble.pageId !== effectivePageId) {
+      pendingFocusRef.current = { bubbleId: bubble.id, pageId: bubble.pageId };
+      setActivePageId(bubble.pageId);
+    } else {
+      setFocusTarget({
+        bubbleId: bubble.id,
+        box_2d: bubble.box_2d,
+        trigger: Date.now(),
+      });
+    }
+  };
+
+  useEffect(() => {
+    if (pendingFocusRef.current && pendingFocusRef.current.pageId === effectivePageId) {
+      const bubbleId = pendingFocusRef.current.bubbleId;
+      const targetBubble = currentBubbles.find((b) => b.id === bubbleId);
+      if (targetBubble) {
+        setFocusTarget({
+          bubbleId: targetBubble.id,
+          box_2d: targetBubble.box_2d,
+          trigger: Date.now(),
+        });
+        pendingFocusRef.current = null;
+      }
+    }
+  }, [effectivePageId, currentBubbles]);
 
   const handlePickMorePages = async () => {
     try {
@@ -340,7 +427,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
     bubbles: bubblesByPage[p.id] || [],
   }));
 
-  const zoomOptions = [50, 75, 100, 125, 150, 200];
+  const zoomOptions = [50, 75, 100, 125, 150, 200, 300, 500, 1000];
 
   return (
     <div className="flex flex-col h-screen w-screen bg-[#060709] text-zinc-100 overflow-hidden font-sans select-none relative">
@@ -349,40 +436,95 @@ export const Workbench: React.FC<WorkbenchProps> = ({
         {/* Left side: Back to Hub + Page Pills Row stretching across the app */}
         <div className="flex items-center gap-3 overflow-x-auto custom-scrollbar flex-1 py-1">
           <button
-            onClick={onBack}
-            className="p-1.5 rounded-full text-zinc-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer shrink-0"
-            title="Return to Hub (Esc)"
+            type="button"
+            onClick={handleBackClick}
+            onMouseLeave={() => setIsConfirmingExit(false)}
+            className={`h-7 w-14 min-w-[56px] max-w-[56px] rounded-full cursor-pointer shrink-0 inline-flex items-center justify-center text-xs font-semibold select-none transition-colors ${
+              isConfirmingExit
+                ? 'bg-rose-500/20 text-rose-300 hover:bg-rose-500/30'
+                : 'text-zinc-400 hover:text-white hover:bg-white/10'
+            }`}
+            title={isConfirmingExit ? 'Click again to Exit' : 'Return to Hub (Esc)'}
           >
-            <ArrowLeft className="w-4 h-4" />
+            {isConfirmingExit ? (
+              <span className="whitespace-nowrap select-none">Exit?</span>
+            ) : (
+              <ArrowLeft className="w-4 h-4" />
+            )}
           </button>
 
           <div className="h-4 w-px bg-white/10 shrink-0" />
 
-          {/* Page Pills: 01, 02, 03... fixed-width so active state doesn't shift siblings */}
+          {/* Page Pills: Page 1, Page 2... fixed-width with centered text; selected tab shows X delete */}
           <div className="flex items-center gap-1 overflow-x-auto custom-scrollbar">
             {pages.length > 0 ? (
               <>
                 {pages.map((p, idx) => {
                   const isTabActive = effectivePageId === p.id;
-                  const paddedIndex = String(p.index || idx + 1).padStart(2, '0');
+                  const pageNum = p.index || idx + 1;
                   const isPageScanning = pageStatuses[p.id] === 'scanning';
+                  const isArmingDelete = deletingPageId === p.id;
+
+                  if (!isTabActive) {
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => { setDeletingPageId(null); setActivePageId(p.id); }}
+                        className="relative transition-all duration-150 cursor-pointer inline-flex items-center justify-center w-[76px] min-w-[76px] max-w-[76px] h-8 rounded-full shrink-0 text-xs text-center whitespace-nowrap text-zinc-400 hover:text-white hover:bg-white/5 font-medium"
+                      >
+                        {isPageScanning && (
+                          <span className="absolute left-1.5 w-1.5 h-1.5 rounded-full bg-sky-400 animate-ping" />
+                        )}
+                        <span>Page {pageNum}</span>
+                      </button>
+                    );
+                  }
 
                   return (
-                    <button
+                    <div
                       key={p.id}
-                      type="button"
-                      onClick={() => setActivePageId(p.id)}
-                      className={`transition-all duration-150 cursor-pointer flex items-center justify-center gap-1 w-10 py-1 rounded-full shrink-0 text-xs ${
-                        isTabActive
-                          ? 'bg-white text-zinc-950 font-bold shadow-sm'
-                          : 'text-zinc-400 hover:text-white hover:bg-white/5 font-medium'
+                      className={`relative inline-flex items-center shrink-0 h-8 rounded-full transition-all duration-150 ${
+                        isArmingDelete
+                          ? 'bg-red-500 text-white min-w-[104px]'
+                          : 'bg-white text-zinc-950 min-w-[104px]'
                       }`}
+                      onMouseLeave={() => { if (deletingPageId === p.id) setDeletingPageId(null); }}
                     >
-                      {isPageScanning && (
-                        <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-ping" />
-                      )}
-                      <span>{paddedIndex}</span>
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() => { if (!isArmingDelete) { setDeletingPageId(null); } }}
+                        onDoubleClick={() => { setDeletingPageId(p.id); }}
+                        className={`flex-1 h-full px-3 inline-flex items-center justify-center text-xs font-bold rounded-full text-center whitespace-nowrap relative ${
+                          isArmingDelete ? 'text-white' : 'text-zinc-950'
+                        }`}
+                      >
+                        {isPageScanning && (
+                          <span className="absolute left-1.5 w-1.5 h-1.5 rounded-full bg-sky-400 animate-ping" />
+                        )}
+                        <span>{isArmingDelete ? 'Delete?' : `Page ${pageNum}`}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (isArmingDelete) {
+                            onDeletePage?.(p.id);
+                            setDeletingPageId(null);
+                          } else {
+                            setDeletingPageId(p.id);
+                          }
+                        }}
+                        className={`mr-2 w-4 h-4 rounded-full flex items-center justify-center transition-colors shrink-0 ${
+                          isArmingDelete
+                            ? 'bg-white/20 hover:bg-white/40 text-white'
+                            : 'bg-zinc-200 hover:bg-zinc-300 text-zinc-950'
+                        }`}
+                        title={isArmingDelete ? "Click to confirm delete" : "Delete page"}
+                      >
+                        <X className="w-2.5 h-2.5 stroke-[2.5]" />
+                      </button>
+                    </div>
                   );
                 })}
               </>
@@ -432,67 +574,127 @@ export const Workbench: React.FC<WorkbenchProps> = ({
       </header>
 
       {/* 2. Subheader Action Row: Canvas Controls (Left) & Action Pills (Right) */}
-      <div className="px-4 py-2 flex items-center justify-between shrink-0 gap-4">
-        {/* Left (aligned above Canvas): Zoom & Fit Capsule */}
-        <div className="w-[32%] max-w-[34%] min-w-[28%] flex items-center">
-          <div className="flex items-center gap-1.5 bg-[#121317] border border-white/[0.08] rounded-xl px-2.5 py-1 shadow-sm">
-            {/* Search / Magnifier */}
+      <div className="relative z-30 px-4 py-2 flex items-center justify-between shrink-0 gap-4">
+        {/* Left (aligned above Canvas): Zoom Pill + 3 Separated Action Buttons */}
+        <div className="w-[32%] max-w-[34%] min-w-[28%] flex items-center gap-2 overflow-visible relative">
+          {/* Zoom Percentage & Reset Capsule */}
+          <div className="flex items-center gap-1 bg-[#121317] border border-white/[0.08] rounded-xl px-2 py-1 shadow-sm shrink-0">
+            {/* Zoom Percentage Dropdown */}
+            <ToolbarTooltip
+              title="Zoom Level"
+              description="Select canvas zoom scale (up to 1000%) or reset to fit"
+              align="center"
+              disabled={isZoomDropdownOpen}
+            >
+              <div className="relative" ref={zoomMenuRef}>
+                <button
+                  type="button"
+                  onClick={() => setIsZoomDropdownOpen(!isZoomDropdownOpen)}
+                  className="flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium text-zinc-300 hover:text-white transition-colors cursor-pointer"
+                >
+                  <span>{zoomLevel}%</span>
+                  <ChevronDown className="w-3 h-3 text-zinc-400" />
+                </button>
+
+                {isZoomDropdownOpen && (
+                  <div className="absolute left-0 top-full mt-1.5 w-28 rounded-xl bg-[#16171d] border border-white/[0.12] shadow-2xl z-50 py-1 max-h-60 overflow-y-auto custom-scrollbar animate-in fade-in zoom-in-95 duration-100">
+                    {zoomOptions.map((opt) => (
+                      <button
+                        key={opt}
+                        type="button"
+                        onClick={() => {
+                          setZoomLevel(opt);
+                          setIsZoomDropdownOpen(false);
+                        }}
+                        className={`w-full px-3 py-1.5 text-left text-xs font-sans flex items-center justify-between transition-colors cursor-pointer ${
+                          zoomLevel === opt
+                            ? 'bg-sky-500/20 text-sky-300 font-semibold'
+                            : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'
+                        }`}
+                      >
+                        <span>{opt}%</span>
+                        {opt === 100 && <span className="text-[10px] text-zinc-500">Fit</span>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </ToolbarTooltip>
+
+            <div className="h-4 w-px bg-white/10 mx-0.5" />
+
+            {/* Reset Zoom */}
+            <ToolbarTooltip
+              title="Reset Zoom"
+              description="Reset zoom scale to 100% and re-center canvas"
+              align="center"
+            >
+              <button
+                type="button"
+                onClick={handleResetZoom}
+                className="p-1.5 text-zinc-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+              </button>
+            </ToolbarTooltip>
+          </div>
+
+          {/* 1. Add Bubble Button (Its own separated button) */}
+          <ToolbarTooltip
+            title="Add Bubble"
+            description="Draw a custom dialogue bounding box on the image canvas (Left-click & drag)"
+            align="center"
+          >
             <button
               type="button"
               onClick={toggleDrawBox}
-              className={`p-1 rounded-lg transition-colors cursor-pointer ${
-                isDrawBoxActive ? 'text-sky-400 bg-sky-500/15' : 'text-zinc-400 hover:text-white'
+              className={`p-2 rounded-xl border transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
+                isDrawBoxActive 
+                  ? 'text-sky-400 bg-sky-500/15 border-sky-500/40' 
+                  : 'bg-[#121317] border-white/[0.08] text-zinc-400 hover:text-white hover:bg-[#181920] hover:border-white/[0.16]'
               }`}
-              title="Toggle Box Draw / Inspect Mode"
             >
-              <Search className="w-3.5 h-3.5" />
+              <MessageSquarePlus className="w-3.5 h-3.5" />
             </button>
+          </ToolbarTooltip>
 
-            {/* Zoom Percentage Dropdown */}
-            <div className="relative" ref={zoomMenuRef}>
-              <button
-                type="button"
-                onClick={() => setIsZoomDropdownOpen(!isZoomDropdownOpen)}
-                className="flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium text-zinc-300 hover:text-white transition-colors cursor-pointer"
-              >
-                <span>{zoomLevel}%</span>
-                <ChevronDown className="w-3 h-3 text-zinc-400" />
-              </button>
-
-              {isZoomDropdownOpen && (
-                <div className="absolute left-0 top-full mt-1.5 w-28 rounded-xl bg-[#16171d] border border-white/[0.12] shadow-2xl z-50 py-1 overflow-hidden animate-in fade-in zoom-in-95 duration-100">
-                  {zoomOptions.map((opt) => (
-                    <button
-                      key={opt}
-                      type="button"
-                      onClick={() => {
-                        setZoomLevel(opt);
-                        setIsZoomDropdownOpen(false);
-                      }}
-                      className={`w-full px-3 py-1.5 text-left text-xs font-sans flex items-center justify-between transition-colors cursor-pointer ${
-                        zoomLevel === opt
-                          ? 'bg-sky-500/20 text-sky-300 font-semibold'
-                          : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'
-                      }`}
-                    >
-                      <span>{opt}%</span>
-                      {opt === 100 && <span className="text-[10px] text-zinc-500">Fit</span>}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Rotate / Reset Zoom */}
+          {/* 2. Toggle Box View Button (Its own separated button with BoxSelect icon) */}
+          <ToolbarTooltip
+            title="Toggle Box View"
+            description="Show or hide dialogue bounding boxes without removing them"
+            align="center"
+          >
             <button
               type="button"
-              onClick={resetZoom}
-              className="p-1 text-zinc-400 hover:text-white rounded-lg transition-colors cursor-pointer"
-              title="Reset Zoom to 100%"
+              onClick={() => setShowBoxes(!showBoxes)}
+              className={`p-2 rounded-xl border transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
+                showBoxes 
+                  ? 'text-sky-400 bg-sky-500/15 border-sky-500/40' 
+                  : 'bg-[#121317] border-white/[0.08] text-zinc-500 hover:text-zinc-300 hover:bg-[#181920] hover:border-white/[0.16]'
+              }`}
             >
-              <RotateCcw className="w-3.5 h-3.5" />
+              {showBoxes ? <BoxSelect className="w-3.5 h-3.5" /> : <SquareDashed className="w-3.5 h-3.5 opacity-50" />}
             </button>
-          </div>
+          </ToolbarTooltip>
+
+          {/* 3. Click for Next Page Button (Its own separated button with BookOpen icon) */}
+          <ToolbarTooltip
+            title="Click for Next Page"
+            description="Click outer edges of canvas to flip pages"
+            align="center"
+          >
+            <button
+              type="button"
+              onClick={() => setIsFlipPageActive(!isFlipPageActive)}
+              className={`p-2 rounded-xl border transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
+                isFlipPageActive 
+                  ? 'text-sky-400 bg-sky-500/15 border-sky-500/40' 
+                  : 'bg-[#121317] border-white/[0.08] text-zinc-400 hover:text-white hover:bg-[#181920] hover:border-white/[0.16]'
+              }`}
+            >
+              <BookOpen className="w-3.5 h-3.5" />
+            </button>
+          </ToolbarTooltip>
         </div>
 
         {/* Right (aligned above Feed): Page tools LEFT side, All tools RIGHT side — separated */}
@@ -515,7 +717,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
               </svg>
             ) : (
-              <FileText className="w-3.5 h-3.5 text-zinc-300" />
+              <Sparkles className="w-3.5 h-3.5 text-zinc-300" />
             )}
             <span>Scan Page</span>
           </button>
@@ -537,7 +739,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
               </svg>
             ) : (
-              <Sparkles className="w-3.5 h-3.5 text-zinc-300" />
+              <Search className="w-3.5 h-3.5 text-zinc-300" />
             )}
             <span>Review Page</span>
           </button>
@@ -548,26 +750,22 @@ export const Workbench: React.FC<WorkbenchProps> = ({
             className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-[#121317] border border-white/[0.08] hover:bg-[#181920] hover:border-white/[0.16] text-xs font-medium text-zinc-200 transition-all cursor-pointer shadow-sm active:scale-95 shrink-0"
             title="Extract Current Page Text (No Translation)"
           >
-            <span className="border border-zinc-400 px-1 py-0.2 rounded text-[10px] font-bold leading-none">A</span>
+            <FileText className="w-3.5 h-3.5 text-zinc-300" />
             <span>Extract Page</span>
           </button>
 
           {/* Flexible gap to push "All" group to the right */}
           <div className="flex-1" />
 
-          {/* Group 2: Chapter / All Tools — Scan All (blue) | Review All (amber) | Extract All */}
+          {/* Group 2: Global Action Cluster — Exact Swapped Order: Extract All (Left) | Review All (Middle) | Scan All (Far Right) */}
           <button
             type="button"
-            onClick={handleScanAll}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-medium transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
-              isScanningActive
-                ? 'bg-blue-400 text-white animate-pulse'
-                : 'bg-blue-600 hover:bg-blue-500 text-white'
-            }`}
-            title="Batch Scan Entire Chapter"
+            onClick={handleExtractAll}
+            className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-[#121317] border border-white/[0.08] hover:bg-[#181920] hover:border-white/[0.16] text-xs font-medium text-zinc-200 transition-all cursor-pointer shadow-sm active:scale-95 shrink-0"
+            title="Extract All Chapter Text (No Translation)"
           >
-            <Copy className="w-3.5 h-3.5" />
-            <span>{isScanningActive && scanProgressText ? scanProgressText : 'Scan All'}</span>
+            <FileText className="w-3.5 h-3.5 text-zinc-300" />
+            <span>Extract All</span>
           </button>
 
           <button
@@ -581,18 +779,36 @@ export const Workbench: React.FC<WorkbenchProps> = ({
             }`}
             title="Review Entire Chapter"
           >
-            <Check className="w-3.5 h-3.5" />
-            <span>{isReviewingChapter ? 'Reviewing...' : 'Review All'}</span>
+            {isReviewingChapter ? (
+              <svg className="w-3.5 h-3.5 animate-spin text-black" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+              </svg>
+            ) : (
+              <Search className="w-3.5 h-3.5" />
+            )}
+            <span>Review All</span>
           </button>
 
           <button
             type="button"
-            onClick={handleExtractAll}
-            className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-[#121317] border border-white/[0.08] hover:bg-[#181920] hover:border-white/[0.16] text-xs font-medium text-zinc-200 transition-all cursor-pointer shadow-sm active:scale-95 shrink-0"
-            title="Extract All Chapter Text (No Translation)"
+            onClick={handleScanAll}
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-medium transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
+              isScanningActive
+                ? 'bg-blue-400 text-white animate-pulse'
+                : 'bg-blue-600 hover:bg-blue-500 text-white'
+            }`}
+            title="Batch Scan Entire Chapter"
           >
-            <span className="border border-zinc-400 px-1 py-0.2 rounded text-[10px] font-bold leading-none">A</span>
-            <span>Extract All</span>
+            {isScanningActive ? (
+              <svg className="w-3.5 h-3.5 animate-spin text-white" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+              </svg>
+            ) : (
+              <Sparkles className="w-3.5 h-3.5" />
+            )}
+            <span>{isScanningActive && scanProgressText ? scanProgressText : 'Scan All'}</span>
           </button>
         </div>
       </div>
@@ -607,8 +823,18 @@ export const Workbench: React.FC<WorkbenchProps> = ({
             pageFileName={pages[currentPageIndex]?.fileName}
             bubbles={currentBubbles}
             selectedBubbleId={selectedBubbleId}
+            focusTarget={focusTarget}
             isDrawBoxActive={isDrawBoxActive}
             zoomLevel={zoomLevel}
+            showBoxes={showBoxes}
+            isFlipPageActive={isFlipPageActive}
+            hasPrevPage={hasPrevPage}
+            hasNextPage={hasNextPage}
+            onPrevPage={handlePrevPage}
+            onNextPage={handleNextPage}
+            onZoomChange={setZoomLevel}
+            onResetZoom={handleResetZoom}
+            resetViewTrigger={canvasViewResetKey}
             onSelectBubble={setSelectedBubbleId}
             onAddManualBubbleWithCoords={handleAddManualBubbleWithCoords}
             onIngestDroppedFiles={handleIngestDroppedOnCanvas}
@@ -622,6 +848,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
             selectedBubbleId={selectedBubbleId}
             feedFilter={feedFilter}
             onSelectBubble={setSelectedBubbleId}
+            onFocusBubble={handleFocusBubble}
             onUpdateBubble={(bubbleId, patch) => {
               if (effectivePageId) {
                 updateBubble(effectivePageId, bubbleId, patch);
@@ -632,6 +859,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
                 deleteBubble(effectivePageId, bubbleId);
               }
             }}
+            onTranslateBubble={handleTranslateBubble}
             onAcceptFlag={(bubbleId, flagId) => {
               if (effectivePageId) {
                 acceptFlag(effectivePageId, bubbleId, flagId);

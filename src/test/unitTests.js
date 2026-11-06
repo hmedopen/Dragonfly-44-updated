@@ -63,7 +63,7 @@ function humanizeArabicText(text) {
 
 // 3. Photoshop TypeR Script Compiler
 function compileTypeRScript(options) {
-  const { chapterName, pages, includePageHeaders, includeIndexTags, includePrefixTags, includeSourceComments } = options;
+  const { chapterName, pages, includePageHeaders, includeIndexTags, includePrefixTags, prefixPosition = 'right', includeSourceComments } = options;
   const lines = [];
   lines.push('// ==========================================');
   lines.push(`// TYPER TRANSLATION SCRIPT // ${chapterName.toUpperCase()}`);
@@ -78,9 +78,15 @@ function compileTypeRScript(options) {
     const sortedBubbles = [...page.bubbles].sort((a, b) => a.index - b.index);
     for (const bubble of sortedBubbles) {
       const idxStr = includeIndexTags ? `#${String(bubble.index).padStart(2, '0')} ` : '';
-      const prefixStr = includePrefixTags && bubble.typerPrefix ? `${bubble.typerPrefix} ` : '';
+      const tag = includePrefixTags && bubble.typerPrefix ? bubble.typerPrefix : '';
       const translation = bubble.translatedText || '[NO ARABIC TRANSLATION YET]';
-      lines.push(`${idxStr}${prefixStr}${translation}`);
+      if (prefixPosition === 'left') {
+        const prefixStr = tag ? `${tag} ` : '';
+        lines.push(`${idxStr}${prefixStr}${translation}`.trim());
+      } else {
+        const suffixStr = tag ? ` ${tag}` : '';
+        lines.push(`${idxStr}${translation}${suffixStr}`.trim());
+      }
       if (includeSourceComments && bubble.sourceText) {
         lines.push(`// Source: ${bubble.sourceText}`);
       }
@@ -126,6 +132,7 @@ function compileTypeRScript(options) {
     includePageHeaders: true,
     includeIndexTags: true,
     includePrefixTags: true,
+    prefixPosition: 'left',
     includeSourceComments: true,
   });
 
@@ -133,6 +140,17 @@ function compileTypeRScript(options) {
   assert.ok(script.includes('#01 (): مرحبا بكم'), 'Includes correct format with LTR prefix and RTL translation');
   assert.ok(script.includes('#02 {}: اهربوا!'), 'Includes scream prefix');
   assert.ok(script.includes('// Source: Hello'), 'Includes source text comment');
+
+  const scriptRight = compileTypeRScript({
+    chapterName: 'CHAPTER 01',
+    pages: mockPages,
+    includePageHeaders: true,
+    includeIndexTags: true,
+    includePrefixTags: true,
+    prefixPosition: 'right',
+    includeSourceComments: true,
+  });
+  assert.ok(scriptRight.includes('#01 مرحبا بكم ():'), 'Right position works');
 
   console.log('✓ 3. Photoshop TypeR script compiler passed: verified formatting without bracket inversion.');
 }

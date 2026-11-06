@@ -541,15 +541,16 @@ export const ChapterList: React.FC<ChapterListProps> = ({
         isOpen={!!viewingChapterId}
         onClose={() => setViewingChapterId(null)}
         title={viewingChapter ? `Pages in ${viewingChapter.name}` : 'Pages'}
+        maxWidth="max-w-4xl"
       >
-        <div className="space-y-4 max-h-[70vh] flex flex-col">
+        <div className="space-y-4 flex flex-col" style={{ minHeight: '60vh', maxHeight: '80vh' }}>
           <div className="flex-1 overflow-y-auto custom-scrollbar p-1">
             {displayPages.length === 0 ? (
               <div className="text-center py-12 text-zinc-500 text-sm">
                 No pages in this chapter yet.
               </div>
             ) : (
-              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3">
+              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-4">
                 {displayPages.map((page, idx) => (
                   <div
                     key={page.id}

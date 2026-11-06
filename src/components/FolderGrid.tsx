@@ -3,7 +3,6 @@ import type { Folder } from '../types';
 import { 
   Folder as FolderIcon, 
   Plus, 
-  Play, 
   Pencil, 
   Trash2, 
   FilePlus,
@@ -26,13 +25,13 @@ interface FolderGridProps {
 export const FolderGrid: React.FC<FolderGridProps> = ({
   folders,
   activeFolderId,
-  hasSelectedChapter,
+  hasSelectedChapter: _hasSelectedChapter,
   onSelectFolder,
   onAddFolder,
   onRenameFolder,
   onDeleteFolder,
   onStartDraft,
-  onStartChapter,
+  onStartChapter: _onStartChapter,
 }) => {
   // Modal states
   const [isAddOpen, setIsAddOpen] = useState(false);
@@ -77,28 +76,13 @@ export const FolderGrid: React.FC<FolderGridProps> = ({
 
   return (
     <div className="flex flex-col h-full bg-[#0a0a0d] p-6 select-none relative">
-      {/* Top Action Bar: start chapter on Left, start draft on Right */}
+      {/* Top Action Bar: start draft full-width */}
       <div className="flex items-center gap-4 mb-8">
-        {/* Left: "start chapter" (Gated on selecting a chapter) */}
-        <button
-          onClick={onStartChapter}
-          disabled={!hasSelectedChapter}
-          className={`flex-1 py-4 px-6 rounded-2xl font-medium text-base transition-all flex items-center justify-center gap-2.5 ${
-            hasSelectedChapter
-              ? 'bg-white text-zinc-950 hover:bg-zinc-100 shadow-[0_0_25px_rgba(255,255,255,0.12)] cursor-pointer active:scale-[0.99]'
-              : 'bg-zinc-900/40 text-zinc-600 border border-white/[0.04] cursor-not-allowed opacity-40'
-          }`}
-        >
-          <Play className={`w-5 h-5 ${hasSelectedChapter ? 'fill-zinc-950 stroke-zinc-950' : 'fill-zinc-600 stroke-zinc-600'}`} />
-          <span className="font-semibold tracking-tight">start chapter</span>
-        </button>
-
-        {/* Right: "start draft" (Starts draft immediately) */}
         <button
           onClick={onStartDraft}
-          className="flex-1 py-4 px-6 rounded-2xl bg-zinc-900 border border-white/[0.12] text-zinc-100 font-medium text-base hover:bg-zinc-800 hover:border-white/[0.25] active:scale-[0.99] transition-all flex items-center justify-center gap-2.5 shadow-lg group cursor-pointer"
+          className="w-full py-4 px-6 rounded-2xl bg-white text-zinc-950 font-semibold text-base hover:bg-zinc-100 active:scale-[0.99] transition-all flex items-center justify-center gap-2.5 shadow-lg cursor-pointer"
         >
-          <FilePlus className="w-5 h-5 text-zinc-400 group-hover:text-white transition-colors" />
+          <FilePlus className="w-5 h-5 text-zinc-950" />
           <span className="font-semibold tracking-tight">start draft</span>
         </button>
       </div>

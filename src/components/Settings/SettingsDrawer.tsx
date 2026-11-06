@@ -9,10 +9,15 @@ import {
   ChevronDown, 
   Check, 
   Cpu, 
-  RotateCcw
+  RotateCcw,
+  Plus,
+  Trash2,
+  Type
 } from 'lucide-react';
 import type { GeminiModelKey, EloquenceLevel } from '../../types/workbench';
 import { GEMINI_MODEL_PROFILES } from '../../types/workbench';
+import type { CustomTyperConfig, PrefixPosition, TyperSettings } from '../../types/typers';
+import { loadTyperSettings, saveTyperSettings, DEFAULT_TYPERS } from '../../types/typers';
 
 interface SettingsDrawerProps {
   isOpen: boolean;
@@ -77,6 +82,9 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({ isOpen, onClose 
     return localStorage.getItem('dragonfly44_master_prompt_active') !== 'false';
   });
 
+  // 6. Custom Typers & Prefix Settings
+  const [typerSettings, setTyperSettings] = useState<TyperSettings>(() => loadTyperSettings());
+
   // Save settings on change
   useEffect(() => {
     localStorage.setItem('dragonfly44_gemini_api_key', apiKey);
@@ -105,6 +113,63 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({ isOpen, onClose 
   useEffect(() => {
     localStorage.setItem('dragonfly44_master_prompt_active', String(isMasterPromptActive));
   }, [isMasterPromptActive]);
+
+  useEffect(() => {
+    saveTyperSettings(typerSettings);
+  }, [typerSettings]);
+
+  // Typer handlers
+  const handleToggleIncludeTyperSymbols = (checked: boolean) => {
+    setTyperSettings((prev) => ({
+      ...prev,
+      includeTyperSymbols: checked,
+    }));
+  };
+
+  const handleSetPrefixPosition = (position: PrefixPosition) => {
+    setTyperSettings((prev) => ({
+      ...prev,
+      prefixPosition: position,
+    }));
+  };
+
+  const handleUpdateTyper = (id: string, patch: Partial<CustomTyperConfig>) => {
+    setTyperSettings((prev) => ({
+      ...prev,
+      typers: prev.typers.map((t) => (t.id === id ? { ...t, ...patch } : t)),
+    }));
+  };
+
+  const handleDeleteTyper = (id: string) => {
+    setTyperSettings((prev) => ({
+      ...prev,
+      typers: prev.typers.filter((t) => t.id !== id),
+    }));
+  };
+
+  const handleAddTyper = () => {
+    const newId = `custom_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const newTyper: CustomTyperConfig = {
+      id: newId,
+      prefix: '',
+      name: 'New Custom Typer',
+      instructions: '', // Important: must start with empty instructions field
+      isDefault: false,
+    };
+    setTyperSettings((prev) => ({
+      ...prev,
+      typers: [...prev.typers, newTyper],
+    }));
+  };
+
+  const handleResetDefaultTypers = () => {
+    if (window.confirm('Reset all typers back to initial 9 manga defaults? Any custom added typers will be removed.')) {
+      setTyperSettings((prev) => ({
+        ...prev,
+        typers: DEFAULT_TYPERS,
+      }));
+    }
+  };
 
   // Close on Escape
   useEffect(() => {
@@ -446,6 +511,193 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({ isOpen, onClose 
                 <RotateCcw className="w-3 h-3" />
                 <span>[CLEAR]</span>
               </button>
+            </div>
+          </div>
+
+          {/* Section 7: Typers / Prefixes Configuration */}
+          <div className="flex flex-col gap-4 pt-4 border-t border-white/[0.08]">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Type className="w-4 h-4 text-sky-400" />
+                <span className="text-xs font-mono uppercase tracking-wider text-zinc-200 font-semibold">
+                  Typers / Prefixes Configuration
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={handleResetDefaultTypers}
+                className="flex items-center gap-1 px-2 py-1 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 border border-white/[0.08] text-[10px] font-mono transition-colors cursor-pointer"
+                title="Restore initial 9 default typers"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>Reset Defaults</span>
+              </button>
+            </div>
+
+            {/* 1. General Settings */}
+            <div className="flex flex-col gap-3 p-3.5 rounded-xl bg-[#09090c] border border-white/[0.08]">
+              {/* Include typer symbols Switch */}
+              <div className="flex items-center justify-between">
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-[11px] font-mono uppercase tracking-wider text-zinc-300 font-semibold">
+                    Include Typer Symbols
+                  </span>
+                  <span className="text-[10px] text-zinc-500">
+                    Include typer tags and prefix symbols in compiled TypeR scripts and exports
+                  </span>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={typerSettings.includeTyperSymbols}
+                    onChange={(e) => handleToggleIncludeTyperSymbols(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-10 h-5 bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-zinc-300 after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-sky-600 peer-checked:after:bg-white" />
+                </label>
+              </div>
+
+              {/* Prefix position Selector */}
+              <div className="flex items-center justify-between pt-2.5 border-t border-white/[0.04]">
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-[11px] font-mono uppercase tracking-wider text-zinc-300 font-semibold">
+                    Prefix Position
+                  </span>
+                  <span className="text-[10px] text-zinc-500">
+                    Right position matches natural Arabic RTL workflow; Left position places tag at start
+                  </span>
+                </div>
+                <div className="flex items-center gap-1 p-0.5 rounded-lg bg-zinc-900 border border-white/[0.08] text-[11px] font-mono">
+                  <button
+                    type="button"
+                    onClick={() => handleSetPrefixPosition('right')}
+                    className={`px-3 py-1 rounded transition-colors cursor-pointer ${
+                      typerSettings.prefixPosition === 'right'
+                        ? 'bg-sky-500/20 text-sky-300 font-semibold border border-sky-500/30'
+                        : 'text-zinc-400 hover:text-zinc-200'
+                    }`}
+                  >
+                    Right (Arabic)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSetPrefixPosition('left')}
+                    className={`px-3 py-1 rounded transition-colors cursor-pointer ${
+                      typerSettings.prefixPosition === 'left'
+                        ? 'bg-sky-500/20 text-sky-300 font-semibold border border-sky-500/30'
+                        : 'text-zinc-400 hover:text-zinc-200'
+                    }`}
+                  >
+                    Left
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* 2. Typers List */}
+            <div className="flex flex-col gap-2.5">
+              <div className="flex items-center justify-between px-1">
+                <span className="text-[11px] font-mono uppercase tracking-wider text-zinc-400 font-semibold">
+                  Configured Typers ({typerSettings.typers.length})
+                </span>
+                <button
+                  type="button"
+                  onClick={handleAddTyper}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/40 text-[11px] font-mono transition-colors cursor-pointer shadow-xs"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add Typer</span>
+                </button>
+              </div>
+
+              {typerSettings.typers.length === 0 ? (
+                <div className="p-4 rounded-xl bg-[#09090c] border border-dashed border-white/[0.10] text-center text-xs text-zinc-500 font-mono">
+                  No typers configured. All detected dialogue will remain untyped.
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2.5">
+                  {typerSettings.typers.map((typer) => {
+                    const hasInstructions = typer.instructions && typer.instructions.trim().length > 0;
+                    return (
+                      <div
+                        key={typer.id}
+                        className="flex flex-col gap-2 p-3 rounded-xl bg-[#09090c] border border-white/[0.08] hover:border-white/[0.14] transition-colors"
+                      >
+                        {/* Row 1: Prefix input, Name input, AI status badge, and Delete button */}
+                        <div className="flex items-center gap-2">
+                          {/* Prefix input */}
+                          <div className="flex items-center gap-1 w-24 shrink-0">
+                            <span className="text-[10px] font-mono text-zinc-500">Tag</span>
+                            <input
+                              type="text"
+                              value={typer.prefix}
+                              onChange={(e) => handleUpdateTyper(typer.id, { prefix: e.target.value })}
+                              placeholder='e.g. ""'
+                              className="w-full px-2 py-1 rounded bg-[#050508] border border-white/[0.10] text-zinc-200 font-mono text-xs focus:outline-none focus:border-sky-500/50"
+                            />
+                          </div>
+
+                          {/* Name input */}
+                          <div className="flex-1 min-w-0">
+                            <input
+                              type="text"
+                              value={typer.name}
+                              onChange={(e) => handleUpdateTyper(typer.id, { name: e.target.value })}
+                              placeholder="Typer Name"
+                              className="w-full px-2.5 py-1 rounded bg-[#050508] border border-white/[0.10] text-zinc-200 font-sans text-xs font-medium focus:outline-none focus:border-sky-500/50"
+                            />
+                          </div>
+
+                          {/* AI Eligibility Badge */}
+                          <div
+                            title={
+                              hasInstructions
+                                ? 'Eligible for automatic AI classification during scan'
+                                : 'Empty instructions: will NEVER be automatically selected by AI (manual selection only)'
+                            }
+                            className={`shrink-0 px-2 py-0.5 rounded text-[9px] font-mono font-semibold uppercase border ${
+                              hasInstructions
+                                ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+                                : 'bg-zinc-800 text-zinc-500 border-zinc-700'
+                            }`}
+                          >
+                            {hasInstructions ? 'AI Active' : 'Manual Only'}
+                          </div>
+
+                          {/* Delete button */}
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteTyper(typer.id)}
+                            className="p-1 rounded text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer shrink-0"
+                            title={`Delete "${typer.name}"`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        {/* Row 2: AI Classification Instructions Textarea */}
+                        <div className="flex flex-col gap-1">
+                          <label className="text-[10px] font-mono text-zinc-500 flex items-center justify-between">
+                            <span>AI Classification Rules</span>
+                            {!hasInstructions && (
+                              <span className="text-[9px] text-amber-400/80">
+                                (Leave empty to keep manual-only)
+                              </span>
+                            )}
+                          </label>
+                          <textarea
+                            rows={2}
+                            value={typer.instructions}
+                            onChange={(e) => handleUpdateTyper(typer.id, { instructions: e.target.value })}
+                            placeholder="Functional classification rules telling the AI how to recognize this type (bubble shape, context, vocal tone)..."
+                            className="w-full p-2 rounded bg-[#050508] border border-white/[0.08] text-zinc-300 font-sans text-xs leading-relaxed focus:outline-none focus:border-sky-500/50 resize-y custom-scrollbar"
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         </div>

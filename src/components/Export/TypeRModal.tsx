@@ -9,6 +9,7 @@ import {
   FileText
 } from 'lucide-react';
 import type { BubbleItem } from '../../types/workbench';
+import { loadTyperSettings } from '../../types/typers';
 import { compileTypeRScript, compileRawTextExtract } from '../../lib/compileTypeR';
 
 interface TypeRModalProps {
@@ -32,11 +33,15 @@ export const TypeRModal: React.FC<TypeRModalProps> = ({
   initialScope = 'entire',
   initialMode = 'raw_text',
 }) => {
+  const typerSettings = useMemo(() => loadTyperSettings(), [isOpen]);
   const [scope, setScope] = useState<'entire' | 'active'>(initialScope);
   const [exportMode, setExportMode] = useState<'raw_text' | 'typer_script'>(initialMode);
   const [includePageHeaders, setIncludePageHeaders] = useState(true);
   const [includeIndexTags, setIncludeIndexTags] = useState(true);
-  const [includePrefixTags, setIncludePrefixTags] = useState(true);
+  const [includePrefixTags, setIncludePrefixTags] = useState(typerSettings.includeTyperSymbols);
+  const [tagPlacement, setTagPlacement] = useState<'suffix' | 'prefix'>(
+    typerSettings.prefixPosition === 'left' ? 'prefix' : 'suffix'
+  );
   const [includeSourceComments, setIncludeSourceComments] = useState(true);
   const [includeFlagNotes, setIncludeFlagNotes] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
@@ -56,6 +61,8 @@ export const TypeRModal: React.FC<TypeRModalProps> = ({
         pages: targetPages,
         includePageHeaders,
         includeIndexTags,
+        includePrefixTags,
+        tagPlacement,
       });
     }
 
@@ -65,6 +72,7 @@ export const TypeRModal: React.FC<TypeRModalProps> = ({
       includePageHeaders,
       includeIndexTags,
       includePrefixTags,
+      prefixPosition: tagPlacement === 'prefix' ? 'left' : 'right',
       includeSourceComments,
       includeFlagNotes,
     });
@@ -75,6 +83,7 @@ export const TypeRModal: React.FC<TypeRModalProps> = ({
     includePageHeaders,
     includeIndexTags,
     includePrefixTags,
+    tagPlacement,
     includeSourceComments,
     includeFlagNotes,
   ]);
@@ -221,18 +230,48 @@ export const TypeRModal: React.FC<TypeRModalProps> = ({
                 <span>Bubble Index (#01)</span>
               </label>
 
+              <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={includePrefixTags}
+                  onChange={(e) => setIncludePrefixTags(e.target.checked)}
+                  className="rounded border-zinc-700 bg-zinc-900 text-sky-500 focus:ring-0"
+                />
+                <span>TypeR Tags (():, {}:)</span>
+              </label>
+
+              {exportMode === 'raw_text' && includePrefixTags && (
+                <div className="flex flex-col gap-1 pl-5">
+                  <span className="text-[9px] font-mono uppercase text-zinc-500">Tag Placement</span>
+                  <div className="grid grid-cols-2 p-0.5 rounded bg-zinc-900 border border-white/[0.06] text-[10px]">
+                    <button
+                      type="button"
+                      onClick={() => setTagPlacement('suffix')}
+                      className={`py-0.5 rounded cursor-pointer transition-colors ${
+                        tagPlacement === 'suffix'
+                          ? 'bg-sky-500/20 text-sky-300 font-semibold'
+                          : 'text-zinc-500 hover:text-zinc-300'
+                      }`}
+                    >
+                      Suffix (End)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTagPlacement('prefix')}
+                      className={`py-0.5 rounded cursor-pointer transition-colors ${
+                        tagPlacement === 'prefix'
+                          ? 'bg-sky-500/20 text-sky-300 font-semibold'
+                          : 'text-zinc-500 hover:text-zinc-300'
+                      }`}
+                    >
+                      Prefix (Start)
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {exportMode === 'typer_script' && (
                 <>
-                  <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={includePrefixTags}
-                      onChange={(e) => setIncludePrefixTags(e.target.checked)}
-                      className="rounded border-zinc-700 bg-zinc-900 text-sky-500 focus:ring-0"
-                    />
-                    <span>TypeR Tags (():, {}:)</span>
-                  </label>
-
                   <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
                     <input
                       type="checkbox"

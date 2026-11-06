@@ -30,3 +30,4 @@ export interface Folder {
 export type SortMode = 'alphabetical-asc' | 'alphabetical-desc' | 'newest' | 'oldest' | 'pages-desc' | 'pages-asc';
 
 export * from './types/workbench';
+export * from './types/typers';

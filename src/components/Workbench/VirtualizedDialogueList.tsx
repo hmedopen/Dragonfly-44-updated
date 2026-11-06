@@ -6,8 +6,10 @@ interface VirtualizedDialogueListProps {
   bubbles: BubbleItem[];
   selectedBubbleId: string | null;
   onSelectBubble: (bubbleId: string) => void;
+  onFocusBubble?: (bubble: BubbleItem) => void;
   onUpdateBubble: (bubbleId: string, patch: Partial<BubbleItem>) => void;
   onDeleteBubble: (bubbleId: string) => void;
+  onTranslateBubble?: (bubbleId: string) => Promise<void>;
   onAcceptFlag: (bubbleId: string, flagId: string) => void;
   onDismissFlag: (bubbleId: string, flagId: string) => void;
   onRevertSource: (bubbleId: string) => void;
@@ -21,8 +23,10 @@ export const VirtualizedDialogueList: React.FC<VirtualizedDialogueListProps> = (
   bubbles,
   selectedBubbleId,
   onSelectBubble,
+  onFocusBubble,
   onUpdateBubble,
   onDeleteBubble,
+  onTranslateBubble,
   onAcceptFlag,
   onDismissFlag,
   onRevertSource,
@@ -72,8 +76,10 @@ export const VirtualizedDialogueList: React.FC<VirtualizedDialogueListProps> = (
             index={index}
             isSelected={selectedBubbleId === bubble.id}
             onSelect={onSelectBubble}
+            onFocusBubble={onFocusBubble}
             onUpdate={onUpdateBubble}
             onDelete={onDeleteBubble}
+            onTranslate={onTranslateBubble}
             onAcceptFlag={(flagId) => onAcceptFlag(bubble.id, flagId)}
             onDismissFlag={(flagId) => onDismissFlag(bubble.id, flagId)}
             onRevertSource={() => onRevertSource(bubble.id)}

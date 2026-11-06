@@ -69,10 +69,7 @@ export function App() {
     return initialFolders;
   });
 
-  const [activeFolderId, setActiveFolderId] = useState<string | null>(() => {
-    const firstProject = folders.find((f) => !f.isSystem && !f.isDraft);
-    return firstProject?.id || folders[0]?.id || null;
-  });
+  const [activeFolderId, setActiveFolderId] = useState<string | null>(null);
 
   const [selectedChapterId, setSelectedChapterId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -439,6 +436,11 @@ export function App() {
         folder={activeChapterFolder}
         chapter={activeChapter}
         onBack={returnToHub}
+        onDeletePage={(pageId) => {
+          if (effectiveChapterId) {
+            handleDeletePageFromChapter(effectiveChapterId, pageId);
+          }
+        }}
         onAppendPages={(newPages) => {
           if (!activeChapterFolder || !effectiveChapterId) return;
           setFolders((prev) =>

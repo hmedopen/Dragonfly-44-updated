@@ -1,4 +1,5 @@
 import type { BubbleItem } from '../types/workbench';
+import type { PrefixPosition } from '../types/typers';
 
 export interface TypeRCompileOptions {
   chapterName: string;
@@ -6,6 +7,7 @@ export interface TypeRCompileOptions {
   includePageHeaders: boolean;
   includeIndexTags: boolean;
   includePrefixTags: boolean;
+  prefixPosition?: PrefixPosition;
   includeSourceComments: boolean;
   includeFlagNotes: boolean;
 }
@@ -15,10 +17,14 @@ export interface RawTextExtractOptions {
   pages: { pageIndex: number; bubbles: BubbleItem[] }[];
   includePageHeaders: boolean;
   includeIndexTags: boolean;
+  includePrefixTags?: boolean;
+  prefixPosition?: PrefixPosition;
+  tagPlacement?: 'suffix' | 'prefix';
 }
 
 /**
- * Extracts raw source dialogue text across pages without translation.
+ * Extracts raw source dialogue text across pages without translation,
+ * with optional TypeR tags (defaults to right/suffix format for Arabic-first workflow).
  */
 export function compileRawTextExtract(options: RawTextExtractOptions): string {
   const {
@@ -26,7 +32,13 @@ export function compileRawTextExtract(options: RawTextExtractOptions): string {
     pages,
     includePageHeaders = true,
     includeIndexTags = true,
+    includePrefixTags = true,
+    prefixPosition,
+    tagPlacement = 'suffix',
   } = options;
+
+  // Determine effective placement: if prefixPosition is specified, 'right' maps to suffix and 'left' maps to prefix
+  const effectivePlacement = prefixPosition ? (prefixPosition === 'left' ? 'prefix' : 'suffix') : tagPlacement;
 
   const lines: string[] = [];
 
@@ -46,9 +58,16 @@ export function compileRawTextExtract(options: RawTextExtractOptions): string {
 
     for (const bubble of sortedBubbles) {
       const idxStr = includeIndexTags ? `#${String(bubble.index).padStart(2, '0')} ` : '';
+      const tag = includePrefixTags && bubble.typerPrefix ? bubble.typerPrefix : '';
       const source = bubble.sourceText ? bubble.sourceText.trim() : '';
-      if (source) {
-        lines.push(`${idxStr}${source}`);
+
+      if (effectivePlacement === 'prefix') {
+        const prefixStr = tag ? `${tag} ` : '';
+        lines.push(`${idxStr}${prefixStr}${source}`.trim());
+      } else {
+        // Right / Suffix format
+        const suffixStr = tag ? ` ${tag}` : '';
+        lines.push(`${idxStr}${source}${suffixStr}`.trim());
       }
     }
 
@@ -60,7 +79,7 @@ export function compileRawTextExtract(options: RawTextExtractOptions): string {
 
 /**
  * Compiles dialogue bubbles across pages into Photoshop TypeR standard script format.
- * Preserves LTR prefix tags and RTL Arabic translations without bracket direction inversion.
+ * Respects includePrefixTags and prefixPosition (right vs left).
  */
 export function compileTypeRScript(options: TypeRCompileOptions): string {
   const {
@@ -69,6 +88,7 @@ export function compileTypeRScript(options: TypeRCompileOptions): string {
     includePageHeaders = true,
     includeIndexTags = true,
     includePrefixTags = true,
+    prefixPosition = 'right',
     includeSourceComments = true,
     includeFlagNotes = false,
   } = options;
@@ -92,11 +112,17 @@ export function compileTypeRScript(options: TypeRCompileOptions): string {
 
     for (const bubble of sortedBubbles) {
       const idxStr = includeIndexTags ? `#${String(bubble.index).padStart(2, '0')} ` : '';
-      const prefixStr = includePrefixTags && bubble.typerPrefix ? `${bubble.typerPrefix} ` : '';
+      const tag = includePrefixTags && bubble.typerPrefix ? bubble.typerPrefix : '';
       const translation = bubble.translatedText || '[NO ARABIC TRANSLATION YET]';
 
-      // Output line: isolated prefix + translation
-      lines.push(`${idxStr}${prefixStr}${translation}`);
+      if (prefixPosition === 'left') {
+        const prefixStr = tag ? `${tag} ` : '';
+        lines.push(`${idxStr}${prefixStr}${translation}`.trim());
+      } else {
+        // Right position: placed after Arabic text for seamless RTL flow
+        const suffixStr = tag ? ` ${tag}` : '';
+        lines.push(`${idxStr}${translation}${suffixStr}`.trim());
+      }
 
       if (includeSourceComments && bubble.sourceText) {
         lines.push(`// Source: ${bubble.sourceText}`);

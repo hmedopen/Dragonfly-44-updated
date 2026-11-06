@@ -13,18 +13,16 @@ export function sortFilesNaturally(files: File[]): File[] {
 }
 
 /**
- * Format a draft name based on creation time.
- * Example: 31/10/2026_7:48 pm
+ * Format a draft name based on creation time in 24-hour format.
+ * Example: 31/10/2026_19:48
  */
 export function formatDraftName(date: Date = new Date()): string {
   const day = String(date.getDate()).padStart(2, '0');
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const year = date.getFullYear();
-  let hours = date.getHours();
+  const hours = String(date.getHours()).padStart(2, '0');
   const minutes = String(date.getMinutes()).padStart(2, '0');
-  const ampm = hours >= 12 ? 'pm' : 'am';
-  hours = hours % 12 || 12;
-  return `${day}/${month}/${year}_${hours}:${minutes} ${ampm}`;
+  return `${day}/${month}/${year}_${hours}:${minutes}`;
 }
 
 /**

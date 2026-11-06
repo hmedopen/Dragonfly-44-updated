@@ -1,26 +1,29 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
-import type { BubbleItem, BubbleType } from '../../types/workbench';
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
+import type { BubbleItem } from '../../types/workbench';
 import { BUBBLE_TYPE_CONFIG, REVIEW_CATEGORY_LABELS } from '../../types/workbench';
+import { loadTyperSettings } from '../../types/typers';
 import { focusRegistry } from '../../lib/focusRegistry';
 import { 
   Eye, 
   Trash2, 
-  Copy,
   GripVertical, 
   ChevronDown, 
   ChevronUp,
   Check, 
   X, 
   RotateCcw,
-  HelpCircle
+  HelpCircle,
+  Languages
 } from 'lucide-react';
 
 interface DialogueCardProps {
   bubble: BubbleItem;
   isSelected: boolean;
   onSelect: (bubbleId: string) => void;
+  onFocusBubble?: (bubble: BubbleItem) => void;
   onUpdate: (bubbleId: string, patch: Partial<BubbleItem>) => void;
   onDelete: (bubbleId: string) => void;
+  onTranslate?: (bubbleId: string) => Promise<void>;
   onAcceptFlag?: (flagId: string) => void;
   onDismissFlag?: (flagId: string) => void;
   onRevertSource?: () => void;
@@ -42,8 +45,10 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
   bubble,
   isSelected,
   onSelect,
+  onFocusBubble,
   onUpdate,
   onDelete,
+  onTranslate,
   onAcceptFlag,
   onDismissFlag,
   onRevertSource,
@@ -57,11 +62,26 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
   const sourceTextareaRef = useRef<HTMLTextAreaElement>(null);
   const translationTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [isTypeDropdownOpen, setIsTypeDropdownOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [isTranslating, setIsTranslating] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
-  const [expandedFlagId, setExpandedFlagId] = useState<string | null>(() => {
-    return bubble.reviewFlags?.[0]?.id || null;
-  });
+
+  // Review flags expansion: OPEN by default when flags appear, only closes on click
+  const [selectedFlagId, setSelectedFlagId] = useState<string | null>(null);
+  const [closedFlagIds, setClosedFlagIds] = useState<Record<string, boolean>>({});
+
+  const flags = bubble.reviewFlags || [];
+  const hasFlags = flags.length > 0;
+
+  const effectiveExpandedFlagId = useMemo(() => {
+    if (!flags || flags.length === 0) return null;
+    const candidateId = selectedFlagId && flags.some((f) => f.id === selectedFlagId)
+      ? selectedFlagId
+      : flags[0].id;
+    if (closedFlagIds[candidateId]) {
+      return null;
+    }
+    return candidateId;
+  }, [flags, selectedFlagId, closedFlagIds]);
 
   // Auto-resize source textarea when value changes
   useEffect(() => {
@@ -72,6 +92,17 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
   useEffect(() => {
     autoResize(translationTextareaRef.current);
   }, [bubble.translatedText]);
+
+  // Listen to typer settings updates dynamically
+  const [typerSettings, setTyperSettings] = useState(() => loadTyperSettings());
+
+  useEffect(() => {
+    const handleSettingsUpdate = () => {
+      setTyperSettings(loadTyperSettings());
+    };
+    window.addEventListener('dragonfly44_typer_settings_updated', handleSettingsUpdate);
+    return () => window.removeEventListener('dragonfly44_typer_settings_updated', handleSettingsUpdate);
+  }, []);
 
   // Close type dropdown on outside click
   useEffect(() => {
@@ -87,9 +118,26 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
   }, [isTypeDropdownOpen]);
 
   const paddedIndex = String(bubble.index).padStart(2, '0');
-  const currentConfig = BUBBLE_TYPE_CONFIG[bubble.type] || BUBBLE_TYPE_CONFIG.dialogue;
-  const flags = bubble.reviewFlags || [];
-  const hasFlags = flags.length > 0;
+
+  // Find active typer configuration from settings
+  const currentTyper = useMemo(() => {
+    if (!bubble.type || bubble.type === 'none') return null;
+    return typerSettings.typers.find((t) => t.id === bubble.type) || null;
+  }, [bubble.type, typerSettings]);
+
+  const currentLabel = useMemo(() => {
+    if (currentTyper) return currentTyper.name;
+    if (bubble.type === 'none' || !bubble.type) return 'None';
+    // Fallback to legacy config if present
+    const legacy = BUBBLE_TYPE_CONFIG[bubble.type as keyof typeof BUBBLE_TYPE_CONFIG];
+    return legacy ? legacy.label : bubble.type;
+  }, [currentTyper, bubble.type]);
+
+  const currentPrefixDisplay = useMemo(() => {
+    if (currentTyper) return currentTyper.prefix;
+    if (bubble.type === 'none' || !bubble.type) return '';
+    return bubble.typerPrefix || '';
+  }, [currentTyper, bubble.type, bubble.typerPrefix]);
 
   const canRevertSource = Boolean(
     bubble.originalSourceText && bubble.sourceText !== bubble.originalSourceText
@@ -98,27 +146,35 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
     bubble.rawTranslatedText && bubble.translatedText !== bubble.rawTranslatedText
   );
 
-  const handleTypeSelect = (typeKey: BubbleType) => {
-    const config = BUBBLE_TYPE_CONFIG[typeKey];
+  const handleTypeSelect = (typeKey: string, prefix: string) => {
     onUpdate(bubble.id, {
       type: typeKey,
-      typerPrefix: config.prefix,
+      typerPrefix: prefix,
     });
     setIsTypeDropdownOpen(false);
   };
 
-  const handleCopy = (e: React.MouseEvent) => {
+  const handleTranslate = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    const textToCopy = bubble.translatedText || bubble.sourceText;
-    if (textToCopy) {
-      navigator.clipboard?.writeText(textToCopy);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+    if (isTranslating || !onTranslate) return;
+    setIsTranslating(true);
+    try {
+      await onTranslate(bubble.id);
+    } catch (err: any) {
+      alert(`Translation error: ${err?.message || 'Failed to translate bubble'}`);
+    } finally {
+      setIsTranslating(false);
     }
   };
 
   const toggleFlagExpanded = (flagId: string) => {
-    setExpandedFlagId((prev) => (prev === flagId ? null : flagId));
+    if (effectiveExpandedFlagId === flagId) {
+      setClosedFlagIds((prev) => ({ ...prev, [flagId]: true }));
+      setSelectedFlagId(null);
+    } else {
+      setClosedFlagIds((prev) => ({ ...prev, [flagId]: false }));
+      setSelectedFlagId(flagId);
+    }
   };
 
   const handleSourceInput = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -168,7 +224,7 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
             </span>
           </div>
 
-          {/* Bubble Type Dropdown Pill (e.g. Box ▾) */}
+          {/* Bubble Type Dropdown Pill */}
           <div className="relative" ref={dropdownRef}>
             <button
               type="button"
@@ -179,23 +235,45 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
               className="flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-[#181920] hover:bg-[#20222a] text-zinc-300 border border-white/5 text-xs transition-colors cursor-pointer"
             >
               <span className="font-medium">
-                {bubble.type === 'dialogue' ? 'Box' : currentConfig.label}
+                {currentLabel}
               </span>
+              {currentPrefixDisplay && (
+                <span className="text-[10px] text-zinc-500 font-mono">
+                  {currentPrefixDisplay}
+                </span>
+              )}
               <ChevronDown className="w-3 h-3 text-zinc-400" />
             </button>
 
             {isTypeDropdownOpen && (
-              <div className="absolute left-0 top-full mt-1.5 w-40 rounded-xl bg-[#181920] border border-white/[0.12] shadow-2xl z-50 py-1.5 overflow-hidden animate-in fade-in zoom-in-95 duration-100">
-                {(Object.keys(BUBBLE_TYPE_CONFIG) as BubbleType[]).map((key) => {
-                  const item = BUBBLE_TYPE_CONFIG[key];
-                  const isCurrent = bubble.type === key;
+              <div className="absolute left-0 top-full mt-1.5 w-52 max-h-64 overflow-y-auto rounded-xl bg-[#181920] border border-white/[0.12] shadow-2xl z-50 py-1.5 custom-scrollbar animate-in fade-in zoom-in-95 duration-100">
+                {/* Option: None */}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleTypeSelect('none', '');
+                  }}
+                  className={`w-full px-3 py-1.5 text-left text-xs font-sans flex items-center justify-between transition-colors cursor-pointer ${
+                    bubble.type === 'none' || !bubble.type
+                      ? 'bg-sky-500/20 text-sky-300 font-semibold'
+                      : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'
+                  }`}
+                >
+                  <span>None</span>
+                  <span className="text-[10px] text-zinc-500 font-mono">Untyped</span>
+                </button>
+
+                {/* All dynamically configured typers from settings */}
+                {typerSettings.typers.map((typer) => {
+                  const isCurrent = bubble.type === typer.id;
                   return (
                     <button
-                      key={key}
+                      key={typer.id}
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        handleTypeSelect(key);
+                        handleTypeSelect(typer.id, typer.prefix);
                       }}
                       className={`w-full px-3 py-1.5 text-left text-xs font-sans flex items-center justify-between transition-colors cursor-pointer ${
                         isCurrent
@@ -203,8 +281,10 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
                           : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'
                       }`}
                     >
-                      <span>{key === 'dialogue' ? 'Box' : item.label}</span>
-                      <span className="text-[10px] text-zinc-500">{item.sample}</span>
+                      <span className="truncate pr-2">{typer.name}</span>
+                      <span className="text-[10px] font-mono text-zinc-400 shrink-0">
+                        {typer.prefix || '""'}
+                      </span>
                     </button>
                   );
                 })}
@@ -220,29 +300,45 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
           )}
         </div>
 
-        {/* Right: Camera Focus Button [👁], Copy Button [📋], Delete Button [🗑] */}
+        {/* Right: Translate Button [Languages], Camera Focus & Zoom Button [👁], Delete Button [🗑] */}
         <div className="flex items-center gap-2.5 text-zinc-400">
-          {/* Camera Focus Button [👁] */}
+          {/* Translate Single Bubble Button */}
+          <button
+            type="button"
+            onClick={handleTranslate}
+            disabled={isTranslating}
+            title="Translate this bubble only into Arabic"
+            className={`transition-colors cursor-pointer p-0.5 ${
+              isTranslating 
+                ? 'text-sky-400 animate-pulse' 
+                : 'text-zinc-400 hover:text-sky-400'
+            }`}
+          >
+            {isTranslating ? (
+              <svg className="w-4 h-4 animate-spin text-sky-400" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+              </svg>
+            ) : (
+              <Languages className="w-4 h-4" />
+            )}
+          </button>
+
+          {/* Camera Focus & Zoom Button [👁] */}
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              onSelect(bubble.id);
+              if (onFocusBubble) {
+                onFocusBubble(bubble);
+              } else {
+                onSelect(bubble.id);
+              }
             }}
-            title="Focus camera on canvas box"
+            title="Focus page and zoom on canvas bubble"
             className="hover:text-white transition-colors cursor-pointer p-0.5"
           >
             <Eye className="w-4 h-4" />
-          </button>
-
-          {/* Copy Button [📋] */}
-          <button
-            type="button"
-            onClick={handleCopy}
-            title={copied ? "Copied!" : "Copy dialogue text"}
-            className="hover:text-white transition-colors cursor-pointer p-0.5"
-          >
-            {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
           </button>
 
           {/* Delete Button [🗑] */}
@@ -343,7 +439,7 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
             {/* Flag Pills row — Accept/Dismiss sit inline on the same line */}
             <div className="flex flex-wrap items-center gap-1.5">
               {flags.map((flag) => {
-                const isExpanded = expandedFlagId === flag.id;
+                const isExpanded = effectiveExpandedFlagId === flag.id;
                 const label = REVIEW_CATEGORY_LABELS[flag.category] || `[? ${flag.category.toUpperCase()}]`;
                 const currentFlag = flags.find((f) => f.id === flag.id)!;
 
@@ -404,8 +500,8 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
             </div>
 
             {/* Expanded Flag Detail — reason plain, suggested fix in translation-style box */}
-            {expandedFlagId && (() => {
-              const currentFlag = flags.find((f) => f.id === expandedFlagId);
+            {effectiveExpandedFlagId && (() => {
+              const currentFlag = flags.find((f) => f.id === effectiveExpandedFlagId);
               if (!currentFlag) return null;
 
               return (

@@ -1,6 +1,6 @@
-export type BubbleType = 'dialogue' | 'scream' | 'box' | 'thought' | 'in_art' | 'sfx' | 'none';
+export type BubbleType = string;
 
-export type TyperPrefix = '():' | '{}:' | '[]:' | '<>:' | '#:' | '';
+export type TyperPrefix = string;
 
 export type ReviewFlagCategory =
   | 'missed_bubble'

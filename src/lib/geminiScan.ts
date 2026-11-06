@@ -1,6 +1,6 @@
 import { getPageBlob, getProjectLore, saveProjectLore } from '../services/db';
 import type { BubbleItem, GeminiModelKey, EloquenceLevel, TermLore, CharacterLore } from '../types/workbench';
-import { BUBBLE_TYPE_CONFIG } from '../types/workbench';
+import { loadTyperSettings } from '../types/typers';
 import { buildScanSystemInstruction } from './promptBuilder';
 import { humanizeArabicText } from './arabicHumanizer';
 
@@ -70,13 +70,17 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
   // 3. Fetch project lore if working in a Project (bypassed for Drafts)
   const projectLore = !isDraft && projectId ? await getProjectLore(projectId) : null;
 
-  // 4. Assemble system prompt
+  // 4. Fetch current configured typers
+  const typerSettings = loadTyperSettings();
+
+  // 5. Assemble system prompt
   const systemInstruction = buildScanSystemInstruction({
     eloquenceLevel,
     includeSFX,
     projectLore,
     masterPromptOverride,
     isMasterPromptActive,
+    typers: typerSettings.typers,
   });
 
   const effectiveModel = selectedModel || 'gemini-3.1-flash-lite';
@@ -149,19 +153,51 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
     : [];
 
   // Map into BubbleItem schema with Humanizer post-processing
+  // Map against active configured typers with non-empty instructions
+  const eligibleTypersMap = new Map(
+    typerSettings.typers
+      .filter((t) => t.instructions && t.instructions.trim().length > 0)
+      .map((t) => [t.id, t])
+  );
+
   const bubbles: BubbleItem[] = rawBubbles.map((item: any, idx: number) => {
     const rawArabic = item.translatedText || '';
     const humanizedArabic = humanizeArabicText(rawArabic);
-    const bubbleType = (item.type || 'dialogue').toLowerCase();
-    const config = BUBBLE_TYPE_CONFIG[bubbleType as keyof typeof BUBBLE_TYPE_CONFIG] || BUBBLE_TYPE_CONFIG.dialogue;
+    
+    // Check if the AI returned a valid configured typer ID
+    let finalType = 'none';
+    let finalPrefix = '';
+
+    const returnedType = typeof item.type === 'string' ? item.type.trim() : '';
+    if (eligibleTypersMap.has(returnedType)) {
+      const matched = eligibleTypersMap.get(returnedType)!;
+      finalType = matched.id;
+      finalPrefix = matched.prefix;
+    } else {
+      // Also try matching by name or by prefix if AI output slightly varied
+      const matchedByNameOrPrefix = Array.from(eligibleTypersMap.values()).find(
+        (t) =>
+          t.name.toLowerCase() === returnedType.toLowerCase() ||
+          t.id.toLowerCase() === returnedType.toLowerCase() ||
+          (t.prefix && item.typerPrefix && t.prefix.trim() === String(item.typerPrefix).trim())
+      );
+      if (matchedByNameOrPrefix) {
+        finalType = matchedByNameOrPrefix.id;
+        finalPrefix = matchedByNameOrPrefix.prefix;
+      } else {
+        // Untyped / none
+        finalType = 'none';
+        finalPrefix = '';
+      }
+    }
 
     return {
       id: `b-${Date.now()}-${idx + 1}-${Math.random().toString(36).substring(2, 6)}`,
       pageId,
       index: idx + 1,
       box_2d: Array.isArray(item.box_2d) && item.box_2d.length === 4 ? item.box_2d : [200, 200, 400, 400],
-      type: bubbleType,
-      typerPrefix: item.typerPrefix || config.prefix,
+      type: finalType,
+      typerPrefix: finalPrefix,
       sourceLanguage: item.sourceLanguage || 'ja',
       sourceText: item.sourceText || '',
       originalSourceText: item.sourceText || '',
@@ -226,5 +262,178 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
     bubbles,
     pageContext: parsed.pageContext || '',
     detectedGlossaryTerms,
+  };
+}
+
+export interface TranslateSingleBubbleOptions {
+  pageId: string;
+  bubble: BubbleItem;
+  surroundingBubbles?: BubbleItem[];
+  projectId?: string | null;
+  isDraft?: boolean;
+  apiKey: string;
+  selectedModel: GeminiModelKey | string;
+  eloquenceLevel: EloquenceLevel;
+  masterPromptOverride?: string;
+  isMasterPromptActive?: boolean;
+}
+
+export interface SingleBubbleTranslationResult {
+  sourceText?: string;
+  translatedText: string;
+}
+
+/**
+ * Translates a single bubble into Arabic using Gemini.
+ * If sourceText is present, performs lightweight fast text translation.
+ * If sourceText is empty and a page image is present, performs vision OCR + translation on the bubble area.
+ */
+export async function translateSingleBubbleWithGemini(
+  options: TranslateSingleBubbleOptions
+): Promise<SingleBubbleTranslationResult> {
+  const {
+    pageId,
+    bubble,
+    surroundingBubbles = [],
+    projectId,
+    isDraft = false,
+    apiKey,
+    selectedModel,
+    eloquenceLevel,
+    masterPromptOverride,
+    isMasterPromptActive,
+  } = options;
+
+  if (!apiKey || apiKey.trim().length === 0) {
+    throw new Error('Gemini API key is required. Please set it in Hardware Settings (Ctrl+,).');
+  }
+
+  const projectLore = !isDraft && projectId ? await getProjectLore(projectId) : null;
+  const systemInstruction = buildScanSystemInstruction({
+    eloquenceLevel,
+    includeSFX: true,
+    projectLore,
+    masterPromptOverride,
+    isMasterPromptActive,
+  });
+
+  const effectiveModel = selectedModel || 'gemini-3.1-flash-lite';
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${effectiveModel}:generateContent?key=${apiKey}`;
+
+  // Assemble contextual dialogue history from other page bubbles (if present)
+  let pageContextText = '';
+  if (surroundingBubbles && surroundingBubbles.length > 0) {
+    const contextualLines = surroundingBubbles
+      .filter((b) => b.id !== bubble.id && (b.translatedText || b.sourceText))
+      .sort((a, b) => a.index - b.index)
+      .map(
+        (b) =>
+          `#${String(b.index).padStart(2, '0')} [${b.type}]: Source: "${b.sourceText || ''}" -> Arabic: "${b.translatedText || ''}"`
+      )
+      .join('\n');
+    if (contextualLines.trim().length > 0) {
+      pageContextText = `\n\nPage Context / Surrounding Dialogues:\n${contextualLines}`;
+    }
+  }
+
+  // Assemble audit / review feedback if previous review left flags
+  let reviewFlagsText = '';
+  if (bubble.reviewFlags && bubble.reviewFlags.length > 0) {
+    const flagNotes = bubble.reviewFlags
+      .map(
+        (f) =>
+          `- [${f.category}]: Reason: ${f.reasonAr}${f.suggestedTextAr ? ` | Suggested fix: "${f.suggestedTextAr}"` : ''}`
+      )
+      .join('\n');
+    reviewFlagsText = `\n\nPrevious QC/Review Audit Notes for this bubble:\n${flagNotes}\nPlease address these QC notes in the translation.`;
+  }
+
+  const hasSource = Boolean(bubble.sourceText && bubble.sourceText.trim().length > 0);
+  let userParts: any[] = [];
+
+  if (hasSource) {
+    userParts = [
+      {
+        text: `Translate this single comic dialogue into natural Arabic scanlation format.\nBubble Index: #${String(bubble.index).padStart(2, '0')}\nBubble Type: ${bubble.type} (${bubble.typerPrefix || ''})\nSource Dialogue: "${bubble.sourceText.trim()}"${pageContextText}${reviewFlagsText}\n\nReturn strictly valid JSON:\n{\n  "translatedText": "Humanized Arabic translation"\n}`,
+      },
+    ];
+  } else {
+    // If no source text, try vision extraction from page image blob
+    const blob = await getPageBlob(pageId);
+    if (!blob) {
+      throw new Error('No source dialogue text entered and scan page image not available.');
+    }
+    const mimeType = blob.type || 'image/png';
+    const base64Data = await blobToBase64(blob);
+
+    userParts = [
+      {
+        text: `Look at the comic dialogue bubble at normalized box [ymin, xmin, ymax, xmax] = [${bubble.box_2d.join(', ')}] on 0-1000 scale.\nTranscribe its original dialogue as sourceText, and translate it into high-eloquence Arabic as translatedText.${pageContextText}${reviewFlagsText}\n\nReturn strictly valid JSON:\n{\n  "sourceText": "Original text",\n  "translatedText": "Humanized Arabic translation"\n}`,
+      },
+      {
+        inline_data: {
+          mime_type: mimeType,
+          data: base64Data,
+        },
+      },
+    ];
+  }
+
+  const payload = {
+    system_instruction: {
+      parts: [{ text: systemInstruction }],
+    },
+    contents: [
+      {
+        role: 'user',
+        parts: userParts,
+      },
+    ],
+    generation_config: {
+      response_mime_type: 'application/json',
+      temperature: 0.2,
+    },
+  };
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.json().catch(() => null);
+    const errorMsg = errorBody?.error?.message || `HTTP ${response.status}: ${response.statusText}`;
+    throw new Error(errorMsg);
+  }
+
+  const result = await response.json();
+  const rawText = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+  if (!rawText) {
+    throw new Error('Gemini returned an empty response.');
+  }
+
+  let cleanJson = rawText.trim();
+  if (cleanJson.startsWith('```json')) {
+    cleanJson = cleanJson.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+  } else if (cleanJson.startsWith('```')) {
+    cleanJson = cleanJson.replace(/^```\s*/, '').replace(/\s*```$/, '');
+  }
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(cleanJson);
+  } catch (err) {
+    console.error('Failed to parse Gemini single translation JSON:', cleanJson, err);
+    throw new Error('Failed to parse structured JSON from Gemini response.');
+  }
+
+  const rawArabic = parsed.translatedText || parsed.arabic || '';
+  const humanized = humanizeArabicText(rawArabic);
+
+  return {
+    sourceText: parsed.sourceText ? String(parsed.sourceText).trim() : undefined,
+    translatedText: humanized,
   };
 }

@@ -1,4 +1,5 @@
 import type { EloquenceLevel, ProjectLoreLedger } from '../types/workbench';
+import type { CustomTyperConfig } from '../types/typers';
 import { ELOQUENCE_CONFIG } from '../types/workbench';
 import { ARABIC_HUMANIZER_PROMPT_RULES } from './arabicHumanizer';
 
@@ -8,6 +9,7 @@ export interface PromptBuildOptions {
   projectLore?: ProjectLoreLedger | null;
   masterPromptOverride?: string;
   isMasterPromptActive?: boolean;
+  typers?: CustomTyperConfig[];
 }
 
 /**
@@ -51,19 +53,44 @@ VISUAL SCENE ANALYSIS & READING FLOW:
 `.trim());
 
   // 3. Bubble Shape & TypeR Classification
-  sections.push(`
-BUBBLE SHAPES & TYPER TAG CLASSIFICATION:
-- Standard speech bubble -> type: "dialogue", typerPrefix: "():"
-- Jagged / spiked / burst scream bubble -> type: "scream", typerPrefix: "{}:"
-- Square / rectangular narration box or UI caption -> type: "box", typerPrefix: "[]:"
-- Cloud / scalloped thought bubble -> type: "thought", typerPrefix: "<>:"
-- Un-bubbled vocalization, mutter, sigh, or gasp drawn on art -> type: "in_art", typerPrefix: "#:"
+  // Strictly filter to typers that have non-empty AI instructions.
+  // Typers with empty instructions must NEVER be automatically selected by the AI.
+  const eligibleTypers = (options.typers || []).filter(
+    (t) => t.instructions && t.instructions.trim().length > 0
+  );
+
+  if (eligibleTypers.length > 0) {
+    const typerRuleLines = eligibleTypers.map((t) => {
+      const pfxDisplay = t.prefix ? `"${t.prefix}"` : '(empty prefix)';
+      return `- Typer "${t.name}" [ID: "${t.id}", Prefix: ${pfxDisplay}]:
+  Functional Classification Rules: ${t.instructions.trim()}`;
+    }).join('\n\n');
+
+    sections.push(`
+MANGA TEXT & TYPER CLASSIFICATION RULES:
+You must classify every detected text unit into one of the following configured typers based on functional classification rules, visual appearance (bubble shape, border style, typography), and surrounding scene/dialogue context:
+
+${typerRuleLines}
+
+CRITICAL CLASSIFICATION CONSTRAINTS:
+1. ONLY assign an ID from the list above if the text unit legitimately matches the functional rules and context for that typer.
+2. Context matters: Examine the surrounding dialogue, scene mood, speaker relationship, and visual appearance rather than classifying solely by isolated bubble shape or keywords (e.g. a cloud-shaped bubble is not automatically a happy/thought bubble without confirming context).
+3. If no configured typer matches, or if all typers are deleted/unmatched, you MUST return type: "none" and typerPrefix: "".
+4. NEVER invent or assign an unsupported type or prefix outside the configured list.
+5. Typers without AI instructions are strictly ineligible for automatic selection and omitted from this list.
 ${
   includeSFX
-    ? '- Environmental sound effects (explosions, slashes, impacts) -> type: "sfx", typerPrefix: ""'
-    : '- Sound Effects Filter is OFF: Completely ignore environmental SFX (BOOM, SLASH, WHOOSH). Human vocalizations (sighs, grunts, gasps) drawn on art must still be captured as "in_art" (#:).'
+    ? '6. Environmental sound effects (explosions, slashes, impacts) should be classified under the corresponding SFX typer if configured, or captured accurately.'
+    : '6. Sound Effects Filter is OFF: Completely ignore background environmental SFX (BOOM, SLASH, WHOOSH) unless drawn as integral character vocalizations/dialogue.'
 }
 `.trim());
+  } else {
+    sections.push(`
+MANGA TEXT & TYPER CLASSIFICATION RULES:
+No configured typers are eligible for automatic classification (all typers have empty instructions or have been removed).
+You MUST set type: "none" and typerPrefix: "" for ALL detected bubbles. Do not invent any type or prefix.
+`.trim());
+  }
 
   // 4. Anti-Literal Localization & Eloquence Level
   sections.push(`
@@ -100,6 +127,10 @@ ${termList || 'None recorded yet'}
   }
 
   // 7. Structured JSON Output Requirement
+  const allowedTypeExamples = eligibleTypers.length > 0
+    ? eligibleTypers.map((t) => `"${t.id}"`).join(' | ') + ' | "none"'
+    : '"none"';
+
   sections.push(`
 OUTPUT FORMAT:
 Return pure JSON with no markdown wrapping or preamble, strictly conforming to this schema:
@@ -111,8 +142,8 @@ Return pure JSON with no markdown wrapping or preamble, strictly conforming to t
   "bubbles": [
     {
       "box_2d": [ymin, xmin, ymax, xmax],
-      "type": "dialogue" | "scream" | "box" | "thought" | "in_art" | "sfx",
-      "typerPrefix": "():" | "{}:" | "[]:" | "<>:" | "#:" | "",
+      "type": ${allowedTypeExamples},
+      "typerPrefix": "Exact prefix string corresponding to matched typer, or empty string if none",
       "sourceLanguage": "ja" | "ko" | "zh" | "en",
       "sourceText": "Original detected dialogue",
       "translatedText": "Humanized Arabic translation"
