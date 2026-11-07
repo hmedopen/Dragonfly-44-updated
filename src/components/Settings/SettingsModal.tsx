@@ -20,7 +20,15 @@ import {
 import { settingsService } from '../../services/settings/settingsService';
 import { ENGINE_PRESETS } from '../../services/settings/presets';
 import { GEMINI_MODEL_PROFILES, type GeminiModelKey } from '../../types/workbench';
-import { loadTyperSettings, saveTyperSettings, DEFAULT_TYPERS, type CustomTyperConfig, type PrefixPosition, type TyperSettings } from '../../types/typers';
+import {
+  loadTyperSettings,
+  saveTyperSettings,
+  DEFAULT_TYPERS,
+  type CustomTyperConfig,
+  type ExtractedTextDirection,
+  type TyperSettings,
+  type TyperSymbolPosition,
+} from '../../types/typers';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -169,8 +177,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     saveTyperSettings(updated);
   };
 
-  const handleSetPrefixPosition = (position: PrefixPosition) => {
-    const updated = { ...typerSettings, prefixPosition: position };
+  const handleSetSymbolPosition = (position: TyperSymbolPosition) => {
+    const updated = { ...typerSettings, symbolPosition: position };
+    setTyperSettings(updated);
+    saveTyperSettings(updated);
+  };
+
+  const handleSetTextDirection = (direction: ExtractedTextDirection) => {
+    const updated = { ...typerSettings, textDirection: direction };
     setTyperSettings(updated);
     saveTyperSettings(updated);
   };
@@ -873,27 +887,40 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       className="w-4 h-4 rounded text-amber-500"
                     />
                   </div>
-                  <div className="flex items-center justify-between pt-2 border-t border-white/[0.06]">
-                    <span className="text-xs font-mono text-zinc-400">Prefix Position</span>
-                    <div className="flex items-center gap-1 bg-zinc-900 border border-white/[0.08] rounded p-0.5 text-xs font-mono">
-                      <button
-                        type="button"
-                        onClick={() => handleSetPrefixPosition('right')}
-                        className={`px-2.5 py-0.5 rounded cursor-pointer ${
-                          typerSettings.prefixPosition === 'right' ? 'bg-amber-500/20 text-amber-300 font-bold' : 'text-zinc-400'
-                        }`}
-                      >
-                        Right (Arabic)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleSetPrefixPosition('left')}
-                        className={`px-2.5 py-0.5 rounded cursor-pointer ${
-                          typerSettings.prefixPosition === 'left' ? 'bg-amber-500/20 text-amber-300 font-bold' : 'text-zinc-400'
-                        }`}
-                      >
-                        Left
-                      </button>
+                  <div className="space-y-2 pt-2 border-t border-white/[0.06]">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-xs font-mono text-zinc-400">Typer Symbol Position</span>
+                      <div className="flex items-center gap-1 bg-zinc-900 border border-white/[0.08] rounded p-0.5 text-xs font-mono">
+                        {(['start', 'end'] as const).map((position) => (
+                          <button
+                            key={position}
+                            type="button"
+                            onClick={() => handleSetSymbolPosition(position)}
+                            className={`px-2.5 py-0.5 rounded cursor-pointer ${
+                              typerSettings.symbolPosition === position ? 'bg-amber-500/20 text-amber-300 font-bold' : 'text-zinc-400'
+                            }`}
+                          >
+                            {position === 'start' ? 'Start' : 'End'}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-xs font-mono text-zinc-400">Extracted Text Direction</span>
+                      <div className="flex items-center gap-1 bg-zinc-900 border border-white/[0.08] rounded p-0.5 text-xs font-mono">
+                        {(['rtl', 'ltr'] as const).map((direction) => (
+                          <button
+                            key={direction}
+                            type="button"
+                            onClick={() => handleSetTextDirection(direction)}
+                            className={`px-2.5 py-0.5 rounded cursor-pointer ${
+                              typerSettings.textDirection === direction ? 'bg-amber-500/20 text-amber-300 font-bold' : 'text-zinc-400'
+                            }`}
+                          >
+                            {direction === 'rtl' ? 'Right to Left (RTL)' : 'Left to Right (LTR)'}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -920,7 +947,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <input
                           type="text"
                           value={t.prefix}
-                          placeholder='Tag e.g. ""'
+                          placeholder='Tag e.g. "":'
                           onChange={(e) => handleUpdateTyper(t.id, { prefix: e.target.value })}
                           className="w-20 px-2 py-1 rounded bg-[#050508] border border-white/[0.10] text-zinc-200 font-mono text-xs"
                         />

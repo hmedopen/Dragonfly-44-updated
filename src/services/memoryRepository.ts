@@ -543,7 +543,15 @@ export class IndexedDBMemoryDriver implements IMemoryDriver {
           });
         };
       });
-    } catch {
+    } catch (err: any) {
+      // In browser/Electron production runtime, surface persistence failure (F-19)
+      if (typeof window !== 'undefined') {
+        console.error('[MemoryRepository] Durable IndexedDB write failed:', err);
+        return {
+          success: false,
+          error: `Durable IndexedDB write failure: ${err?.message || String(err)}`,
+        };
+      }
       return this.inMemoryFallback.saveRecordAtomic(record, expectedRevision, auditEvent);
     }
   }
@@ -876,7 +884,11 @@ export class IndexedDBMemoryDriver implements IMemoryDriver {
         req.onerror = () => reject(req.error);
       });
       this.inMemoryFallback.saveProjectSettings(settings).catch(() => {});
-    } catch {
+    } catch (err: any) {
+      if (typeof window !== 'undefined') {
+        console.error('[MemoryRepository] Failed to save memory settings to IndexedDB:', err);
+        throw new Error(`Failed to save memory settings to IndexedDB: ${err?.message || String(err)}`);
+      }
       return this.inMemoryFallback.saveProjectSettings(settings);
     }
   }

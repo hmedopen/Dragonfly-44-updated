@@ -27,7 +27,12 @@ import {
   HUMANIZER_INTENSITY_CONFIG,
   ORTHOGRAPHY_CONFIG
 } from '../../types/workbench';
-import type { CustomTyperConfig, PrefixPosition, TyperSettings } from '../../types/typers';
+import type {
+  CustomTyperConfig,
+  ExtractedTextDirection,
+  TyperSettings,
+  TyperSymbolPosition,
+} from '../../types/typers';
 import { loadTyperSettings, saveTyperSettings, DEFAULT_TYPERS } from '../../types/typers';
 
 interface SettingsDrawerProps {
@@ -167,10 +172,17 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({ isOpen, onClose 
     }));
   };
 
-  const handleSetPrefixPosition = (position: PrefixPosition) => {
+  const handleSetSymbolPosition = (position: TyperSymbolPosition) => {
     setTyperSettings((prev) => ({
       ...prev,
-      prefixPosition: position,
+      symbolPosition: position,
+    }));
+  };
+
+  const handleSetTextDirection = (direction: ExtractedTextDirection) => {
+    setTyperSettings((prev) => ({
+      ...prev,
+      textDirection: direction,
     }));
   };
 
@@ -735,39 +747,53 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({ isOpen, onClose 
                 </label>
               </div>
 
-              {/* Prefix position Selector */}
-              <div className="flex items-center justify-between pt-2.5 border-t border-white/[0.04]">
+              <div className="space-y-2 pt-2.5 border-t border-white/[0.04]">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-[11px] font-mono uppercase tracking-wider text-zinc-300 font-semibold">
+                      Typer Symbol Position
+                    </span>
+                    <span className="text-[10px] text-zinc-500">
+                      Place the symbol at the start or end of each sentence
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1 p-0.5 rounded-lg bg-zinc-900 border border-white/[0.08] text-[11px] font-mono">
+                    {(['start', 'end'] as const).map((position) => (
+                      <button
+                        key={position}
+                        type="button"
+                        onClick={() => handleSetSymbolPosition(position)}
+                        className={`px-3 py-1 rounded transition-colors cursor-pointer ${
+                          typerSettings.symbolPosition === position
+                            ? 'bg-sky-500/20 text-sky-300 font-semibold border border-sky-500/30'
+                            : 'text-zinc-400 hover:text-zinc-200'
+                        }`}
+                      >
+                        {position === 'start' ? 'Start' : 'End'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <div className="flex flex-col gap-0.5">
                   <span className="text-[11px] font-mono uppercase tracking-wider text-zinc-300 font-semibold">
-                    Prefix Position
+                    Extracted Text Direction
                   </span>
-                  <span className="text-[10px] text-zinc-500">
-                    Right position matches natural Arabic RTL workflow; Left position places tag at start
-                  </span>
-                </div>
-                <div className="flex items-center gap-1 p-0.5 rounded-lg bg-zinc-900 border border-white/[0.08] text-[11px] font-mono">
-                  <button
-                    type="button"
-                    onClick={() => handleSetPrefixPosition('right')}
-                    className={`px-3 py-1 rounded transition-colors cursor-pointer ${
-                      typerSettings.prefixPosition === 'right'
-                        ? 'bg-sky-500/20 text-sky-300 font-semibold border border-sky-500/30'
-                        : 'text-zinc-400 hover:text-zinc-200'
-                    }`}
-                  >
-                    Right (Arabic)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleSetPrefixPosition('left')}
-                    className={`px-3 py-1 rounded transition-colors cursor-pointer ${
-                      typerSettings.prefixPosition === 'left'
-                        ? 'bg-sky-500/20 text-sky-300 font-semibold border border-sky-500/30'
-                        : 'text-zinc-400 hover:text-zinc-200'
-                    }`}
-                  >
-                    Left
-                  </button>
+                  <div className="flex items-center gap-1 p-0.5 rounded-lg bg-zinc-900 border border-white/[0.08] text-[11px] font-mono self-end">
+                    {(['rtl', 'ltr'] as const).map((direction) => (
+                      <button
+                        key={direction}
+                        type="button"
+                        onClick={() => handleSetTextDirection(direction)}
+                        className={`px-3 py-1 rounded transition-colors cursor-pointer ${
+                          typerSettings.textDirection === direction
+                            ? 'bg-sky-500/20 text-sky-300 font-semibold border border-sky-500/30'
+                            : 'text-zinc-400 hover:text-zinc-200'
+                        }`}
+                      >
+                        {direction === 'rtl' ? 'Right to Left (RTL)' : 'Left to Right (LTR)'}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>

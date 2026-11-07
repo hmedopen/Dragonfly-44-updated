@@ -7,17 +7,22 @@ export interface CustomTyperConfig {
 }
 
 export type PrefixPosition = 'right' | 'left';
+export type TyperSymbolPosition = 'start' | 'end';
+export type ExtractedTextDirection = 'rtl' | 'ltr';
 
 export interface TyperSettings {
   includeTyperSymbols: boolean;
+  /** Retained for pre-Start/End saved settings; new exports use symbolPosition. */
   prefixPosition: PrefixPosition;
+  symbolPosition: TyperSymbolPosition;
+  textDirection: ExtractedTextDirection;
   typers: CustomTyperConfig[];
 }
 
 export const DEFAULT_TYPERS: CustomTyperConfig[] = [
   {
     id: 'speech_bubbles',
-    prefix: '""',
+    prefix: '"":',
     name: 'Speech Bubbles',
     instructions:
       'Ordinary spoken dialogue between characters in standard rounded or smooth oval speech bubbles. Casual, conversational speech with normal inflection.',
@@ -25,7 +30,7 @@ export const DEFAULT_TYPERS: CustomTyperConfig[] = [
   },
   {
     id: 'thought_bubbles',
-    prefix: '()',
+    prefix: '():',
     name: 'Thought Bubbles',
     instructions:
       'Internal monologues, reflections, and unspoken thoughts, typically rendered in cloud-shaped, scalloped, or dotted/bubble-tailed thought bubbles.',
@@ -33,7 +38,7 @@ export const DEFAULT_TYPERS: CustomTyperConfig[] = [
   },
   {
     id: 'shouting',
-    prefix: '%',
+    prefix: '%:',
     name: 'Shouting',
     instructions:
       'Loudly spoken or yelled dialogue, battle cries, screams, or urgent outbursts, usually enclosed in jagged, spiked, burst, or explosive bubble outlines.',
@@ -41,7 +46,7 @@ export const DEFAULT_TYPERS: CustomTyperConfig[] = [
   },
   {
     id: 'outside_text',
-    prefix: 'OT',
+    prefix: 'OT:',
     name: 'Outside Text',
     instructions:
       'Narration, scene descriptions, editorial commentary, and textual dialogue drawn floating outside of conventional dialogue bubbles or in margin spaces.',
@@ -49,7 +54,7 @@ export const DEFAULT_TYPERS: CustomTyperConfig[] = [
   },
   {
     id: 'small_text',
-    prefix: 'ST',
+    prefix: 'ST:',
     name: 'Small Text',
     instructions:
       'Whispers, quiet murmurs, side remarks, secondary reactions, or small accompanying text hovering beside main dialogue bubbles.',
@@ -57,7 +62,7 @@ export const DEFAULT_TYPERS: CustomTyperConfig[] = [
   },
   {
     id: 'sfx',
-    prefix: 'SFX',
+    prefix: 'SFX:',
     name: 'Sound Effects',
     instructions:
       'Sound effects, onomatopoeia, impacts, environmental sounds, and combat audio rendered graphically into the scene art.',
@@ -65,7 +70,7 @@ export const DEFAULT_TYPERS: CustomTyperConfig[] = [
   },
   {
     id: 'system_messages',
-    prefix: '$',
+    prefix: '$:',
     name: 'System Messages',
     instructions:
       'Game interfaces, status windows, automated notifications, skill announcements, system alerts, and holographic prompt boxes.',
@@ -73,7 +78,7 @@ export const DEFAULT_TYPERS: CustomTyperConfig[] = [
   },
   {
     id: 'translator_notes',
-    prefix: 'T/N',
+    prefix: 'T/N:',
     name: 'Translator Notes',
     instructions:
       'Cultural, linguistic, historical, and translation explanations or scanlator commentary added to clarify terms.',
@@ -81,7 +86,7 @@ export const DEFAULT_TYPERS: CustomTyperConfig[] = [
   },
   {
     id: 'square_bubbles',
-    prefix: '[ ]',
+    prefix: '[ ]:',
     name: 'Square Bubbles',
     instructions:
       'Dialogue, formal narration, broadcast speech, telepathic transmissions, or internal commentary contained in rectangular or square-shaped bubbles.',
@@ -91,7 +96,9 @@ export const DEFAULT_TYPERS: CustomTyperConfig[] = [
 
 export const DEFAULT_TYPER_SETTINGS: TyperSettings = {
   includeTyperSymbols: true,
-  prefixPosition: 'right', // Arabic-first workflow default
+  prefixPosition: 'right',
+  symbolPosition: 'start',
+  textDirection: 'rtl',
   typers: DEFAULT_TYPERS,
 };
 
@@ -105,6 +112,25 @@ export const LEGACY_TYPER_ALIAS_MAP: Record<string, string> = {
   thought: 'thought_bubbles',
   in_art: 'outside_text',
 };
+
+const LEGACY_DEFAULT_PREFIXES: Record<string, string> = {
+  speech_bubbles: '""',
+  thought_bubbles: '()',
+  shouting: '%',
+  outside_text: 'OT',
+  small_text: 'ST',
+  sfx: 'SFX',
+  system_messages: '$',
+  translator_notes: 'T/N',
+  square_bubbles: '[ ]',
+};
+
+export function normalizeTyperPrefix(typeKey: string | undefined | null, prefix: string): string {
+  if (!typeKey) return prefix;
+  const canonicalKey = LEGACY_TYPER_ALIAS_MAP[typeKey.toLowerCase()] || typeKey;
+  const legacyPrefix = LEGACY_DEFAULT_PREFIXES[canonicalKey.toLowerCase()];
+  return legacyPrefix && prefix === legacyPrefix ? `${legacyPrefix}:` : prefix;
+}
 
 export function resolveCanonicalTyper(
   typeKey: string | undefined | null,
@@ -136,6 +162,14 @@ export function loadTyperSettings(): TyperSettings {
     const raw = localStorage.getItem(TYPER_SETTINGS_STORAGE_KEY);
     if (!raw) return DEFAULT_TYPER_SETTINGS;
     const parsed = JSON.parse(raw);
+    const storedSymbolPosition =
+      parsed.symbolPosition === 'start' || parsed.symbolPosition === 'end'
+        ? parsed.symbolPosition
+        : parsed.prefixPosition === 'left'
+          ? 'start'
+          : parsed.prefixPosition === 'right'
+            ? 'end'
+            : DEFAULT_TYPER_SETTINGS.symbolPosition;
     return {
       includeTyperSymbols:
         typeof parsed.includeTyperSymbols === 'boolean'
@@ -145,9 +179,17 @@ export function loadTyperSettings(): TyperSettings {
         parsed.prefixPosition === 'left' || parsed.prefixPosition === 'right'
           ? parsed.prefixPosition
           : DEFAULT_TYPER_SETTINGS.prefixPosition,
+      symbolPosition: storedSymbolPosition,
+      textDirection:
+        parsed.textDirection === 'rtl' || parsed.textDirection === 'ltr'
+          ? parsed.textDirection
+          : DEFAULT_TYPER_SETTINGS.textDirection,
       typers:
         Array.isArray(parsed.typers) && parsed.typers.length > 0
-          ? parsed.typers
+          ? parsed.typers.map((typer: CustomTyperConfig) => ({
+              ...typer,
+              prefix: normalizeTyperPrefix(typer.id, typer.prefix),
+            }))
           : DEFAULT_TYPERS,
     };
   } catch (err) {

@@ -974,6 +974,30 @@ export async function runIdempotentStorageMigration(): Promise<MigrationJournalE
     journalEntry.status = 'completed';
     await saveJournalEntry(db, journalEntry);
     console.log(`[StorageEngine] Migration completed successfully: ${journalEntry.migratedProjectsCount} projects, ${journalEntry.migratedChaptersCount} chapters, ${journalEntry.migratedPagesCount} pages.`);
+
+    // Record schema journal entries for v6 (Review) and v7 (Project Memory) (F-26)
+    const v6Journal: MigrationJournalEntry = {
+      key: 'storage_v6_review_schema',
+      version: 6,
+      status: 'completed',
+      timestamp: Date.now(),
+      migratedProjectsCount: journalEntry.migratedProjectsCount,
+      migratedChaptersCount: journalEntry.migratedChaptersCount,
+      migratedPagesCount: journalEntry.migratedPagesCount,
+    };
+    await saveJournalEntry(db, v6Journal);
+
+    const v7Journal: MigrationJournalEntry = {
+      key: 'storage_v7_memory_schema',
+      version: 7,
+      status: 'completed',
+      timestamp: Date.now(),
+      migratedProjectsCount: journalEntry.migratedProjectsCount,
+      migratedChaptersCount: journalEntry.migratedChaptersCount,
+      migratedPagesCount: journalEntry.migratedPagesCount,
+    };
+    await saveJournalEntry(db, v7Journal);
+
     return journalEntry;
   } catch (err: any) {
     console.error('[StorageEngine] Migration failed:', err);

@@ -38,14 +38,18 @@ export function isScopeApplicable(recordScope: KnowledgeScope, targetScope: Know
   // Chapter-level scope
   if (recordScope.level === 'chapter') {
     if (targetScope.level === 'project' || targetScope.level === 'series') return false;
-    if (recordScope.id && targetScope.chapter_id && recordScope.id !== targetScope.chapter_id) return false;
+    const recordChapterId = recordScope.chapter_id || recordScope.id;
+    const targetChapterId = targetScope.chapter_id || targetScope.id;
+    if (recordChapterId && targetChapterId && recordChapterId !== targetChapterId) return false;
     return true;
   }
 
   // Page-level scope
   if (recordScope.level === 'page') {
     if (targetScope.level !== 'page') return false;
-    if (recordScope.id && targetScope.page_id && recordScope.id !== targetScope.page_id) return false;
+    const recordPageId = recordScope.page_id || recordScope.id;
+    const targetPageId = targetScope.page_id || targetScope.id;
+    if (recordPageId && targetPageId && recordPageId !== targetPageId) return false;
     return true;
   }
 
@@ -254,10 +258,20 @@ export async function buildContextBundle(request: RetrievalRequest): Promise<Con
     currentChars += itemChars;
   }
 
-  // 6. Gather active conflicts for the scope
+  // 6. Gather active conflicts for the scope (F-18)
   const allConflicts = await driver.getConflictsByProject(request.project_id);
   const activeConflicts = allConflicts
-    .filter((c) => c.status === 'unresolved')
+    .filter((c) => {
+      if (c.status !== 'unresolved') return false;
+      // If conflict is linked to an existing record, apply scope check
+      if (c.record_id) {
+        const matchingRecord = allRecords.find((r) => r.record_id === c.record_id);
+        if (matchingRecord && !isScopeApplicable(matchingRecord.scope, request.scope)) {
+          return false;
+        }
+      }
+      return true;
+    })
     .map((c) => ({
       conflict_id: c.conflict_id,
       canonical_key: c.canonical_key,

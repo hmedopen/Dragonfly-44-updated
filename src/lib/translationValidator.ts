@@ -152,10 +152,11 @@ export function validatePageScanOutput(rawText: string): ValidationResult<{
     return { isValid: false, data: null, errors, warnings, wasRecovered: false };
   }
 
-  const bubbles = Array.isArray(parsed.bubbles) ? parsed.bubbles : [];
   if (!Array.isArray(parsed.bubbles)) {
-    warnings.push('Response missing "bubbles" array; defaulting to empty list.');
+    errors.push('Response missing "bubbles" array.');
+    return { isValid: false, data: null, errors, warnings, wasRecovered: false };
   }
+  const bubbles = parsed.bubbles;
 
   return {
     isValid: errors.length === 0,

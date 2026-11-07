@@ -13,8 +13,6 @@ export {
 import {
   getChapterIntelligence,
   saveChapterIntelligence,
-  getProjectLore,
-  saveProjectLore,
 } from './db';
 import { projectMemory } from './projectMemory';
 import type { ProposedKnowledgeItem } from '../lib/memory/candidateIntake';
@@ -387,49 +385,10 @@ export async function ingestPageIntelligence(
     }
   }
 
-  // If in a Project, synchronize verified terms and characters to Project Lore Ledger
-  if (projectId && projectId !== 'folder-drafts') {
-    try {
-      let projectLore = await getProjectLore(projectId);
-      if (!projectLore) {
-        projectLore = {
-          projectId,
-          characters: [],
-          terms: [],
-          speakerRelationships: [],
-          lastUpdated: Date.now(),
-        };
-      }
-
-      const existingCharKeys = new Set(projectLore.characters.map((c) => c.nameOriginal.toLowerCase()));
-      const existingTermKeys = new Set(projectLore.terms.map((t) => t.termOriginal.toLowerCase()));
-
-      let projectUpdated = false;
-
-      for (const char of intel.characterRoster) {
-        if (!existingCharKeys.has(char.nameOriginal.toLowerCase())) {
-          projectLore.characters.push(char);
-          existingCharKeys.add(char.nameOriginal.toLowerCase());
-          projectUpdated = true;
-        }
-      }
-
-      for (const term of intel.termsHarvested) {
-        if (!existingTermKeys.has(term.termOriginal.toLowerCase())) {
-          projectLore.terms.push(term);
-          existingTermKeys.add(term.termOriginal.toLowerCase());
-          projectUpdated = true;
-        }
-      }
-
-      if (projectUpdated) {
-        projectLore.lastUpdated = Date.now();
-        await saveProjectLore(projectId, projectLore);
-      }
-    } catch (err) {
-      console.warn('[Intelligence] Failed to sync to Project Lore Ledger:', err);
-    }
-  }
+  // Note on System #5 Governance:
+  // Discovered characters and terms submitted as candidates MUST remain quarantined in
+  // System #5 knowledge repository until approved by user.
+  // Legacy ProjectLoreLedger is a read-only projection populated strictly from approved knowledge (F-10).
 
   return {
     conflictsFound,

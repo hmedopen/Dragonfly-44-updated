@@ -76,12 +76,12 @@ const LEGACY_TYPER_ALIAS_MAP = {
 };
 
 const DEFAULT_TYPERS = [
-  { id: 'speech_bubbles', prefix: '""', name: 'Speech Bubbles' },
-  { id: 'shouting', prefix: '%', name: 'Shouting' },
-  { id: 'thought_bubbles', prefix: '()', name: 'Thought Bubbles' },
-  { id: 'square_bubbles', prefix: '[ ]', name: 'Square Bubbles' },
-  { id: 'outside_text', prefix: 'OT', name: 'Outside Text' },
-  { id: 'sfx', prefix: 'SFX', name: 'Sound Effects' },
+  { id: 'speech_bubbles', prefix: '"":', name: 'Speech Bubbles' },
+  { id: 'shouting', prefix: '%:', name: 'Shouting' },
+  { id: 'thought_bubbles', prefix: '():', name: 'Thought Bubbles' },
+  { id: 'square_bubbles', prefix: '[ ]:', name: 'Square Bubbles' },
+  { id: 'outside_text', prefix: 'OT:', name: 'Outside Text' },
+  { id: 'sfx', prefix: 'SFX:', name: 'Sound Effects' },
 ];
 
 function resolveCanonicalTyper(typeKey, configuredTypers = DEFAULT_TYPERS) {
@@ -106,7 +106,7 @@ function resolveCanonicalTyper(typeKey, configuredTypers = DEFAULT_TYPERS) {
   assert.strictEqual(resolveCanonicalTyper('scream').id, 'shouting');
   assert.strictEqual(resolveCanonicalTyper('box').id, 'square_bubbles');
   assert.strictEqual(resolveCanonicalTyper('thought').id, 'thought_bubbles');
-  assert.strictEqual(resolveCanonicalTyper('outside_text').prefix, 'OT');
+  assert.strictEqual(resolveCanonicalTyper('outside_text').prefix, 'OT:');
   assert.strictEqual(resolveCanonicalTyper('none').id, 'none');
   console.log('✓ 3. Canonical Typer resolver passed: mapped legacy keys to unified schema without ambiguity.');
 }

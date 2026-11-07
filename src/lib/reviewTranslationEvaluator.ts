@@ -56,11 +56,72 @@ export async function evaluateTranslationAndLinguistics(
     return findings;
   }
 
-  // 1. Source Reliability Gate: Inspect OCR confidence and ambiguity flags
-  // Rule: If source is materially ambiguous, do not assert definitive translation error.
-  const verifiedBubbles: typeof candidateBubbles = [];
+  // 0. Deterministic Missing Translation Gate (F-05)
+  // Source-only bubbles with empty/blank translation must emit deterministic MISSING_TRANSLATION
+  // and must NOT be linguistically scored as a translation defect.
+  const bubblesForLinguisticAudit: typeof candidateBubbles = [];
 
   for (const b of candidateBubbles) {
+    const hasSource = Boolean(b.sourceText && b.sourceText.trim().length > 0);
+    const hasTranslation = Boolean(b.translatedText && b.translatedText.trim().length > 0);
+
+    if (hasSource && !hasTranslation) {
+      findings.push({
+        findingId: `trn-missing-${b.id}`,
+        domain: 'translation',
+        issueCode: ISSUE_CODES.MISSING_TRANSLATION,
+        severity: 'major',
+        status: 'open',
+        affectedEntity: { type: 'bubble', pageId, chapterId, bubbleId: b.id },
+        observation: `Bubble #${String(b.index).padStart(2, '0')} has source dialogue but no Arabic translation.`,
+        expectedBehavior: 'All dialogue bubbles must have a valid Arabic translation.',
+        evidence: {
+          detectedOCR: b.sourceText,
+          rationale: 'Deterministic missing translation check: source text present without translated output.',
+        },
+        confidence: { sourceOCR: 'high', finding: 'high', correction: 'not_assessed' },
+        proposedAction: 'edit',
+        ruleVersion: 'system4-linguistic-v1',
+        createdAt: Date.now(),
+        snapshotVersion: snapshotId,
+      });
+      // Do not forward to Gemini linguistic scorer
+      continue;
+    }
+
+    if (!hasSource && hasTranslation) {
+      // Translation exists without source
+      findings.push({
+        findingId: `trn-no-source-${b.id}`,
+        domain: 'integrity',
+        issueCode: ISSUE_CODES.ORPHAN_TEXT_REGION,
+        severity: 'minor',
+        status: 'open',
+        affectedEntity: { type: 'bubble', pageId, chapterId, bubbleId: b.id },
+        observation: `Bubble #${String(b.index).padStart(2, '0')} has Arabic translation but empty source text.`,
+        expectedBehavior: 'Translation should correspond to a detected source OCR string.',
+        evidence: {
+          translationSpan: b.translatedText,
+          rationale: 'Orphan translation detected without source OCR.',
+        },
+        confidence: { sourceOCR: 'uncertain', finding: 'high', correction: 'not_assessed' },
+        proposedAction: 'inspect',
+        ruleVersion: 'system4-linguistic-v1',
+        createdAt: Date.now(),
+        snapshotVersion: snapshotId,
+      });
+      continue;
+    }
+
+    bubblesForLinguisticAudit.push(b);
+  }
+
+  // 1. Source Reliability Gate: Inspect OCR confidence and ambiguity flags (F-15)
+  // Rule: If source is materially ambiguous, record uncertainty finding and HARD ABSTAIN
+  // from submitting to linguistic model to prevent hallucinated/speculative error assertions.
+  const verifiedBubbles: typeof candidateBubbles = [];
+
+  for (const b of bubblesForLinguisticAudit) {
     const canonicalRegion = scanResult?.regions?.find((r) => r.regionId === b.id);
     const isAmbiguousOCR = canonicalRegion?.flags?.includes('OCR_AMBIGUOUS');
     const isLowOCR = (canonicalRegion?.confidence?.ocr !== undefined && canonicalRegion.confidence.ocr < 0.45) ||
@@ -79,7 +140,7 @@ export async function evaluateTranslationAndLinguistics(
         expectedBehavior: 'High-confidence source text required for definitive semantic verification.',
         evidence: {
           detectedOCR: b.sourceText,
-          rationale: 'Source OCR uncertainty gate engaged; abstained from speculative linguistic error.',
+          rationale: 'Source OCR uncertainty gate engaged; hard abstention from speculative linguistic error.',
         },
         confidence: { sourceOCR: 'uncertain', finding: 'high', correction: 'not_assessed' },
         proposedAction: 'inspect',
@@ -87,7 +148,8 @@ export async function evaluateTranslationAndLinguistics(
         createdAt: Date.now(),
         snapshotVersion: snapshotId,
       });
-      // We still include it for evaluation, but the prompt will be instructed of the uncertainty
+      // Hard abstention: do not forward materially ambiguous OCR to model for linguistic judgment
+      continue;
     }
     verifiedBubbles.push(b);
   }
@@ -135,7 +197,7 @@ QUALITY PRINCIPLES:
    - Maintain legitimate hamzas (أ، إ، آ), shadda, and tanween adverbs contextually.
    - Do NOT suggest removing hamzas or blind normalization.
 5. STRICTNESS LEVEL: [${strictness.toUpperCase()}]
-   ${strictness === 'strict' ? 'Increase scrutiny of character terminology and punctuation consistency, but NEVER lower evidence thresholds.' : 'Balanced mode: focus strictly on material meaning, negation, and clear grammatical defects.'}
+   ${strictness === 'conservative' ? 'Conservative mode: Only report critical blocker errors (such as outright reversed negations, major hallucinations, or severe gender mismatches). Completely suppress minor stylistic recommendations and naturalness suggestions.' : strictness === 'thorough' ? 'Thorough mode: Scrutinize character voice nuances, terminology consistency, punctuation, and all orthographic details.' : 'Balanced mode: Focus strictly on material meaning, negation, and clear grammatical defects.'}
 
 DATASET:
 ${JSON.stringify(bubblesPayload, null, 2)}

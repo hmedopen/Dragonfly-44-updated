@@ -93,8 +93,9 @@ export async function queryTargetedCropOCR(options: {
   crop: CropResult;
   apiKey: string;
   selectedModel: string;
+  signal?: AbortSignal;
 }): Promise<SingleCropOCRResult> {
-  const { crop, apiKey, selectedModel } = options;
+  const { crop, apiKey, selectedModel, signal } = options;
 
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${selectedModel || 'gemini-3.8-flash'}:generateContent?key=${apiKey}`;
 
@@ -137,6 +138,7 @@ Return strictly pure JSON:
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
+    signal,
   });
 
   if (!response.ok) {
@@ -168,6 +170,7 @@ export async function performTargetedCropRetries(options: {
   apiKey: string;
   selectedModel: string;
   maxRetries?: number;
+  signal?: AbortSignal;
 }): Promise<{ updatedRegions: TextRegion[]; retriedCount: number }> {
   const {
     blob,
@@ -177,6 +180,7 @@ export async function performTargetedCropRetries(options: {
     apiKey,
     selectedModel,
     maxRetries = 3,
+    signal,
   } = options;
 
   if (!apiKey || !blob || regions.length === 0) {
@@ -219,6 +223,7 @@ export async function performTargetedCropRetries(options: {
         crop,
         apiKey,
         selectedModel,
+        signal,
       });
 
       retriedCount++;

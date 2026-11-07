@@ -40,6 +40,8 @@ export interface ScanMangaPageOptions {
   includeSFX?: boolean;
   enableTargetedRetries?: boolean;
   maxRetries?: number;
+  ocrConfidenceThreshold?: number;
+  signal?: AbortSignal;
 }
 
 export async function scanMangaPage(options: ScanMangaPageOptions): Promise<PageScanResult> {
@@ -51,6 +53,8 @@ export async function scanMangaPage(options: ScanMangaPageOptions): Promise<Page
     includeSFX = true,
     enableTargetedRetries = true,
     maxRetries = 3,
+    ocrConfidenceThreshold = 0.65,
+    signal,
   } = options;
 
   if (!apiKey || apiKey.trim().length === 0) {
@@ -119,6 +123,7 @@ export async function scanMangaPage(options: ScanMangaPageOptions): Promise<Page
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
+    signal,
   });
 
   if (!response.ok) {
@@ -164,8 +169,12 @@ export async function scanMangaPage(options: ScanMangaPageOptions): Promise<Page
     if (r.isAmbiguous) flags.push('OCR_AMBIGUOUS');
     if (r.isClipped) flags.push('TEXT_CLIPPED');
 
-    // Boundary uncertainty heuristic: if box touches the extreme 1000 boundary
+    // Estimate heuristic confidence with evidence dimensions (F-25)
     const [ymin, xmin, ymax, xmax] = r.box_2d;
+    const boxArea = Math.abs((ymax - ymin) * (xmax - xmin)) / 1_000_000;
+    const hasPlausibleSize = boxArea > 0.002 && boxArea < 0.35;
+    const regionDetectionConfidence = hasPlausibleSize ? 0.92 : 0.75;
+    const readingOrderConfidence = 0.90;
     if (ymin <= 5 || xmin <= 5 || ymax >= 995 || xmax >= 995) {
       flags.push('REGION_BOUNDARY_UNCERTAIN');
     }
@@ -180,6 +189,11 @@ export async function scanMangaPage(options: ScanMangaPageOptions): Promise<Page
     if (r.isClipped) ocrConfidence = Math.min(ocrConfidence, 0.70);
     if (!r.rawOCR || r.rawOCR.trim().length === 0) ocrConfidence = 0.50;
 
+    // Apply configured OCR confidence threshold for ambiguity flag
+    if (ocrConfidence < ocrConfidenceThreshold && !flags.includes('OCR_AMBIGUOUS')) {
+      flags.push('OCR_AMBIGUOUS');
+    }
+
     // Classification confidence
     const classificationConfidence = r.primaryClass === 'unknown' ? 0.50 : 0.90;
 
@@ -193,10 +207,10 @@ export async function scanMangaPage(options: ScanMangaPageOptions): Promise<Page
       ocrAlternatives: r.ocrAlternatives,
       confidence: {
         imageQuality: imageQualityConfidence,
-        regionDetection: 0.95,
+        regionDetection: regionDetectionConfidence,
         ocr: ocrConfidence,
         association: 0.90,
-        readingOrder: 0.95,
+        readingOrder: readingOrderConfidence,
         classification: classificationConfidence,
       },
       classification: {
@@ -232,6 +246,7 @@ export async function scanMangaPage(options: ScanMangaPageOptions): Promise<Page
         apiKey,
         selectedModel,
         maxRetries,
+        signal,
       });
       textRegions = retryResult.updatedRegions;
     } catch (e) {

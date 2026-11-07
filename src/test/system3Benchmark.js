@@ -628,10 +628,10 @@ console.log('[Test 1] Coordinate Transforms & Round-Trip Invariant...');
 console.log('[Test 2] Generic Classification Decoupling...');
 {
   const typers = [
-    { id: 'speech_bubbles', prefix: '""', name: 'Speech Bubbles' },
-    { id: 'thought_bubbles', prefix: '()', name: 'Thought Bubbles' },
-    { id: 'shouting', prefix: '%', name: 'Shouting' },
-    { id: 'sfx', prefix: 'SFX', name: 'Sound Effects' },
+    { id: 'speech_bubbles', prefix: '"":', name: 'Speech Bubbles' },
+    { id: 'thought_bubbles', prefix: '():', name: 'Thought Bubbles' },
+    { id: 'shouting', prefix: '%:', name: 'Shouting' },
+    { id: 'sfx', prefix: 'SFX:', name: 'Sound Effects' },
   ];
 
   assert.strictEqual(defaultTyperForClass('dialogue', typers).id, 'speech_bubbles');
@@ -662,9 +662,9 @@ console.log('[Test 3] Multi-Signal Match Scoring...');
 console.log('[Test 4] Non-Destructive Rescan Merge & Edit Preservation...');
 {
   const typers = [
-    { id: 'speech_bubbles', prefix: '""', name: 'Speech Bubbles' },
-    { id: 'thought_bubbles', prefix: '()', name: 'Thought Bubbles' },
-    { id: 'shouting', prefix: '%', name: 'Shouting' },
+    { id: 'speech_bubbles', prefix: '"":', name: 'Speech Bubbles' },
+    { id: 'thought_bubbles', prefix: '():', name: 'Thought Bubbles' },
+    { id: 'shouting', prefix: '%:', name: 'Shouting' },
   ];
   const typerSettings = { typers };
 

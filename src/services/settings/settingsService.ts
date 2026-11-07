@@ -361,7 +361,18 @@ export class SettingsService {
       this.pendingApplyKeys.delete(settingId);
     }
 
-    this.savePersistedSettings();
+    const saveOk = this.savePersistedSettings();
+    if (!saveOk) {
+      // Rollback memory modification on storage failure
+      if (targetScope === 'global') {
+        this.globalValues[settingId] = oldValue;
+      } else if (targetScope === 'project' && options?.projectId && this.projectValues[options.projectId]) {
+        this.projectValues[options.projectId][settingId] = oldValue;
+      } else if (targetScope === 'chapter' && options?.chapterId && this.chapterValues[options.chapterId]) {
+        this.chapterValues[options.chapterId][settingId] = oldValue;
+      }
+      return { success: false, effectiveValue: oldValue, error: 'Failed to persist setting to storage' };
+    }
 
     // Sync legacy localStorage keys for backward-compatibility with external scripts
     this.syncLegacyKey(settingId, sanitized);
@@ -429,7 +440,24 @@ export class SettingsService {
   }
 
   /**
+   * Centralized Model Resolver (F-22).
+   * Resolves custom model identifier when model === 'custom', or returns normalized model ID.
+   */
+  resolveEffectiveModel(context?: { projectId?: string | null; chapterId?: string | null }): string {
+    const rawModel = this.getEffectiveValue<string>('translation.model', context).value;
+    if (rawModel === 'custom') {
+      const customModel = this.getEffectiveValue<string>('translation.custom_model', context).value;
+      if (customModel && typeof customModel === 'string' && customModel.trim().length > 0) {
+        return customModel.trim();
+      }
+      return 'gemini-3.8-flash';
+    }
+    return rawModel || 'gemini-3.8-flash';
+  }
+
+  /**
    * Applies a named preset atomically across targeted settings.
+   * If any setting in the preset fails, rolls back all applied settings (F-23).
    */
   applyPreset(
     presetId: string,
@@ -440,10 +468,31 @@ export class SettingsService {
       return { success: false, appliedCount: 0, error: `Preset not found: ${presetId}` };
     }
 
+    // Save initial state for rollback in case of partial failure
+    const rollbackMap: Record<string, any> = {};
+    for (const key of Object.keys(preset.values)) {
+      rollbackMap[key] = this.getEffectiveValue(key, options).value;
+    }
+
     let appliedCount = 0;
+    const appliedKeys: string[] = [];
+
     for (const [key, val] of Object.entries(preset.values)) {
       const res = this.setSettingValue(key, val, options);
-      if (res.success) appliedCount++;
+      if (res.success) {
+        appliedCount++;
+        appliedKeys.push(key);
+      } else {
+        // Rollback all previously applied keys in this preset
+        for (const rolledKey of appliedKeys) {
+          this.setSettingValue(rolledKey, rollbackMap[rolledKey], options);
+        }
+        return {
+          success: false,
+          appliedCount: 0,
+          error: `Preset transaction aborted at ${key}: ${res.error || 'Failed to apply setting'}`,
+        };
+      }
     }
 
     return { success: true, appliedCount };

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import type { Folder, Chapter } from '../../types';
 import type { BubbleItem } from '../../types/workbench';
 import { useWorkbenchStore } from '../../store/workbenchStore';
-import { getPageBlob } from '../../services/db';
+import { getPageBlob, getPageBubbles } from '../../services/db';
 import { CanvasPane } from './CanvasPane';
 import { FeedPane } from './FeedPane';
 import { SettingsModal } from '../Settings/SettingsModal';
@@ -332,27 +332,48 @@ export const Workbench: React.FC<WorkbenchProps> = ({
       includePageHeaders: false,
       includeIndexTags: true,
       includePrefixTags: typerCfg.includeTyperSymbols,
-      prefixPosition: typerCfg.prefixPosition,
-      tagPlacement: typerCfg.prefixPosition === 'left' ? 'prefix' : 'suffix',
+      symbolPosition: typerCfg.symbolPosition,
+      textDirection: typerCfg.textDirection,
     });
     if (text) {
       navigator.clipboard?.writeText(text).catch(() => {});
     }
   };
 
-  const handleExtractAll = () => {
+  const handleExtractAll = async () => {
     setExportModalScope('entire');
     setExportModalMode('raw_text');
     setIsTypeRModalOpen(true);
     const typerCfg = loadTyperSettings();
+
+    // Ensure all pages have their persisted bubble records loaded from IndexedDB (F-06)
+    const completePagesForExport: Array<{ pageIndex: number; bubbles: BubbleItem[] }> = [];
+    for (const p of pages) {
+      let pageBubbles = bubblesByPage[p.id];
+      if (!pageBubbles || pageBubbles.length === 0) {
+        try {
+          const stored = await getPageBubbles(p.id);
+          if (stored && stored.length > 0) {
+            pageBubbles = stored;
+          }
+        } catch (e) {
+          console.warn(`[ExtractAll] Could not load persisted bubbles for page ${p.id}:`, e);
+        }
+      }
+      completePagesForExport.push({
+        pageIndex: p.index,
+        bubbles: pageBubbles || [],
+      });
+    }
+
     const text = compileRawTextExtract({
       chapterName: chapter?.name || 'CHAPTER 01',
-      pages: allChapterPagesForExport,
+      pages: completePagesForExport,
       includePageHeaders: true,
       includeIndexTags: true,
       includePrefixTags: typerCfg.includeTyperSymbols,
-      prefixPosition: typerCfg.prefixPosition,
-      tagPlacement: typerCfg.prefixPosition === 'left' ? 'prefix' : 'suffix',
+      symbolPosition: typerCfg.symbolPosition,
+      textDirection: typerCfg.textDirection,
     });
     if (text) {
       navigator.clipboard?.writeText(text).catch(() => {});

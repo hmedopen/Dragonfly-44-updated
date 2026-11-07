@@ -1,6 +1,6 @@
 import { getPageBlob, getPageBubbles, savePageBubbles, getProjectLore } from '../services/db';
 import { getChapterIntelligence } from '../services/intelligence';
-import type { BubbleItem, ReviewFlagItem, ReviewFlagCategory, GeminiModelKey, EloquenceLevel } from '../types/workbench';
+import type { BubbleItem, ReviewFlagItem, ReviewFlagCategory, GeminiModelKey, EloquenceLevel, ProjectLoreLedger, ChapterIntelligence } from '../types/workbench';
 import { resolveCanonicalTyper } from '../types/typers';
 import { buildVisualPageReviewInstruction, buildChapterReviewSystemInstruction } from './promptBuilder';
 import { humanizeArabicText } from './arabicHumanizer';
@@ -18,6 +18,8 @@ export interface SinglePageVisualReviewOptions {
   isMasterPromptActive?: boolean;
 }
 
+import type { ReviewStrictness } from '../types/review';
+
 export interface ChapterReviewOptions {
   chapterId: string;
   projectId?: string | null;
@@ -26,6 +28,11 @@ export interface ChapterReviewOptions {
   apiKey: string;
   selectedModel: GeminiModelKey | string;
   eloquenceLevel: EloquenceLevel;
+  strictness?: ReviewStrictness;
+  projectLore?: ProjectLoreLedger | null;
+  chapterIntelligence?: ChapterIntelligence | null;
+  targetBubbleId?: string;
+  selectedBubbleIds?: string[];
   masterPromptOverride?: string;
   isMasterPromptActive?: boolean;
 }
@@ -493,12 +500,23 @@ export async function auditChapterWithGemini(
   const isSinglePage = options.pages.length === 1;
 
   const jobResult = await runReviewEngine({
-    scope: isSinglePage ? 'single_page' : 'chapter',
+    scope: options.targetBubbleId
+      ? 'single_bubble'
+      : options.selectedBubbleIds && options.selectedBubbleIds.length > 0
+      ? 'selected_bubbles'
+      : isSinglePage
+      ? 'single_page'
+      : 'chapter',
     chapterId: options.chapterId,
     pages: options.pages.map((p) => ({ pageId: p.pageId, pageIndex: p.pageIndex })),
+    targetBubbleId: options.targetBubbleId,
+    selectedBubbleIds: options.selectedBubbleIds,
     apiKey: options.apiKey,
     selectedModel: String(options.selectedModel || 'gemini-3.8-flash'),
+    strictness: options.strictness || 'balanced',
     eloquenceLevel: options.eloquenceLevel,
+    projectLore: options.projectLore,
+    chapterIntelligence: options.chapterIntelligence,
     masterPromptOverride: options.masterPromptOverride,
     isMasterPromptActive: options.isMasterPromptActive,
   });

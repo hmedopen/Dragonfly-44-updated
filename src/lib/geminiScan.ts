@@ -35,6 +35,9 @@ export interface ScanPageOptions {
   masterPromptOverride?: string;
   isMasterPromptActive?: boolean;
   precedingDialogueSnippet?: string;
+  cropRetryLimit?: number;
+  ocrConfidenceThreshold?: number;
+  signal?: AbortSignal;
 }
 
 export interface ScanResult {
@@ -83,6 +86,9 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
     masterPromptOverride,
     isMasterPromptActive,
     precedingDialogueSnippet,
+    cropRetryLimit = 3,
+    ocrConfidenceThreshold = 0.65,
+    signal,
   } = options;
 
   if (!apiKey || apiKey.trim().length === 0) {
@@ -96,7 +102,10 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
     selectedModel: selectedModel ? String(selectedModel) : 'gemini-3.8-flash',
     readingConvention,
     includeSFX,
-    enableTargetedRetries: true,
+    enableTargetedRetries: cropRetryLimit > 0,
+    maxRetries: cropRetryLimit,
+    ocrConfidenceThreshold,
+    signal,
   });
 
   // 2. Fetch existing bubbles & Typer configurations for non-destructive rescan merge
@@ -114,7 +123,7 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
   const projectLore = !isDraft && projectId ? await getProjectLore(projectId) : null;
   const chapterIntelligence = chapterId ? await getChapterIntelligence(chapterId) : null;
 
-  const translationMap = await batchTranslateBubbles({
+  const translationBatchResult = await batchTranslateBubbles({
     bubbles: mergeResult.mergedBubbles,
     pageContext: scanResult.visualContext || '',
     apiKey,
@@ -129,7 +138,10 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
     projectLore,
     chapterIntelligence,
     rollingContextSnippet: precedingDialogueSnippet,
+    signal,
   });
+
+  const translationMap = translationBatchResult.translationMap;
 
   // 5. Apply translations to non-manually-edited bubbles
   const now = Date.now();

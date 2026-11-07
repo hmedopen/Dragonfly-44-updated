@@ -1,5 +1,10 @@
 import type { BubbleItem } from '../types/workbench';
-import type { PrefixPosition } from '../types/typers';
+import {
+  normalizeTyperPrefix,
+  type ExtractedTextDirection,
+  type PrefixPosition,
+  type TyperSymbolPosition,
+} from '../types/typers';
 
 export interface TypeRCompileOptions {
   chapterName: string;
@@ -8,6 +13,7 @@ export interface TypeRCompileOptions {
   includeIndexTags: boolean;
   includePrefixTags: boolean;
   prefixPosition?: PrefixPosition;
+  symbolPosition?: TyperSymbolPosition;
   includeSourceComments: boolean;
   includeFlagNotes: boolean;
 }
@@ -19,12 +25,14 @@ export interface RawTextExtractOptions {
   includeIndexTags: boolean;
   includePrefixTags?: boolean;
   prefixPosition?: PrefixPosition;
+  symbolPosition?: TyperSymbolPosition;
+  textDirection?: ExtractedTextDirection;
   tagPlacement?: 'suffix' | 'prefix';
 }
 
 /**
  * Extracts raw source dialogue text across pages without translation,
- * with optional TypeR tags (defaults to right/suffix format for Arabic-first workflow).
+ * with optional TypeR tags and Unicode direction isolates for reliable plain-text reading.
  */
 export function compileRawTextExtract(options: RawTextExtractOptions): string {
   const {
@@ -34,11 +42,17 @@ export function compileRawTextExtract(options: RawTextExtractOptions): string {
     includeIndexTags = true,
     includePrefixTags = true,
     prefixPosition,
+    symbolPosition,
+    textDirection = 'rtl',
     tagPlacement = 'suffix',
   } = options;
 
-  // Determine effective placement: if prefixPosition is specified, 'right' maps to suffix and 'left' maps to prefix
-  const effectivePlacement = prefixPosition ? (prefixPosition === 'left' ? 'prefix' : 'suffix') : tagPlacement;
+  const effectivePlacement = symbolPosition
+    ? symbolPosition === 'start' ? 'prefix' : 'suffix'
+    : prefixPosition
+      ? prefixPosition === 'left' ? 'prefix' : 'suffix'
+      : tagPlacement;
+  const directionStart = textDirection === 'rtl' ? '\u2067' : '\u2066';
 
   const lines: string[] = [];
 
@@ -58,16 +72,20 @@ export function compileRawTextExtract(options: RawTextExtractOptions): string {
 
     for (const bubble of sortedBubbles) {
       const idxStr = includeIndexTags ? `#${String(bubble.index).padStart(2, '0')} ` : '';
-      const tag = includePrefixTags && bubble.typerPrefix ? bubble.typerPrefix : '';
+      const tag = includePrefixTags && bubble.typerPrefix
+        ? normalizeTyperPrefix(bubble.type, bubble.typerPrefix)
+        : '';
+      const isolatedTag = tag ? `\u2066${tag}\u2069` : '';
       const source = bubble.sourceText ? bubble.sourceText.trim() : '';
 
       if (effectivePlacement === 'prefix') {
-        const prefixStr = tag ? `${tag} ` : '';
-        lines.push(`${idxStr}${prefixStr}${source}`.trim());
+        const prefixStr = isolatedTag ? `${isolatedTag} ` : '';
+        const content = `${idxStr}${prefixStr}${source}`.trim();
+        lines.push(`${directionStart}${content}\u2069`);
       } else {
-        // Right / Suffix format
-        const suffixStr = tag ? ` ${tag}` : '';
-        lines.push(`${idxStr}${source}${suffixStr}`.trim());
+        const suffixStr = isolatedTag ? ` ${isolatedTag}` : '';
+        const content = `${idxStr}${source}${suffixStr}`.trim();
+        lines.push(`${directionStart}${content}\u2069`);
       }
     }
 
@@ -79,7 +97,7 @@ export function compileRawTextExtract(options: RawTextExtractOptions): string {
 
 /**
  * Compiles dialogue bubbles across pages into Photoshop TypeR standard script format.
- * Respects includePrefixTags and prefixPosition (right vs left).
+ * Respects includePrefixTags and symbolPosition, with prefixPosition as a legacy fallback.
  */
 export function compileTypeRScript(options: TypeRCompileOptions): string {
   const {
@@ -89,6 +107,7 @@ export function compileTypeRScript(options: TypeRCompileOptions): string {
     includeIndexTags = true,
     includePrefixTags = true,
     prefixPosition = 'right',
+    symbolPosition,
     includeSourceComments = true,
     includeFlagNotes = false,
   } = options;
@@ -114,13 +133,16 @@ export function compileTypeRScript(options: TypeRCompileOptions): string {
       const idxStr = includeIndexTags ? `#${String(bubble.index).padStart(2, '0')} ` : '';
       const tag = includePrefixTags && bubble.typerPrefix ? bubble.typerPrefix : '';
       const translation = bubble.translatedText || '[NO ARABIC TRANSLATION YET]';
+      const normalizedTag = tag ? normalizeTyperPrefix(bubble.type, tag) : '';
+      const tagPosition = symbolPosition
+        ? symbolPosition === 'start' ? 'prefix' : 'suffix'
+        : prefixPosition === 'left' ? 'prefix' : 'suffix';
 
-      if (prefixPosition === 'left') {
-        const prefixStr = tag ? `${tag} ` : '';
+      if (tagPosition === 'prefix') {
+        const prefixStr = normalizedTag ? `${normalizedTag} ` : '';
         lines.push(`${idxStr}${prefixStr}${translation}`.trim());
       } else {
-        // Right position: placed after Arabic text for seamless RTL flow
-        const suffixStr = tag ? ` ${tag}` : '';
+        const suffixStr = normalizedTag ? ` ${normalizedTag}` : '';
         lines.push(`${idxStr}${translation}${suffixStr}`.trim());
       }
 

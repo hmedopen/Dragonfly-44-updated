@@ -77,10 +77,11 @@ CLASSIFICATION CONSTRAINTS:
 1. ONLY assign an ID from the list above if the text unit matches that typer's functional rules and visual appearance.
 2. If no configured typer matches, return type: "none" and typerPrefix: "".
 3. NEVER invent custom type names outside the configured list.
+4. Return the configured prefix exactly, including its colon and the colon's position.
 ${
   includeSFX
-    ? '4. Environmental sound effects (SFX) should be classified under the corresponding SFX typer.'
-    : '4. Sound Effects Filter is OFF: Completely ignore background environmental SFX unless drawn as integral vocal speech.'
+    ? '5. Environmental sound effects (SFX) should be classified under the corresponding SFX typer.'
+    : '5. Sound Effects Filter is OFF: Completely ignore background environmental SFX unless drawn as integral vocal speech.'
 }
 `.trim());
   } else {

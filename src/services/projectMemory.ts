@@ -34,7 +34,7 @@ import {
   updateKnowledgeRecordWithCas,
   resolveKnowledgeConflict,
 } from '../lib/memory/governanceEngine';
-import { buildContextBundle, formatContextBundleForPrompt } from '../lib/memory/contextRetrieval';
+import { buildContextBundle, formatContextBundleForPrompt, isScopeApplicable } from '../lib/memory/contextRetrieval';
 import { runIntegrityCheck, type IntegrityReport } from '../lib/memory/integrityChecker';
 import { strictParseJson } from '../lib/memory/memoryValidator';
 import { getMemoryDriver, type IMemoryDriver, setMemoryDriver } from './memoryRepository';
@@ -198,16 +198,20 @@ export class ProjectMemoryService {
     records: KnowledgeRecord[];
   }> {
     const all = await this.driver.getRecordsByProject(projectId);
-    const approved = all.filter((r) => r.status === 'approved');
+    // Apply scope filter in accordance with F-17
+    const scopedApproved = all.filter((r) => {
+      if (r.status !== 'approved') return false;
+      return isScopeApplicable(r.scope, scope);
+    });
     let maxRev = snapshotRevision || 1;
-    for (const r of approved) {
+    for (const r of scopedApproved) {
       if (r.revision > maxRev) maxRev = r.revision;
     }
     return {
       projectId,
       scope,
       snapshotRevision: maxRev,
-      records: approved,
+      records: scopedApproved,
     };
   }
 

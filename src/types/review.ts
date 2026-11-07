@@ -130,7 +130,7 @@ export interface ReviewAuditRecord {
   modelVersion?: string;
 }
 
-export type ReviewStrictness = 'balanced' | 'strict';
+export type ReviewStrictness = 'conservative' | 'balanced' | 'thorough';
 
 export interface ReviewJobResult {
   jobId: string;
@@ -187,6 +187,7 @@ export const ISSUE_CODES = {
   GENERIC_CLASS_UNCERTAIN: 'GENERIC_CLASS_UNCERTAIN',
 
   // Translation & Linguistic
+  MISSING_TRANSLATION: 'MISSING_TRANSLATION',
   MEANING_OMISSION: 'MEANING_OMISSION',
   MEANING_ADDITION: 'MEANING_ADDITION',
   POSSIBLE_NEGATION_MISMATCH: 'POSSIBLE_NEGATION_MISMATCH',

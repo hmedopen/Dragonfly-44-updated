@@ -63,20 +63,20 @@ export const BUBBLE_TYPE_CONFIG: Record<
   string,
   { label: string; prefix: TyperPrefix; sample: string }
 > = {
-  dialogue: { label: 'Dialogue ()', prefix: '():', sample: '()' },
-  speech_bubbles: { label: 'Speech Bubbles ""', prefix: '""', sample: '""' },
-  scream: { label: 'Scream {}', prefix: '{}:', sample: '{}' },
-  shouting: { label: 'Shouting %', prefix: '%', sample: '%' },
-  box: { label: 'Box []', prefix: '[]:', sample: '[]' },
-  square_bubbles: { label: 'Square Bubbles [ ]', prefix: '[ ]', sample: '[ ]' },
-  thought: { label: 'Thought <>', prefix: '<>:', sample: '<>' },
-  thought_bubbles: { label: 'Thought Bubbles ()', prefix: '()', sample: '()' },
-  outside_text: { label: 'Outside Text OT', prefix: 'OT', sample: 'OT' },
-  small_text: { label: 'Small Text ST', prefix: 'ST', sample: 'ST' },
-  system_messages: { label: 'System Messages $', prefix: '$', sample: '$' },
-  translator_notes: { label: 'Translator Notes T/N', prefix: 'T/N', sample: 'T/N' },
-  in_art: { label: 'In-Art #', prefix: '#:', sample: '#' },
-  sfx: { label: 'SFX #', prefix: '#:', sample: '#' },
+  dialogue: { label: 'Dialogue ""', prefix: '"":', sample: '""' },
+  speech_bubbles: { label: 'Speech Bubbles ""', prefix: '"":', sample: '""' },
+  scream: { label: 'Scream %', prefix: '%:', sample: '%' },
+  shouting: { label: 'Shouting %', prefix: '%:', sample: '%' },
+  box: { label: 'Box [ ]', prefix: '[ ]:', sample: '[ ]' },
+  square_bubbles: { label: 'Square Bubbles [ ]', prefix: '[ ]:', sample: '[ ]' },
+  thought: { label: 'Thought ()', prefix: '():', sample: '()' },
+  thought_bubbles: { label: 'Thought Bubbles ()', prefix: '():', sample: '()' },
+  outside_text: { label: 'Outside Text OT', prefix: 'OT:', sample: 'OT' },
+  small_text: { label: 'Small Text ST', prefix: 'ST:', sample: 'ST' },
+  system_messages: { label: 'System Messages $', prefix: '$:', sample: '$' },
+  translator_notes: { label: 'Translator Notes T/N', prefix: 'T/N:', sample: 'T/N' },
+  in_art: { label: 'In-Art OT', prefix: 'OT:', sample: 'OT' },
+  sfx: { label: 'SFX', prefix: 'SFX:', sample: 'SFX' },
   none: { label: 'None', prefix: '', sample: 'None' },
 };
 
@@ -197,6 +197,12 @@ export interface ModelQuotaConfig {
   isMultimodalVision: boolean;
 }
 
+/**
+ * Gemini model catalog configuration.
+ * NOTE: RPM, TPM, and RPD represent estimated provider baseline guidelines (F-24).
+ * Actual rate limits and quotas are dynamic and project/tier-dependent as per official
+ * Google AI documentation (https://ai.google.dev/gemini-api/docs/rate-limits).
+ */
 export const GEMINI_MODEL_PROFILES: Record<GeminiModelKey, ModelQuotaConfig> = {
   'gemini-3.8-flash': {
     name: 'Gemini 3.8 Flash',
@@ -471,4 +477,3 @@ export interface CompiledInstructionPackage {
   appliedRuleIds: string[];
   outputContract: string;
 }
-

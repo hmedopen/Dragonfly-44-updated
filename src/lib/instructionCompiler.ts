@@ -21,7 +21,7 @@ export interface SingleBubblePromptContext {
 }
 
 export interface InstructionCompilerOptions {
-  task: 'page_scan' | 'single_bubble' | 'visual_review' | 'chapter_review';
+  task: 'page_scan' | 'single_bubble' | 'batch_translation' | 'visual_review' | 'chapter_review';
   eloquenceLevel?: EloquenceLevel;
   translationFidelity?: TranslationFidelity;
   isHumanizerEnabled?: boolean;
@@ -154,6 +154,16 @@ Your sole mission is to translate a specific comic speech bubble into natural, e
 - Respect surrounding dialogue context and resolve any audit notes for this bubble.
 - Produce a single, polished Arabic translation without wrapping commentary.
 `.trim());
+  } else if (task === 'batch_translation') {
+    sections.push(`
+ROLE & MISSION:
+You are Dragonfly 44's dedicated Batch Dialogue Translation Engine (System #2).
+Your task is to take an ordered list of verified dialogue bubbles identified by unique IDs, and translate them into dramatic, natural Arabic scanlation format.
+- Output MUST strictly be a JSON object containing a "translations" array of objects with "id" and "translatedText".
+- Do NOT perform visual region detection or emit bounding boxes.
+- Translate every requested bubble ID faithfully without omitting or hallucinating bubble IDs.
+- Preserve emotional nuances, comedic timing, shouts, whispers, and character voice.
+`.trim());
   } else if (task === 'visual_review') {
     sections.push(`
 ROLE:
@@ -193,10 +203,11 @@ CLASSIFICATION CONSTRAINTS:
 1. ONLY assign an ID from the list above if the text unit matches that typer's functional rules and visual appearance.
 2. If no configured typer matches, return type: "none" and typerPrefix: "".
 3. NEVER invent custom type names outside the configured list.
+4. Return the configured prefix exactly, including its colon and the colon's position.
 ${
   includeSFX
-    ? '4. Environmental sound effects (SFX) should be classified under the corresponding SFX typer.'
-    : '4. Sound Effects Filter is OFF: Completely ignore background environmental SFX unless drawn as integral vocal speech.'
+    ? '5. Environmental sound effects (SFX) should be classified under the corresponding SFX typer.'
+    : '5. Sound Effects Filter is OFF: Completely ignore background environmental SFX unless drawn as integral vocal speech.'
 }
 `.trim());
     } else {

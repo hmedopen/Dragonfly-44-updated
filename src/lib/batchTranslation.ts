@@ -35,11 +35,25 @@ export interface BatchTranslateOptions {
   projectLore?: ProjectLoreLedger | null;
   chapterIntelligence?: ChapterIntelligence | null;
   rollingContextSnippet?: string;
+  signal?: AbortSignal;
+}
+
+export interface BatchTranslationItemResult {
+  rawText: string;
+  humanizedText: string;
+}
+
+export interface BatchTranslationResult {
+  success: boolean;
+  translationMap: Map<string, BatchTranslationItemResult>;
+  error?: string;
+  requestedCount: number;
+  translatedCount: number;
 }
 
 export async function batchTranslateBubbles(
   options: BatchTranslateOptions
-): Promise<Map<string, { rawText: string; humanizedText: string }>> {
+): Promise<BatchTranslationResult> {
   const {
     bubbles,
     pageContext = '',
@@ -55,25 +69,46 @@ export async function batchTranslateBubbles(
     projectLore,
     chapterIntelligence,
     rollingContextSnippet,
+    signal,
   } = options;
 
-  const translationMap = new Map<string, { rawText: string; humanizedText: string }>();
+  const translationMap = new Map<string, BatchTranslationItemResult>();
 
-  // Filter bubbles that actually have source text and need translation
-  const pendingBubbles = bubbles.filter(
-    (b) =>
-      b.sourceText &&
-      b.sourceText.trim().length > 0 &&
-      (!b.translatedText || b.translatedText.trim().length === 0 || !b.isManuallyEdited)
-  );
+  // Filter bubbles that actually have source text and need translation:
+  // Retain valid translations; retranslate only missing translations or invalidated source text.
+  // Never re-translate manually edited bubbles or already translated bubbles where source hasn't changed.
+  const pendingBubbles = bubbles.filter((b) => {
+    if (!b.sourceText || b.sourceText.trim().length === 0) return false;
+    if (b.isManuallyEdited) return false;
+    // If not translated yet, it needs translation
+    if (!b.translatedText || b.translatedText.trim().length === 0) return true;
+    // If originalSourceText is tracked and differs from current sourceText, machine translation is invalidated
+    if (b.originalSourceText && b.originalSourceText.trim() !== b.sourceText.trim()) return true;
+    return false;
+  });
 
-  if (pendingBubbles.length === 0 || !apiKey) {
-    return translationMap;
+  if (pendingBubbles.length === 0) {
+    return {
+      success: true,
+      translationMap,
+      requestedCount: 0,
+      translatedCount: 0,
+    };
   }
 
-  // Compile System #2 instructions
+  if (!apiKey || apiKey.trim().length === 0) {
+    return {
+      success: false,
+      translationMap,
+      error: 'Gemini API key is missing for batch translation.',
+      requestedCount: pendingBubbles.length,
+      translatedCount: 0,
+    };
+  }
+
+  // Compile dedicated System #2 instructions for batch translation
   const compiled = compileInstructions({
-    task: 'page_scan',
+    task: 'batch_translation',
     eloquenceLevel,
     translationFidelity,
     isHumanizerEnabled,
@@ -131,22 +166,51 @@ Return strictly pure JSON with no markdown wrapping:
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      signal,
     });
 
     if (!response.ok) {
-      console.warn(`[BatchTranslation] Translation call returned HTTP ${response.status}`);
-      return translationMap;
+      const errText = await response.text().catch(() => '');
+      const errMsg = `[BatchTranslation] Translation call returned HTTP ${response.status}: ${errText}`;
+      console.warn(errMsg);
+      return {
+        success: false,
+        translationMap,
+        error: errMsg,
+        requestedCount: pendingBubbles.length,
+        translatedCount: 0,
+      };
     }
 
     const result = await response.json();
-    const rawContent = result?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+    const rawContent = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!rawContent) {
+      return {
+        success: false,
+        translationMap,
+        error: 'Model returned candidate without content parts.',
+        requestedCount: pendingBubbles.length,
+        translatedCount: 0,
+      };
+    }
+
     const cleanJson = extractCleanJson(rawContent);
     const parsed = JSON.parse(cleanJson);
 
-    const items = Array.isArray(parsed.translations) ? parsed.translations : [];
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.translations)) {
+      return {
+        success: false,
+        translationMap,
+        error: 'Model response missing "translations" array in batch translation schema.',
+        requestedCount: pendingBubbles.length,
+        translatedCount: 0,
+      };
+    }
+
+    const items = parsed.translations;
 
     for (const item of items) {
-      if (item.id && typeof item.translatedText === 'string') {
+      if (item && item.id && typeof item.translatedText === 'string') {
         const rawArabic = item.translatedText.trim();
         const humanizedArabic = isHumanizerEnabled
           ? humanizeArabicText(rawArabic, {
@@ -163,9 +227,31 @@ Return strictly pure JSON with no markdown wrapping:
         });
       }
     }
-  } catch (err) {
-    console.warn('[BatchTranslation] Error during batch translation pass:', err);
-  }
 
-  return translationMap;
+    return {
+      success: translationMap.size > 0 || pendingBubbles.length === 0,
+      translationMap,
+      requestedCount: pendingBubbles.length,
+      translatedCount: translationMap.size,
+    };
+  } catch (err: any) {
+    if (signal?.aborted || err?.name === 'AbortError') {
+      return {
+        success: false,
+        translationMap,
+        error: 'Batch translation cancelled by user.',
+        requestedCount: pendingBubbles.length,
+        translatedCount: 0,
+      };
+    }
+    const errMsg = `[BatchTranslation] Error during batch translation pass: ${err?.message || String(err)}`;
+    console.warn(errMsg);
+    return {
+      success: false,
+      translationMap,
+      error: errMsg,
+      requestedCount: pendingBubbles.length,
+      translatedCount: 0,
+    };
+  }
 }
