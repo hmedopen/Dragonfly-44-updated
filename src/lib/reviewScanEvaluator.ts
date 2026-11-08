@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #4 — Review & Quality Control Engine
+ * Folio Script: System #4 — Review & Quality Control Engine
  * Visual, OCR, Geometry, Association & Reading Order Evaluator
  *
  * Implements Section 9 of the System #4 specification:
@@ -82,7 +82,7 @@ export async function evaluateVisualAndScan(
 
   const promptText = `
 ROLE & TASK:
-You are Dragonfly 44's Chief Visual QC & Scan Reviewer.
+You are Folio Script's Chief Visual QC & Scan Reviewer.
 Inspect this comic/manga page artwork against the provided detected dialogue units and panel structures.
 Find meaningful visual, OCR, geometry, reading-order, and generic classification defects:
 

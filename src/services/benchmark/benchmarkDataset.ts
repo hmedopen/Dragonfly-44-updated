@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #6 — Settings, Workspace & Quality Benchmark Engine
+ * Folio Script: System #6 — Settings, Workspace & Quality Benchmark Engine
  * Curated Benchmark Dataset Manifest & Ground-Truth Test Cases
  * 
  * Versioned, rights-governed ground truth spanning Systems #2–#6.
@@ -10,8 +10,8 @@ import type { BenchmarkDatasetManifest } from '../../types/benchmark';
 export const CORE_BENCHMARK_DATASET: BenchmarkDatasetManifest = {
   dataset_id: 'dragonfly_core_regression',
   version: '1.0',
-  name: 'Dragonfly 44 Core Regression & Quality Suite',
-  license: 'Proprietary / Dragonfly 44 Internal Test Harness',
+  name: 'Folio Script Core Regression & Quality Suite',
+  license: 'Proprietary / Folio Script Internal Test Harness',
   source_provenance: 'Curated canonical fixtures from Systems #2, #3, #4, #5 and System #6 Workspace specifications',
   description: 'Locked regression dataset measuring OCR, translation, review precision, memory invariants, and workspace transforms.',
   createdAt: 1730000000000,

@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #6 — Settings, Workspace & Quality Benchmark Engine
+ * Folio Script: System #6 — Settings, Workspace & Quality Benchmark Engine
  * Quality Benchmark Runner & Engine Orchestrator
  * 
  * Executes reproducible benchmarks against locked datasets, enforces hard gates,

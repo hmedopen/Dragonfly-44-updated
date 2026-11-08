@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #4 — Review & Quality Control Engine
+ * Folio Script: System #4 — Review & Quality Control Engine
  * Comprehensive Benchmark Suite & Acceptance Test Runner
  *
  * Verifies:
@@ -16,7 +16,7 @@
 import assert from 'node:assert';
 
 console.log('====================================================');
-console.log('DRAGONFLY 44 — SYSTEM #4 REVIEW & QC BENCHMARK SUITE');
+console.log('FOLIO SCRIPT — SYSTEM #4 REVIEW & QC BENCHMARK SUITE');
 console.log('====================================================\n');
 
 // ----------------------------------------------------
@@ -246,7 +246,7 @@ function checkCorrectionEligibility(finding, correction) {
   if (correction.targetField === 'type') {
     return {
       isEligible: false,
-      reason: 'Custom typer assignment is strictly manual-only in Dragonfly 44.',
+      reason: 'Custom typer assignment is strictly manual-only in Folio Script.',
     };
   }
   if (

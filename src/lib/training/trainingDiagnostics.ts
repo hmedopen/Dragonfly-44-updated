@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44 - Training Studio Diagnostics & Telemetry Ledger
+ * Folio Script - Training Studio Diagnostics & Telemetry Ledger
  * Tracks which Reference Sets, Examples, and Instructions were dispatched to Gemini.
  * Sanitizes sensitive data (API keys) and provides inspection capabilities for developers.
  */

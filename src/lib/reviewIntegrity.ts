@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #4 — Review & Quality Control Engine
+ * Folio Script: System #4 — Review & Quality Control Engine
  * Deterministic Integrity & Local Invariants Evaluator
  *
  * Fast, local, zero-model-cost structural verification:

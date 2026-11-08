@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #3 — Manga Scanning & Classification Engine
+ * Folio Script: System #3 — Manga Scanning & Classification Engine
  * Non-Destructive Rescan & Multi-Signal Merge Engine
  * 
  * Enforces:

@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #5 — Integrity Checker & Diagnostic Engine
+ * Folio Script: System #5 — Integrity Checker & Diagnostic Engine
  * 
  * Implements the system integrity checks specified in Appendix B:
  * - Missing or invalid project IDs

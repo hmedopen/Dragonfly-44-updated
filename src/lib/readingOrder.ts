@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #3 — Manga Scanning & Classification Engine
+ * Folio Script: System #3 — Manga Scanning & Classification Engine
  * Hierarchical Reading Order Inference Engine
  * 
  * Implements hierarchical reading order: Page -> Panels -> Intra-panel Regions.

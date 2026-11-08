@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #4 — Review & Quality Control Engine
+ * Folio Script: System #4 — Review & Quality Control Engine
  * Review Snapshot & Optimistic Concurrency Manager
  *
  * Captures immutable review snapshots prior to evaluation.

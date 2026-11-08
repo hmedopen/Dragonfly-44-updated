@@ -156,7 +156,7 @@ export const TrainingStudioScreen: React.FC = () => {
           <div>
             <div className="flex items-center gap-2">
               <h1 className="font-mono text-xs font-bold tracking-wider uppercase text-zinc-100">
-                DRAGONFLY 44 // TRAINING STUDIO
+                FOLIO SCRIPT // TRAINING STUDIO
               </h1>
               <span className="px-1.5 py-0.2 rounded text-[9px] font-mono bg-amber-500/10 text-amber-400 border border-amber-500/30 font-semibold">
                 DEV ONLY

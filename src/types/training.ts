@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44 - Training Studio Core Types
+ * Folio Script - Training Studio Core Types
  * Defines data models for Reference Sets, Examples, Visual Annotations,
  * Task Associations, and Agent Integration.
  */

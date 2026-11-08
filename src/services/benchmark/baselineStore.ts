@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #6 — Settings, Workspace & Quality Benchmark Engine
+ * Folio Script: System #6 — Settings, Workspace & Quality Benchmark Engine
  * Baseline Store & Regression Governance Engine
  * 
  * Manages immutable reference baselines, versioned promotions,
@@ -14,7 +14,7 @@ const ACTIVE_BASELINE_KEY = 'dragonfly44_bench_active_baseline_v6';
 // Shipped initial curated reference baseline
 export const INITIAL_CURATED_BASELINE: BenchmarkBaseline = {
   baseline_id: 'dragonfly44_baseline_v1',
-  name: 'Dragonfly 44 Gold Reference v1.0',
+  name: 'Folio Script Gold Reference v1.0',
   dataset_id: 'dragonfly_core_regression',
   dataset_version: '1.0',
   build_version: '0.5.0',

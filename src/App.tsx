@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { ChapterList } from './components/ChapterList';
 import { FolderGrid } from './components/FolderGrid';
 import { Workbench } from './components/Workbench/Workbench';
-import { TitleBar } from './components/TitleBar';
+
 import { SettingsModal } from './components/Settings/SettingsModal';
 import { BenchmarkScreen } from './components/Benchmark/BenchmarkScreen';
 import { TrainingStudioModal } from './components/Training/TrainingStudioModal';
@@ -10,7 +10,7 @@ import { isTrainingStudioEnabled } from './lib/training/env';
 import { useWorkbenchStore } from './store/workbenchStore';
 import { initialFolders } from './mockData';
 import type { Folder, Chapter, PageMetadata } from './types';
-import { Sparkles } from 'lucide-react';
+import { Sparkles, Activity, Sliders } from 'lucide-react';
 import { pickImageFiles, ingestImageFiles, formatDraftName } from './services/fileIngestion';
 import { deletePageBlob, runIdempotentStorageMigration } from './services/db';
 
@@ -492,37 +492,50 @@ export function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-[#09090b] text-zinc-100 overflow-hidden font-sans select-none">
-      {/* Desktop Frameless Window Titlebar */}
-      <TitleBar
-        activeFolderName={activeFolder ? activeFolder.name : 'No project selected'}
-        onOpenSettings={() => setIsGlobalSettingsOpen(true)}
-        onOpenBenchmark={() => setIsBenchmarkOpen(true)}
-        onOpenTrainingStudio={() => setIsTrainingStudioOpen(true)}
-      />
-
+    <div className="flex flex-col h-screen w-screen bg-black text-zinc-100 overflow-hidden font-sans select-none">
       {/* Main Workspace */}
       <div className="flex-1 flex flex-col p-6 overflow-hidden">
-        {/* Active Project Title & Developer Toolbar */}
-        <div className="mb-4 flex items-center justify-between">
+        {/* Active Project Title & Workspace Action Toolbar */}
+        <div className="mb-4 flex items-center justify-between shrink-0">
           <h1 className={`text-2xl font-medium tracking-tight capitalize ${
-            activeFolder ? 'text-white' : 'text-zinc-600'
+            activeFolder ? "text-white" : "text-zinc-600"
           }`}>
-            {activeFolder ? activeFolder.name : 'No project selected'}
+            {activeFolder ? activeFolder.name : "No project selected"}
           </h1>
 
-          {isTrainingStudioEnabled() && (
+          <div className="flex items-center gap-2">
+            {isTrainingStudioEnabled() && (
+              <button
+                type="button"
+                onClick={() => setIsTrainingStudioOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 font-mono text-xs font-semibold shadow-lg shadow-amber-950/20 transition-all cursor-pointer"
+                title="Open Training Studio (Dev Only)"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+                <span>Training Studio</span>
+                <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 font-bold border border-amber-500/40">DEV</span>
+              </button>
+            )}
+
             <button
               type="button"
-              onClick={() => setIsTrainingStudioOpen(true)}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 font-mono text-xs font-semibold shadow-lg shadow-amber-950/20 transition-all cursor-pointer"
-              title="Open Training Studio to manage Reference Sets and visual annotations"
+              onClick={() => setIsBenchmarkOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-mono text-zinc-300 hover:text-white bg-zinc-900/80 hover:bg-zinc-800 border border-white/[0.08] transition-colors cursor-pointer"
+              title="Quality Benchmark Engine"
             >
-              <Sparkles className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
-              <span>Training Studio</span>
-              <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 font-bold border border-amber-500/40">DEV</span>
+              <Activity className="w-3.5 h-3.5 text-amber-400" />
+              <span>Benchmark</span>
             </button>
-          )}
+
+            <button
+              type="button"
+              onClick={() => setIsGlobalSettingsOpen(true)}
+              className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-800/80 border border-white/[0.08] transition-colors cursor-pointer"
+              title="Settings (Ctrl+,)"
+            >
+              <Sliders className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* 2-Column Split: Chapters Hub on Left, Folder Organization on Right */}

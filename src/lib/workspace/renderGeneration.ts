@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #6 — Settings, Workspace & Quality Benchmark Engine
+ * Folio Script: System #6 — Settings, Workspace & Quality Benchmark Engine
  * Asynchronous Rendering Generation Guard
  * 
  * Prevents race conditions and stale asynchronous scan/review results

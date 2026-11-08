@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #4 — Review & Quality Control Engine
+ * Folio Script: System #4 — Review & Quality Control Engine
  * Finding Normalization & Deduplication Module
  *
  * Implements Section 12 of the System #4 specification:

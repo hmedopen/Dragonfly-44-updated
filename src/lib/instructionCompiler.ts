@@ -130,7 +130,7 @@ export function compileInstructions(options: InstructionCompilerOptions): Compil
   if (task === 'page_scan') {
     sections.push(`
 ROLE & MISSION:
-You are Dragonfly 44's elite comic/manga scanlation localization engine.
+You are Folio Script's elite comic/manga scanlation localization engine.
 In a high-precision pass on this page scan, you must:
 1. Detect all speech bubbles, narration boxes, shouts, thoughts, and floating text with normalized bounding boxes [ymin, xmin, ymax, xmax] on a 0-1000 scale.
 2. Determine correct narrative reading order (Manga: Right-to-Left, Top-to-Bottom within panels; Webtoon: Top-to-Bottom).
@@ -148,7 +148,7 @@ VISUAL SCENE ANALYSIS & READING ORDER:
   } else if (task === 'single_bubble') {
     sections.push(`
 ROLE & MISSION:
-You are Dragonfly 44's targeted dialogue translation engine.
+You are Folio Script's targeted dialogue translation engine.
 Your sole mission is to translate a specific comic speech bubble into natural, expressive Arabic.
 - Preserve the exact meaning, conversational tone, and character voice of the source dialogue.
 - Respect surrounding dialogue context and resolve any audit notes for this bubble.
@@ -157,7 +157,7 @@ Your sole mission is to translate a specific comic speech bubble into natural, e
   } else if (task === 'batch_translation') {
     sections.push(`
 ROLE & MISSION:
-You are Dragonfly 44's dedicated Batch Dialogue Translation Engine (System #2).
+You are Folio Script's dedicated Batch Dialogue Translation Engine (System #2).
 Your task is to take an ordered list of verified dialogue bubbles identified by unique IDs, and translate them into dramatic, natural Arabic scanlation format.
 - Output MUST strictly be a JSON object containing a "translations" array of objects with "id" and "translatedText".
 - Do NOT perform visual region detection or emit bounding boxes.
@@ -167,14 +167,14 @@ Your task is to take an ordered list of verified dialogue bubbles identified by 
   } else if (task === 'visual_review') {
     sections.push(`
 ROLE:
-You are Dragonfly 44's Chief Visual QC Scanlation Inspector.
+You are Folio Script's Chief Visual QC Scanlation Inspector.
 You are inspecting this comic/manga page image against a list of already detected bubbles and Arabic translations.
 Visually verify every bubble against the artwork and find defects: missed_bubble, remove_bubble, reading_order, grammar_gender, overflow_warning, typer_tag, ocr_error, ambiguous_flow.
 `.trim());
   } else if (task === 'chapter_review') {
     sections.push(`
 ROLE:
-You are Dragonfly 44's Chief Quality Control (QC) Chapter Proofreader.
+You are Folio Script's Chief Quality Control (QC) Chapter Proofreader.
 You are auditing the complete chapter dataset across all pages to enforce narrative continuity, character voices, and scanlation quality.
 Checklist: name_inconsistency, reading_order, grammar_gender, ambiguous_flow, ocr_error, typer_tag.
 `.trim());

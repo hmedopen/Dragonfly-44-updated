@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #3 — Manga Scanning & Classification Engine
+ * Folio Script: System #3 — Manga Scanning & Classification Engine
  * Comprehensive Verification Benchmark & Acceptance Test Suite
  *
  * Verifies:
@@ -15,7 +15,7 @@
 import assert from 'node:assert';
 
 console.log('====================================================');
-console.log('DRAGONFLY 44 — SYSTEM #3 SCANNING BENCHMARK SUITE');
+console.log('FOLIO SCRIPT — SYSTEM #3 SCANNING BENCHMARK SUITE');
 console.log('====================================================\n');
 
 // ----------------------------------------------------

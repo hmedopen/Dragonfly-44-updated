@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44 — Restored Scanning Architecture Verification Suite
+ * Folio Script — Restored Scanning Architecture Verification Suite
  * 
  * Verifies production modules restored to commit 42de509b648cd4b9f87ccab98ea7516e5669e7de:
  * 1. scanPromptBuilder.ts (Prompt & pure JSON schema)
@@ -38,7 +38,7 @@ import type { BubbleItem } from '../types/workbench';
 import { DEFAULT_TYPER_SETTINGS } from '../types/typers';
 
 console.log('====================================================');
-console.log('DRAGONFLY 44: RESTORED SCANNER PRODUCTION VERIFICATION');
+console.log('FOLIO SCRIPT: RESTORED SCANNER PRODUCTION VERIFICATION');
 console.log('====================================================\n');
 
 // ----------------------------------------------------

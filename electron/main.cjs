@@ -3,21 +3,25 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 
+app.name = 'Folio Script';
+
 let mainWindow;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
+    title: 'Folio Script',
     width: 1280,
     height: 820,
     minWidth: 1000,
     minHeight: 650,
-    backgroundColor: '#09090b',
+    backgroundColor: '#000000',
     titleBarStyle: 'hidden',
     titleBarOverlay: {
-      color: '#09090b',
+      color: '#000000',
       symbolColor: '#a1a1aa',
-      height: 38,
+      height: 40,
     },
+    icon: path.join(__dirname, '../public/icon.ico'),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,

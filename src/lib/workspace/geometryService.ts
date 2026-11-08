@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #6 — Settings, Workspace & Quality Benchmark Engine
+ * Folio Script: System #6 — Settings, Workspace & Quality Benchmark Engine
  * Canonical Workspace Geometry Service & Transform Pipeline
  * 
  * Implements the single composed source-to-screen transform and its exact inverse:

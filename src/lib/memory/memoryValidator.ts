@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #5 — Schema & Semantic Validator
+ * Folio Script: System #5 — Schema & Semantic Validator
  * 
  * Implements strict JSON parsing, envelope validation, schema & bounds checking,
  * semantic state transition validation, and prompt-injection detection.

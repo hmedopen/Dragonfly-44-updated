@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #5 — Governance Engine
+ * Folio Script: System #5 — Governance Engine
  * 
  * Enforces approval policies, state transitions, assertional conflict resolution,
  * protected user-data immunity, and optimistic compare-and-swap (CAS) commits.

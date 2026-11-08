@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44 - Development Mode & Feature Flag Verification
+ * Folio Script - Development Mode & Feature Flag Verification
  * Ensures Training Studio is completely restricted to development builds.
  */
 
@@ -49,7 +49,7 @@ export function isDevelopmentMode(): boolean {
     return true;
   }
 
-  // 3. Localhost / local loopback development server check (server.cjs / Dragonfly 44.exe launcher)
+  // 3. Localhost / local loopback development server check (server.cjs / Folio Script.exe launcher)
   if (typeof window !== 'undefined' && window.location) {
     const host = window.location.hostname;
     if (

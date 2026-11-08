@@ -10,9 +10,12 @@ const trainingStudioBridge = isDev
     }
   : undefined;
 
-contextBridge.exposeInMainWorld('dragonfly', {
+const appBridge = {
   platform: process.platform,
-  version: '0.5.0',
+  version: '1.0.0',
   isDev,
   trainingStudio: trainingStudioBridge,
-});
+};
+
+contextBridge.exposeInMainWorld('folioScript', appBridge);
+contextBridge.exposeInMainWorld('dragonfly', appBridge);

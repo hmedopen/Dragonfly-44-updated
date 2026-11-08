@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44 - Training Studio Gemini Prompt Injection & Context Assembler
+ * Folio Script - Training Studio Gemini Prompt Injection & Context Assembler
  * Selects task-specific enabled Reference Sets and examples, enforces image/token budgets,
  * constructs multimodal Gemini API parts, and records diagnostic telemetry.
  */
@@ -106,7 +106,7 @@ export async function assembleTaskTrainingContext(
 
   // 4. Assemble system instruction directives
   const instructionBlocks: string[] = [];
-  instructionBlocks.push('\n=== DRAGONFLY 44 TRAINING STUDIO — ACTIVE REFERENCE INSTRUCTIONS ===');
+  instructionBlocks.push('\n=== FOLIO SCRIPT TRAINING STUDIO — ACTIVE REFERENCE INSTRUCTIONS ===');
 
   // Inject authoritative task architectural rules
   const projectContext = formatProjectContextForPrompt([task]);

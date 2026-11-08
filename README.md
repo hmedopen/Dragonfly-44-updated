@@ -1,32 +1,41 @@
-# React + TypeScript + Vite
+# Folio Script
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+**Folio Script** is an elite comic and manga scanlation studio and desktop localization workbench designed for high-precision chapter organization, visual balloon detection, AI-powered contextual translation, and automated typesetting preparation.
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- **Multi-Chapter Organization:** Manage scanlation projects, chapters, and drafts with instant drag-and-drop page importing.
+- **Precision Scanning & Classification:** Automated visual speech bubble, narration box, shout, and sound effect region detection with sub-pixel bounding box normalization.
+- **Contextual Multimodal Translation:** Arabic scanlation engine leveraging Gemini multimodal models with speaker voice attribution and cultural localization.
+- **TypeR Export:** Direct generation of standard TypeR classification scripts for Photoshop and desktop typesetting pipelines.
+- **Quality Benchmark Engine:** Automated regression verification suite to ensure translation fidelity, orthography, and speech bubble geometry integrity.
+- **Training Studio:** Curate visual reference datasets, ground-truth annotations, and double-balloon training directives.
 
-## React Compiler
+## Tech Stack
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- **Desktop Shell:** Electron with native dark title bar overlay integration.
+- **UI Architecture:** React 19, TypeScript, Tailwind CSS, Lucide Icons, Framer Motion.
+- **Storage Layer:** IndexedDB with idempotent migrations and local blob caching.
+- **Build Tooling:** Vite, TypeScript.
 
-## Expanding the Oxlint configuration
+## Getting Started
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+### Development
 
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+# Start Vite development server
+npm run dev
+
+# Start Electron desktop app connected to dev server
+npm run desktop
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+### Production Build
+
+```bash
+# Build web bundle
+npm run build
+
+# Package Windows desktop executable
+npm run package:exe
+```

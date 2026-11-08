@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #3 — Manga Scanning & Classification Engine
+ * Folio Script: System #3 — Manga Scanning & Classification Engine
  * Canonical Data Contracts
  * 
  * Defines the core entities for page analysis, coordinate transforms,

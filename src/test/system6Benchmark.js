@@ -1,12 +1,12 @@
 /**
- * Dragonfly 44: System #6 — Settings, Workspace & Quality Benchmark Engine
+ * Folio Script: System #6 — Settings, Workspace & Quality Benchmark Engine
  * Complete Verification & Invariant Benchmark Suite
  */
 
 import assert from 'node:assert';
 
 console.log('====================================================');
-console.log('DRAGONFLY 44 — SYSTEM #6 SETTINGS, WORKSPACE & BENCHMARK');
+console.log('FOLIO SCRIPT — SYSTEM #6 SETTINGS, WORKSPACE & BENCHMARK');
 console.log('====================================================\n');
 
 // ----------------------------------------------------

@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #5 — Project Memory & AI Data Integrity Engine
+ * Folio Script: System #5 — Project Memory & AI Data Integrity Engine
  * Comprehensive Benchmark Suite & Acceptance Test Runner
  *
  * Verifies:
@@ -20,7 +20,7 @@
 import assert from 'node:assert';
 
 console.log('====================================================');
-console.log('DRAGONFLY 44 — SYSTEM #5 MEMORY & INTEGRITY BENCHMARK');
+console.log('FOLIO SCRIPT — SYSTEM #5 MEMORY & INTEGRITY BENCHMARK');
 console.log('====================================================\n');
 
 // ----------------------------------------------------
@@ -791,7 +791,7 @@ console.log('\n[Test 12] End-to-End System Integration & Legacy Projections...')
   assert.strictEqual(legacyLore.terms.length, 1);
   assert.strictEqual(legacyLore.terms[0].termArabic, 'دانتيان');
 
-  console.log('  ✓ System #5 projection maintains 100% backward compatibility with existing Dragonfly 44 consumers.');
+  console.log('  ✓ System #5 projection maintains 100% backward compatibility with existing Folio Script consumers.');
 }
 
 console.log('\n====================================================');

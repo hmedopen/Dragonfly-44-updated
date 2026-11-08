@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #3 — Manga Scanning & Classification Engine
+ * Folio Script: System #3 — Manga Scanning & Classification Engine
  * Targeted Crop Retry Engine
  * 
  * Selectively crops and re-recognizes ambiguous, clipped, or low-confidence

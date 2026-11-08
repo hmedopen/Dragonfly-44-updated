@@ -1,7 +1,7 @@
 import assert from 'node:assert';
 
 console.log('====================================================');
-console.log('DRAGONFLY 44 — SYSTEM #2 TRANSLATION BENCHMARK SUITE');
+console.log('FOLIO SCRIPT — SYSTEM #2 TRANSLATION BENCHMARK SUITE');
 console.log('====================================================\n');
 
 // ----------------------------------------------------

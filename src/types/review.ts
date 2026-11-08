@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #4 — Review & Quality Control Engine
+ * Folio Script: System #4 — Review & Quality Control Engine
  * Canonical Data Contracts
  *
  * Defines the complete review evidence model, confidence dimensions,

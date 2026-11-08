@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44 - Training Package V1 Specification
+ * Folio Script - Training Package V1 Specification
  * Canonical schema for Agent Integration handoff, package import/export,
  * and ground-truth validation.
  */

@@ -1,6 +1,6 @@
 import assert from 'node:assert';
 
-console.log('--- RUNNING DRAGONFLY 44 VERIFICATION TESTS ---');
+console.log('--- RUNNING FOLIO SCRIPT VERIFICATION TESTS ---');
 
 // 1. Natural Alphanumeric Sorting
 function sortFilesNaturally(files) {
@@ -117,7 +117,7 @@ function compileTypeRScript(options) {
   const lines = [];
   lines.push('// ==========================================');
   lines.push(`// TYPER TRANSLATION SCRIPT // ${chapterName.toUpperCase()}`);
-  lines.push('// COMPILED BY DRAGONFLY 44');
+  lines.push('// COMPILED BY FOLIO SCRIPT');
   lines.push('// ==========================================\n');
 
   for (const page of pages) {
@@ -209,7 +209,7 @@ function compileTypeRScript(options) {
 function buildScanSystemInstructionMock(options) {
   const { eloquenceLevel, includeSFX, masterPromptOverride, isMasterPromptActive } = options;
   const sections = [];
-  sections.push('DRAGONFLY 44 SCAN ENGINE');
+  sections.push('FOLIO SCRIPT SCAN ENGINE');
   if (eloquenceLevel === 3) sections.push('Level 3: فصحى جزلة وبليغة');
   if (includeSFX) sections.push('Sound effects: ON');
   if (isMasterPromptActive && masterPromptOverride) {

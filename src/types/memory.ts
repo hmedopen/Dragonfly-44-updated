@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #5 — Project Memory & AI Data Integrity Engine
+ * Folio Script: System #5 — Project Memory & AI Data Integrity Engine
  * Unified Domain Models, Data Contracts, Taxonomies, and Error Codes
  */
 

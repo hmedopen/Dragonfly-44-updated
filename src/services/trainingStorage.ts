@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44 - Training Studio Storage Service
+ * Folio Script - Training Studio Storage Service
  * Handles persistence for Reference Sets and image Blobs in IndexedDB.
  * Completely empty initial state by default.
  */

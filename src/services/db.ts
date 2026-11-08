@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44 - Unified Storage Layer (IndexedDB v4)
+ * Folio Script - Unified Storage Layer (IndexedDB v4)
  * Database: dragonfly44_db
  * Stores:
  *   - page_blobs: Raw image binary objects (Blob / File) directly

@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #5 — Project Memory & AI Data Integrity Master Service
+ * Folio Script: System #5 — Project Memory & AI Data Integrity Master Service
  * 
  * Master facade exposing canonical API contracts, candidate lifecycle,
  * transactional commits, scoped retrieval, integrity auditing, and backward-compatible projections.

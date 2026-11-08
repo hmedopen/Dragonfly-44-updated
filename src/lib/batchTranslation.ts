@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #2 — Translation Engine Helper
+ * Folio Script: System #2 — Translation Engine Helper
  * Batch Dialogue Translator
  * 
  * Takes verified source texts produced by System #3 and translates them

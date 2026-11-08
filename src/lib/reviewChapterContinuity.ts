@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #4 — Review & Quality Control Engine
+ * Folio Script: System #4 — Review & Quality Control Engine
  * Chapter Continuity Evaluator
  * 
  * Performs cross-page continuity analysis across an entire chapter:

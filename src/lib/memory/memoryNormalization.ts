@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #5 — Normalization Engine
+ * Folio Script: System #5 — Normalization Engine
  * 
  * Enforces deterministic, idempotent normalization across canonical keys,
  * Unicode text, language identifiers, and deduplication/idempotency keys.

@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #5 — Scoped Memory Retrieval & Context Assembly
+ * Folio Script: System #5 — Scoped Memory Retrieval & Context Assembly
  * 
  * Builds bounded, immutable, relevance-ranked, scoped context bundles for System #2
  * (translation), System #3 (scan interpretation), System #4 (QC review), and export.

@@ -49,5 +49,5 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  console.log(`Dragonfly 44 core active on http://127.0.0.1:${PORT}`);
+  console.log(`Folio Script core active on http://127.0.0.1:${PORT}`);
 });

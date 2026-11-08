@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #5 — Memory Repository & Storage Layer
+ * Folio Script: System #5 — Memory Repository & Storage Layer
  * 
  * Provides concurrency-safe, versioned, transactional persistence for Knowledge Records,
  * Revisions, Candidates, Audit Events, Conflicts, Quarantine, and Idempotency logs.

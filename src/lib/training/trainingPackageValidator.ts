@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44 - Training Package Validator & Normalizer
+ * Folio Script - Training Package Validator & Normalizer
  * Validates DragonflyTrainingPackageV1 manifests, verifies bounding box coordinates,
  * enforces unverified status on agent annotations, and maps packages to Reference Sets.
  */

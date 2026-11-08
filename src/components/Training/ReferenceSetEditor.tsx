@@ -372,7 +372,7 @@ export const ReferenceSetEditor: React.FC<ReferenceSetEditorProps> = ({
               <Info className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
               <div>
                 Authoritative architectural invariants (such as coordinate constraints, non-destructive merges, and
-                safe typing) are maintained by Dragonfly 44's project context engine and cannot be superseded by
+                safe typing) are maintained by Folio Script's project context engine and cannot be superseded by
                 instruction notes.
               </div>
             </div>

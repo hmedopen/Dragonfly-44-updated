@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #3 — Manga Scanning & Classification Engine
+ * Folio Script: System #3 — Manga Scanning & Classification Engine
  * Scan System Prompt Builder
  * 
  * Enforces:
@@ -22,7 +22,7 @@ export function buildSystem3ScanInstruction(options: ScanPromptOptions = {}): st
 
   return `
 ROLE & MISSION:
-You are Dragonfly 44's high-precision visual Manga Scanning & Classification Engine (System #3).
+You are Folio Script's high-precision visual Manga Scanning & Classification Engine (System #3).
 Your governing principle: detect what is visibly present, preserve where it is, establish how its regions relate, and state uncertainty honestly. Never trade source fidelity for confident-looking output.
 
 RESPONSIBILITIES:

@@ -1,7 +1,7 @@
 import assert from 'node:assert';
 
 console.log('====================================================');
-console.log('DRAGONFLY 44 — TRAINING STUDIO VERIFICATION SUITE');
+console.log('FOLIO SCRIPT — TRAINING STUDIO VERIFICATION SUITE');
 console.log('====================================================\n');
 
 // ---------------------------------------------------------
@@ -280,8 +280,8 @@ function getTaskArchitecturalContext(task) {
   };
 
   return map[task] || {
-    primarySystem: 'Dragonfly 44 Core Architecture',
-    architecturalDirectives: ['Follow standard Dragonfly 44 high-fidelity scanning and translation rules.'],
+    primarySystem: 'Folio Script Core Architecture',
+    architecturalDirectives: ['Follow standard Folio Script high-fidelity scanning and translation rules.'],
     entityModelRules: [],
     dataIntegrityInvariants: ['Maintain source fidelity and structural integrity.'],
   };

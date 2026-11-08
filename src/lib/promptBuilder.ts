@@ -36,7 +36,7 @@ export function buildScanSystemInstruction(options: ScanPromptBuildOptions): str
   // 1. Role & Mission
   sections.push(`
 ROLE & MISSION:
-You are Dragonfly 44's elite scanlation localization engine.
+You are Folio Script's elite scanlation localization engine.
 In a high-precision multimodal pass on this comic/manga page scan, you must:
 1. Detect all dialogue bubbles, narration boxes, shouts, thoughts, and floating text with normalized bounding boxes [ymin, xmin, ymax, xmax] on a 0-1000 scale.
 2. Determine correct panel reading order (Manga: Right-to-Left, Top-to-Bottom within panels; Webtoon: Top-to-Bottom).
@@ -217,7 +217,7 @@ export function buildVisualPageReviewInstruction(options: VisualReviewPromptOpti
 
   sections.push(`
 ROLE:
-You are Dragonfly 44's Chief Visual QC Scanlation Inspector.
+You are Folio Script's Chief Visual QC Scanlation Inspector.
 You are inspecting this comic/manga page image against a list of already detected bubbles and Arabic translations.
 
 YOUR OBJECTIVE:
@@ -310,7 +310,7 @@ export function buildChapterReviewSystemInstruction(options: ChapterReviewPrompt
 
   sections.push(`
 ROLE:
-You are Dragonfly 44's Chief Quality Control (QC) Chapter Proofreader.
+You are Folio Script's Chief Quality Control (QC) Chapter Proofreader.
 You are auditing the complete chapter dataset across all pages to enforce narrative continuity, character voices, and scanlation quality.
 
 AUDIT CHECKLIST:

@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #4 — Review & Quality Control Engine
+ * Folio Script: System #4 — Review & Quality Control Engine
  * Translation, Linguistic & Instruction-Compliance Evaluator
  *
  * Implements Section 10 of the System #4 specification:
@@ -182,7 +182,7 @@ export async function evaluateTranslationAndLinguistics(
 
   const promptText = `
 ROLE & TASK:
-You are Dragonfly 44's Senior Localization & Linguistic Quality Control Evaluator.
+You are Folio Script's Senior Localization & Linguistic Quality Control Evaluator.
 Audit the following dialogue translation units for genuine translation and linguistic defects.
 
 QUALITY PRINCIPLES:

@@ -98,7 +98,7 @@ export const BenchmarkScreen: React.FC<BenchmarkScreenProps> = ({ isOpen, onClos
             <div>
               <div className="flex items-center gap-2">
                 <span className="font-mono text-xs font-bold tracking-wider uppercase text-zinc-100">
-                  DRAGONFLY 44 // QUALITY BENCHMARK ENGINE
+                  FOLIO SCRIPT // QUALITY BENCHMARK ENGINE
                 </span>
                 <span className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-zinc-800 text-zinc-400 border border-white/[0.06]">
                   SYSTEM #6
@@ -612,7 +612,7 @@ export const BenchmarkScreen: React.FC<BenchmarkScreenProps> = ({ isOpen, onClos
         {/* Footer */}
         <div className="h-12 px-6 border-t border-white/[0.08] bg-[#08080b] flex items-center justify-between shrink-0">
           <span className="text-[10px] font-mono text-zinc-500">
-            DRAGONFLY 44 QUALITY ENGINE // v0.5.0
+            FOLIO SCRIPT QUALITY ENGINE // v1.0.0
           </span>
           <button
             type="button"

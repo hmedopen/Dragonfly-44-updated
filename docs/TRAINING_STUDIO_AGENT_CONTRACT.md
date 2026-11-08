@@ -1,4 +1,4 @@
-# DRAGONFLY 44 — TRAINING STUDIO
+# FOLIO SCRIPT — TRAINING STUDIO
 ## Agent Integration Contract & Training Package V1 Specification
 
 Version: `1.0.0`  
@@ -9,7 +9,7 @@ Scope: Development Agent Workflow & Training Studio Integration
 
 ### 1. Architectural Mission
 
-The Training Studio is a development-only environment in Dragonfly 44 allowing developers and development agents to curate multimodal visual references, domain instructions, and ground-truth annotations to guide Gemini during manga scanning, classification, reading order, and Arabic scanlation translation.
+The Training Studio is a development-only environment in Folio Script allowing developers and development agents to curate multimodal visual references, domain instructions, and ground-truth annotations to guide Gemini during manga scanning, classification, reading order, and Arabic scanlation translation.
 
 When a user provides an agent with a directory of screenshot images and instructions (e.g. for ambiguous double-balloon layouts, connected tails, or special reading flows), the agent inspects the images, prepares notes, tags, and suggested annotations, and compiles a canonical **Training Package V1** manifest (`dragonfly.training.v1`).
 

@@ -457,11 +457,11 @@ export const Workbench: React.FC<WorkbenchProps> = ({
   const zoomOptions = [50, 75, 100, 125, 150, 200, 300, 500, 1000];
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-[#060709] text-zinc-100 overflow-hidden font-sans select-none relative">
+    <div className="flex flex-col h-screen w-screen bg-black text-zinc-100 overflow-hidden font-sans select-none relative">
       {/* 1. Top Bar: Dedicated Page Shelf Crossing the Whole App */}
-      <header className="w-full h-12 min-h-[48px] max-h-[48px] bg-[#0c0d11] border-b border-white/[0.08] px-4 flex items-center justify-between z-30 shrink-0 select-none gap-4">
+      <header className="w-full h-12 min-h-[48px] max-h-[48px] bg-black border-b border-white/[0.08] px-4 flex items-center justify-between z-30 shrink-0 select-none gap-4 [-webkit-app-region:drag]">
         {/* Left side: Back to Hub + Page Pills Row stretching across the app */}
-        <div className="flex items-center gap-3 overflow-x-auto custom-scrollbar flex-1 py-1">
+        <div className="flex items-center gap-3 overflow-x-auto custom-scrollbar flex-1 py-1 [-webkit-app-region:no-drag]">
           <button
             type="button"
             onClick={handleBackClick}
@@ -564,7 +564,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
         </div>
 
         {/* Right utility actions: Add Page "+", Keyboard, Settings */}
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex items-center gap-1.5 shrink-0 pr-[140px] [-webkit-app-region:no-drag]">
           {/* Add Page "+" — fixed on the right, unaffected by page pills */}
           <button
             type="button"

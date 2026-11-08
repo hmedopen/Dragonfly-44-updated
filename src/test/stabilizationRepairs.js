@@ -1,5 +1,5 @@
 /**
- * Master Verification Test Suite for Dragonfly 44 Repairs (F-01 through F-26)
+ * Master Verification Test Suite for Folio Script Repairs (F-01 through F-26)
  */
 import assert from 'node:assert';
 import { compileInstructions } from '../lib/instructionCompiler.ts';
@@ -10,7 +10,7 @@ import { evaluateChapterContinuity } from '../lib/reviewChapterContinuity.ts';
 import { normalizeTyperPrefix } from '../types/typers.ts';
 
 console.log('====================================================');
-console.log('DRAGONFLY 44 — MASTER STABILIZATION REPAIR SUITE');
+console.log('FOLIO SCRIPT — MASTER STABILIZATION REPAIR SUITE');
 console.log('====================================================');
 
 // Test 1: F-01 & F-02 Dedicated batch_translation task contract

@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #4 — Review & Quality Control Engine
+ * Folio Script: System #4 — Review & Quality Control Engine
  * Guarded Correction Engine, Concurrency Protection & Rollback Ledger
  *
  * Implements Section 13 of the System #4 specification and User Decision #1:
@@ -41,7 +41,7 @@ export function checkCorrectionEligibility(
   if (correction.targetField === 'type') {
     return {
       isEligible: false,
-      reason: 'Custom typer assignment is strictly manual-only in Dragonfly 44.',
+      reason: 'Custom typer assignment is strictly manual-only in Folio Script.',
     };
   }
 

@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #5 — Memory Migration & Recovery
+ * Folio Script: System #5 — Memory Migration & Recovery
  * 
  * Implements a reversible, dry-runnable, idempotent migration from legacy
  * `project_lore` and `chapter_intelligence` stores into the new versioned System #5 knowledge store.

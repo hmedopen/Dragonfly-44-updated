@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44 - Training Studio Project Context & Architectural Memory
+ * Folio Script - Training Studio Project Context & Architectural Memory
  * Provides authoritative, task-scoped architectural rules and system invariants.
  * Prevents indiscriminate context dumping by serving precise system constraints.
  */
@@ -162,8 +162,8 @@ export function getTaskArchitecturalContext(task: TrainingTaskType): TaskSystemC
   return (
     TASK_CONTEXT_REGISTRY[task] || {
       task,
-      primarySystem: 'Dragonfly 44 Core Architecture',
-      architecturalDirectives: ['Follow standard Dragonfly 44 high-fidelity scanning and translation rules.'],
+      primarySystem: 'Folio Script Core Architecture',
+      architecturalDirectives: ['Follow standard Folio Script high-fidelity scanning and translation rules.'],
       entityModelRules: [],
       dataIntegrityInvariants: ['Maintain source fidelity and structural integrity.'],
     }

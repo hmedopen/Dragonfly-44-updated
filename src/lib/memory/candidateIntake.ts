@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #5 — Candidate Intake Pipeline
+ * Folio Script: System #5 — Candidate Intake Pipeline
  * 
  * Ingestion pipeline for candidate knowledge proposals from System #3 (scans),
  * System #2 (translations), System #4 (reviews), user notes, and imports.

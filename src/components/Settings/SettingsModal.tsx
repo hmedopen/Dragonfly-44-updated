@@ -268,7 +268,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <span className="font-mono text-xs font-bold tracking-wider uppercase text-zinc-100">
-                  DRAGONFLY 44 // SETTINGS & ENGINE CONFIGURATION
+                  FOLIO SCRIPT // SETTINGS & ENGINE CONFIGURATION
                 </span>
                 <span className="px-1.5 py-0.2 rounded text-[9px] font-mono bg-zinc-800 text-zinc-400 border border-white/[0.06]">
                   rev {revision}
@@ -1108,7 +1108,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         {/* 4. Modal Footer */}
         <div className="h-12 px-6 border-t border-white/[0.08] bg-[#08080b] flex items-center justify-between shrink-0">
           <span className="text-[10px] font-mono text-zinc-500">
-            DRAGONFLY 44 // SYSTEM #6 ACTIVE
+            FOLIO SCRIPT // SYSTEM #6 ACTIVE
           </span>
           <button
             type="button"

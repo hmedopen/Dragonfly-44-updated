@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #3 — Manga Scanning & Classification Engine
+ * Folio Script: System #3 — Manga Scanning & Classification Engine
  * Canonical Page Scanner
  * 
  * Implements the System #3 Page Scan Algorithm:

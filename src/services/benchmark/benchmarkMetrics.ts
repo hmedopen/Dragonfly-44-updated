@@ -1,5 +1,5 @@
 /**
- * Dragonfly 44: System #6 — Settings, Workspace & Quality Benchmark Engine
+ * Folio Script: System #6 — Settings, Workspace & Quality Benchmark Engine
  * Metric Evaluators & Mathematical Scoring Algorithms
  * 
  * Computes deterministic, reproducible quality metrics across Systems #2–#6:

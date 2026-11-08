@@ -61,7 +61,7 @@ export function compileRawTextExtract(options: RawTextExtractOptions): string {
 
   lines.push('// ==========================================');
   lines.push(`// EXTRACTED SOURCE DIALOGUE (NO TRANSLATION) // ${chapterName.toUpperCase()}`);
-  lines.push('// COMPILED BY DRAGONFLY 44');
+  lines.push('// COMPILED BY FOLIO SCRIPT');
   lines.push('// ==========================================\n');
 
   for (const page of pages) {
@@ -121,7 +121,7 @@ export function compileTypeRScript(options: TypeRCompileOptions): string {
 
   lines.push('// ==========================================');
   lines.push(`// TYPER TRANSLATION SCRIPT // ${chapterName.toUpperCase()}`);
-  lines.push('// COMPILED BY DRAGONFLY 44');
+  lines.push('// COMPILED BY FOLIO SCRIPT');
   lines.push('// ==========================================\n');
 
   for (const page of pages) {

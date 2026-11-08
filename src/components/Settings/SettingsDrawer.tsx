@@ -913,7 +913,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({ isOpen, onClose 
         {/* 3. Footer */}
         <div className="h-12 min-h-[48px] px-5 border-t border-[#27272a] bg-[#09090b] flex items-center justify-between shrink-0">
           <span className="font-mono text-[10px] text-zinc-500">
-            DRAGONFLY 44 ENGINE // v0.5
+            FOLIO SCRIPT ENGINE // v1.0
           </span>
           <button
             type="button"

@@ -1,5 +1,7 @@
 {
-  "name": "dragonfly-44",
+  "name": "folio-script",
+  "productName": "Folio Script",
+  "description": "Folio Script — Elite Manga & Comic Scanlation Studio",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -8,7 +10,7 @@
     "dev": "vite",
     "desktop": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "build": "tsc -b && vite build",
-    "package:exe": "npm run build && electron-packager . \"Dragonfly 44\" --platform=win32 --arch=x64 --out=dist-app --overwrite --prune=true",
+    "package:exe": "npm run build && electron-packager . \"Folio Script\" --platform=win32 --arch=x64 --icon=public/icon.ico --out=dist-app --overwrite --prune=true",
     "lint": "oxlint",
     "preview": "vite preview"
   },
