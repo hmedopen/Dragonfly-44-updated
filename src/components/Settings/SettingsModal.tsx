@@ -891,6 +891,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     className="w-4 h-4 rounded text-amber-500"
                   />
                 </div>
+
+                <div className="p-4 rounded-xl bg-[#09090c] border border-white/[0.08] flex items-center justify-between">
+                  <div>
+                    <div className="text-xs font-mono uppercase font-semibold text-zinc-300">
+                      Double-Click Confirmation for Critical Actions
+                    </div>
+                    <div className="text-[10px] text-zinc-500">
+                      Requires a deliberate double-click to confirm actions like Save Order or page deletions.
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={getVal<boolean>('workspace.double_click_confirmation') ?? true}
+                    onChange={(e) => setVal('workspace.double_click_confirmation', e.target.checked)}
+                    className="w-4 h-4 rounded text-sky-500 cursor-pointer"
+                  />
+                </div>
               </div>
             )}
 

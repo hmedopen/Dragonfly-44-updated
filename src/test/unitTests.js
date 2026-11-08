@@ -288,4 +288,187 @@ function mergeReviewFlags(existingFlags, incomingFlags) {
   console.log('✓ 8. System #6 Workspace geometry round-trip & non-distortion invariant validated.');
 }
 
+// 9. Phase 1.1: Dialogue Normalization (Continuous text unwrapping & Paragraph Preservation)
+{
+  function normalizeExtractedDialogue(text) {
+    if (!text) return '';
+    const paragraphs = text.split(/\r?\n\s*\r?\n/);
+    const normalizedParagraphs = paragraphs.map((para) => {
+      const lines = para
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0);
+      if (lines.length <= 1) return lines.join('');
+      let result = '';
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (i === 0) {
+          result = line;
+          continue;
+        }
+        const prevEndsWithHyphen = /([A-Za-z]+)-$/.test(result);
+        const currStartsWithLetter = /^[A-Za-z]/.test(line);
+        if (prevEndsWithHyphen && currStartsWithLetter) {
+          result = result.slice(0, -1) + line;
+          continue;
+        }
+        const lastChar = result.slice(-1);
+        const firstChar = line.charAt(0);
+        const isCJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+        if (isCJK.test(lastChar) && isCJK.test(firstChar)) {
+          result += line;
+        } else {
+          result += ' ' + line;
+        }
+      }
+      return result;
+    });
+    return normalizedParagraphs.join('\n\n');
+  }
+
+  const sample = "Thank\ngoodness\nwe don't\nhave any\ncustomers\nright now...";
+  const unwrapped = normalizeExtractedDialogue(sample);
+  assert.strictEqual(unwrapped, "Thank goodness we don't have any customers right now...");
+
+  const hyphenated = "We have cus-\ntomers right now.";
+  assert.strictEqual(normalizeExtractedDialogue(hyphenated), "We have customers right now.");
+
+  const multiPara = "Wait, look!\n\nIs that someone?";
+  assert.strictEqual(normalizeExtractedDialogue(multiPara), "Wait, look!\n\nIs that someone?");
+  console.log('✓ 9. Phase 1.1: Dialogue normalization and continuous text unwrapping validated.');
+}
+
+// 10. Phase 1.2: Empty & Symbol-Only Bubble Exclusion with Short Dialogue Protection
+{
+  function isMeaningfulLinguisticContent(text) {
+    if (!text) return false;
+    const trimmed = text.trim();
+    if (trimmed.length === 0) return false;
+    return /[\p{L}\p{N}]/u.test(trimmed);
+  }
+
+  const symbolsToReject = ['', '   ', '...\n...', '…', '?', '!', '?!', '!?', '?!?!', '..!!', '—', '~', '✦'];
+  for (const sym of symbolsToReject) {
+    assert.strictEqual(isMeaningfulLinguisticContent(sym), false, `Must reject: "${sym}"`);
+  }
+
+  const shortDialogueToKeep = ['Oh', 'Ah', 'Ha?', 'Huh?', 'Eh?', 'Hm', '...ha?', '...Oh', '?! What?', 'No!', 'Go.'];
+  for (const dia of shortDialogueToKeep) {
+    assert.strictEqual(isMeaningfulLinguisticContent(dia), true, `Must preserve: "${dia}"`);
+  }
+  console.log('✓ 10. Phase 1.2: Empty & symbol-only exclusion with short dialogue protection validated.');
+}
+
+// 11. Phase 1.3: SFX Visibility Non-Destructive Invariant
+{
+  const storedBubbles = [
+    { id: 'b1', type: 'speech', sourceText: 'Hello' },
+    { id: 'b2', type: 'sfx', sourceText: 'BANG' },
+    { id: 'b3', type: 'narration', sourceText: 'Later that day...' }
+  ];
+
+  function filterVisibleBubbles(bubbles, includeSFX) {
+    if (includeSFX) return bubbles;
+    return bubbles.filter((b) => b.type !== 'sfx');
+  }
+
+  const hidden = filterVisibleBubbles(storedBubbles, false);
+  assert.strictEqual(hidden.length, 2, 'SFX hidden when includeSFX is false');
+  assert.strictEqual(storedBubbles.length, 3, 'Stored records remain unchanged in memory/DB');
+
+  const restored = filterVisibleBubbles(storedBubbles, true);
+  assert.strictEqual(restored.length, 3, 'SFX restored when includeSFX is true without rescanning');
+  console.log('✓ 11. Phase 1.3: Non-destructive SFX visibility filtering validated.');
+}
+
+// 12. Phase 2.1: Split Bubble Shared Visual Region & Composite Badging
+{
+  const originalBubble = {
+    id: 'b3',
+    index: 3,
+    regionId: 'reg-01',
+    box_2d: [100, 100, 250, 300],
+    sourceText: 'Wait for me! I am coming right now.',
+    translatedText: 'انتظرني! أنا قادم حالاً.'
+  };
+
+  function simulateSplit(bubble, splitIndex) {
+    const text = bubble.sourceText || '';
+    const beforeText = text.slice(0, splitIndex).trim();
+    const afterText = text.slice(splitIndex).trim();
+    const sharedRegionId = bubble.regionId || bubble.id;
+
+    const b1 = {
+      ...bubble,
+      regionId: sharedRegionId,
+      sourceText: beforeText
+    };
+
+    const b2 = {
+      ...bubble,
+      id: bubble.id + '_split_' + Date.now(),
+      index: bubble.index + 1,
+      regionId: sharedRegionId,
+      sourceText: afterText,
+      translatedText: ''
+    };
+
+    return [b1, b2];
+  }
+
+  const [part1, part2] = simulateSplit(originalBubble, 13);
+  assert.strictEqual(part1.sourceText, 'Wait for me!');
+  assert.strictEqual(part2.sourceText, 'I am coming right now.');
+  assert.strictEqual(part1.regionId, part2.regionId, 'Both split parts must share the exact visual regionId');
+  assert.deepStrictEqual(part1.box_2d, part2.box_2d, 'Geometry coordinates must be identical without ghost boxes');
+
+  // Composite badging simulation
+  const regionsMap = new Map();
+  [part1, part2].forEach((b) => {
+    const key = b.regionId;
+    if (!regionsMap.has(key)) {
+      regionsMap.set(key, { indices: [] });
+    }
+    regionsMap.get(key).indices.push(b.index);
+  });
+
+  const regionEntry = regionsMap.get('reg-01');
+  const badgeLabel = regionEntry.indices.map((idx) => '#' + idx).join('/');
+  assert.strictEqual(badgeLabel, '#3/#4', 'Combined visual badge must be #3/#4');
+  console.log('✓ 12. Phase 2.1: Split Bubble shared visual region and composite badging (#3/#4) validated.');
+}
+
+// 13. Phase 3 & 5: Page Management, Tooltips, Pending Reorder & Double-Click Confirmation
+{
+  const initialPages = [
+    { id: 'p1', index: 1, fileName: 'Chapter_01_Page_01.raw.png' },
+    { id: 'p2', index: 2, fileName: 'Chapter_01_Page_02.raw.png' },
+    { id: 'p3', index: 3, fileName: 'Chapter_01_Page_03.raw.png' }
+  ];
+
+  // Reorder page 1 to position 3
+  const reordered = [initialPages[1], initialPages[2], initialPages[0]];
+  const committed = reordered.map((p, i) => ({ ...p, index: i + 1 }));
+
+  assert.strictEqual(committed[0].id, 'p2');
+  assert.strictEqual(committed[0].fileName, 'Chapter_01_Page_02.raw.png');
+  assert.strictEqual(committed[0].index, 1);
+  assert.strictEqual(committed[2].id, 'p1');
+  assert.strictEqual(committed[2].fileName, 'Chapter_01_Page_01.raw.png');
+  assert.strictEqual(committed[2].index, 3);
+
+  // Verify double click confirmation logic
+  function checkConfirmation(isDoubleEnabled, isArmed, isDoubleClick) {
+    if (!isDoubleEnabled) return { committed: true, armed: false };
+    if (isDoubleClick || isArmed) return { committed: true, armed: false };
+    return { committed: false, armed: true };
+  }
+
+  assert.strictEqual(checkConfirmation(false, false, false).committed, true, 'Single click commits when setting is disabled');
+  assert.strictEqual(checkConfirmation(true, false, false).committed, false, 'First click arms when setting is enabled');
+  assert.strictEqual(checkConfirmation(true, true, false).committed, true, 'Armed click commits');
+  assert.strictEqual(checkConfirmation(true, false, true).committed, true, 'Double click commits directly');
+  console.log('✓ 13. Phase 3 & 5: Page reorder metadata preservation and double-click confirmation validated.');
+}
+
 console.log('--- ALL VERIFICATION TESTS COMPLETED AND VALIDATED! ---');

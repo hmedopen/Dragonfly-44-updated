@@ -82,6 +82,11 @@ interface WorkbenchState {
   updateBubble: (pageId: string, bubbleId: string, patch: Partial<BubbleItem>) => void;
   deleteBubble: (pageId: string, bubbleId: string) => void;
   reorderBubbles: (pageId: string, startIndex: number, endIndex: number) => void;
+  splitBubble: (pageId: string, bubbleId: string, splitIndex: number) => void;
+  undoBubbleAction: (pageId: string) => void;
+  redoBubbleAction: (pageId: string) => void;
+  bubbleUndoStack: Record<string, BubbleItem[][]>;
+  bubbleRedoStack: Record<string, BubbleItem[][]>;
   acceptFlag: (pageId: string, bubbleId: string, flagId: string) => void;
   dismissFlag: (pageId: string, bubbleId: string, flagId: string) => void;
   revertSourceText: (pageId: string, bubbleId: string) => void;
@@ -129,6 +134,8 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   viewportMode: 'manga-flip',
   selectedBubbleId: null,
   bubblesByPage: {},
+  bubbleUndoStack: {},
+  bubbleRedoStack: {},
   projectLore: null,
   chapterIntelligence: null,
   memoryCandidates: [],
@@ -365,6 +372,141 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
 
     savePageBubbles(pageId, reindexed).catch((err) =>
       console.error('[WorkbenchStore] Failed to reorder bubbles in IDB', err)
+    );
+  },
+
+  splitBubble: (pageId: string, bubbleId: string, splitIndex: number) => {
+    const state = get();
+    const existing = state.bubblesByPage[pageId] || [];
+    const targetIdx = existing.findIndex((b) => b.id === bubbleId);
+    if (targetIdx === -1) return;
+
+    const target = existing[targetIdx];
+    const fullSourceText = target.sourceText || '';
+    if (splitIndex <= 0 || splitIndex >= fullSourceText.length) return;
+
+    const textBefore = fullSourceText.slice(0, splitIndex);
+    const textAfter = fullSourceText.slice(splitIndex);
+    const sharedRegionId = target.regionId || target.id;
+    const now = Date.now();
+
+    const updatedTarget: BubbleItem = {
+      ...target,
+      regionId: sharedRegionId,
+      sourceText: textBefore,
+      isManuallyEdited: true,
+      updatedAt: now,
+    };
+
+    const newBubble: BubbleItem = {
+      id: `bubble-${now}-${Math.random().toString(36).substring(2, 7)}`,
+      pageId: target.pageId,
+      chapterId: target.chapterId,
+      index: target.index + 1,
+      regionId: sharedRegionId,
+      box_2d: [...target.box_2d],
+      type: target.type,
+      typerPrefix: target.typerPrefix,
+      sourceLanguage: target.sourceLanguage,
+      sourceText: textAfter,
+      originalSourceText: textAfter,
+      translatedText: '',
+      rawTranslatedText: '',
+      humanizedTranslatedText: '',
+      translationHistory: [],
+      reviewFlags: [],
+      confidence: target.confidence,
+      isManuallyEdited: true,
+      updatedAt: now,
+    };
+
+    const updatedList = [
+      ...existing.slice(0, targetIdx),
+      updatedTarget,
+      newBubble,
+      ...existing.slice(targetIdx + 1),
+    ].map((b, idx) => ({ ...b, index: idx + 1 }));
+
+    const pageUndo = state.bubbleUndoStack[pageId] || [];
+
+    set((s) => ({
+      bubblesByPage: {
+        ...s.bubblesByPage,
+        [pageId]: updatedList,
+      },
+      selectedBubbleId: newBubble.id,
+      bubbleUndoStack: {
+        ...s.bubbleUndoStack,
+        [pageId]: [...pageUndo, existing],
+      },
+      bubbleRedoStack: {
+        ...s.bubbleRedoStack,
+        [pageId]: [],
+      },
+    }));
+
+    savePageBubbles(pageId, updatedList).catch((err) =>
+      console.error('[WorkbenchStore] Failed to save split bubble to IDB', err)
+    );
+  },
+
+  undoBubbleAction: (pageId: string) => {
+    const state = get();
+    const pageUndo = state.bubbleUndoStack[pageId] || [];
+    if (pageUndo.length === 0) return;
+
+    const previous = pageUndo[pageUndo.length - 1];
+    const newUndo = pageUndo.slice(0, -1);
+    const current = state.bubblesByPage[pageId] || [];
+    const pageRedo = state.bubbleRedoStack[pageId] || [];
+
+    set((s) => ({
+      bubblesByPage: {
+        ...s.bubblesByPage,
+        [pageId]: previous,
+      },
+      bubbleUndoStack: {
+        ...s.bubbleUndoStack,
+        [pageId]: newUndo,
+      },
+      bubbleRedoStack: {
+        ...s.bubbleRedoStack,
+        [pageId]: [...pageRedo, current],
+      },
+    }));
+
+    savePageBubbles(pageId, previous).catch((err) =>
+      console.error('[WorkbenchStore] Failed to apply undo in IDB', err)
+    );
+  },
+
+  redoBubbleAction: (pageId: string) => {
+    const state = get();
+    const pageRedo = state.bubbleRedoStack[pageId] || [];
+    if (pageRedo.length === 0) return;
+
+    const next = pageRedo[pageRedo.length - 1];
+    const newRedo = pageRedo.slice(0, -1);
+    const current = state.bubblesByPage[pageId] || [];
+    const pageUndo = state.bubbleUndoStack[pageId] || [];
+
+    set((s) => ({
+      bubblesByPage: {
+        ...s.bubblesByPage,
+        [pageId]: next,
+      },
+      bubbleUndoStack: {
+        ...s.bubbleUndoStack,
+        [pageId]: [...pageUndo, current],
+      },
+      bubbleRedoStack: {
+        ...s.bubbleRedoStack,
+        [pageId]: newRedo,
+      },
+    }));
+
+    savePageBubbles(pageId, next).catch((err) =>
+      console.error('[WorkbenchStore] Failed to apply redo in IDB', err)
     );
   },
 
@@ -612,42 +754,10 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     );
   },
 
-  reconcileActiveSFXState: async (includeSFX: boolean) => {
-    const state = get();
-    const updatedBubblesByPage: Record<string, BubbleItem[]> = {};
-
-    for (const [pageId, bubbles] of Object.entries(state.bubblesByPage)) {
-      if (!includeSFX) {
-        // Toggled OFF: filter out active SFX unless manually edited
-        const filtered = bubbles.filter((b) => {
-          const isSfx = b.type === 'sfx' || b.typerPrefix === 'SFX:';
-          if (isSfx && !b.isManuallyEdited) {
-            return false;
-          }
-          return true;
-        });
-
-        // Re-index remaining active bubbles sequentially 1..N
-        const reindexed = filtered.map((b, idx) => ({
-          ...b,
-          index: idx + 1,
-        }));
-
-        updatedBubblesByPage[pageId] = reindexed;
-        savePageBubbles(pageId, reindexed).catch((err) =>
-          console.error('[WorkbenchStore] Failed to save reconciled bubbles in IDB', err)
-        );
-      } else {
-        updatedBubblesByPage[pageId] = bubbles;
-      }
-    }
-
-    set({
-      bubblesByPage: {
-        ...state.bubblesByPage,
-        ...updatedBubblesByPage,
-      },
-    });
+  reconcileActiveSFXState: async (_includeSFX: boolean) => {
+    // Phase 1.3: Non-destructive SFX handling.
+    // SFX records and OCR data remain safely stored in memory and IndexedDB.
+    // SFX visibility on the canvas is governed dynamically by scanning.include_sfx settings in CanvasPane.
   },
 
   // 1. Scan All (Batch Chapter Scan)

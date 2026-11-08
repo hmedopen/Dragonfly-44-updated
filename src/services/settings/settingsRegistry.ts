@@ -667,6 +667,22 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     category: 'workspace',
     validation: (val: boolean) => ({ valid: true, sanitizedValue: Boolean(val) }),
   },
+  'workspace.double_click_confirmation': {
+    setting_id: 'workspace.double_click_confirmation',
+    owner_system: 'workspace',
+    type: 'boolean',
+    default_value: true,
+    apply_mode: 'immediate',
+    scope: ['global', 'project'],
+    visibility: 'basic',
+    runtime_binding: 'Workspace.DoubleClickConfirmation',
+    schema_version: '1.0',
+    reset_behavior: 'default',
+    label: 'Double-Click Confirmation for Critical Actions',
+    description: 'Requires a deliberate double-click to confirm actions like Save Order or page deletions.',
+    category: 'workspace',
+    validation: (val: boolean) => ({ valid: true, sanitizedValue: Boolean(val) }),
+  },
 
   // ==========================================
   // QUALITY BENCHMARK & DIAGNOSTICS

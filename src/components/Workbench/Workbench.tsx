@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import type { Folder, Chapter } from '../../types';
 import type { BubbleItem } from '../../types/workbench';
 import { useWorkbenchStore } from '../../store/workbenchStore';
@@ -31,6 +31,8 @@ import {
 } from 'lucide-react';
 import { ToolbarTooltip } from './ToolbarTooltip';
 import { isTrainingStudioEnabled } from '../../lib/training/env';
+import { settingsService } from '../../services/settings/settingsService';
+import type { PageMetadata } from '../../types';
 
 interface WorkbenchProps {
   folder: Folder | null;
@@ -39,6 +41,7 @@ interface WorkbenchProps {
   onAddManualBubble?: () => void;
   onAppendPages?: (newPages: any[]) => void;
   onDeletePage?: (pageId: string) => void;
+  onReorderPages?: (updatedPages: PageMetadata[]) => void;
   onOpenTrainingStudio?: () => void;
 }
 
@@ -49,6 +52,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
   onAddManualBubble,
   onAppendPages,
   onDeletePage,
+  onReorderPages,
   onOpenTrainingStudio,
 }) => {
   const {
@@ -66,6 +70,9 @@ export const Workbench: React.FC<WorkbenchProps> = ({
     dismissFlag,
     revertSourceText,
     revertTranslatedText,
+    splitBubble,
+    undoBubbleAction,
+    redoBubbleAction,
 
     // Modals and tool state
     isSettingsOpen,
@@ -115,10 +122,135 @@ export const Workbench: React.FC<WorkbenchProps> = ({
   const [deletingPageId, setDeletingPageId] = useState<string | null>(null);
   const [isBenchmarkOpen, setIsBenchmarkOpen] = useState(false);
 
+  // Phase 3.1: Original Filename Tooltip State (~1000ms hover delay)
+  const [hoveredPageTooltip, setHoveredPageTooltip] = useState<{ fileName: string; x: number; y: number } | null>(null);
+  const hoverTooltipTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const hoverStartCoordRef = useRef<{ x: number; y: number } | null>(null);
+
+  // Phase 3.2: Drag-and-Drop Page Reordering State
+  const [pendingPages, setPendingPages] = useState<PageMetadata[] | null>(null);
+  const [draggedPageIdx, setDraggedPageIdx] = useState<number | null>(null);
+  const [dropTargetIdx, setDropTargetIdx] = useState<number | null>(null);
+  const [saveOrderArmed, setSaveOrderArmed] = useState(false);
+  const pendingTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const isDoubleConfirmEnabled = settingsService.getEffectiveValue<boolean>('workspace.double_click_confirmation').value ?? true;
+
   const pages = chapter?.pageList || [];
-  const effectivePageId = activePageId || pages[0]?.id || null;
-  const currentPageIndex = effectivePageId ? pages.findIndex((p) => p.id === effectivePageId) : -1;
+  const displayPages = pendingPages || pages;
+  const effectivePageId = activePageId || displayPages[0]?.id || null;
+  const currentPageIndex = effectivePageId ? displayPages.findIndex((p) => p.id === effectivePageId) : -1;
   const activePageNum = currentPageIndex >= 0 ? currentPageIndex + 1 : 0;
+
+  // Auto-expire pending reorder after 60 seconds if unconfirmed
+  useEffect(() => {
+    if (pendingPages) {
+      pendingTimerRef.current = setTimeout(() => {
+        setPendingPages(null);
+        setSaveOrderArmed(false);
+      }, 60000);
+      return () => {
+        if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current);
+      };
+    }
+  }, [pendingPages]);
+
+  // Phase 3.1: Filename Tooltip Handlers
+  const handlePageTabMouseEnter = (e: React.MouseEvent, fileName: string) => {
+    if (hoverTooltipTimerRef.current) clearTimeout(hoverTooltipTimerRef.current);
+    const startX = e.clientX;
+    const startY = e.clientY;
+    hoverStartCoordRef.current = { x: startX, y: startY };
+    hoverTooltipTimerRef.current = setTimeout(() => {
+      setHoveredPageTooltip({
+        fileName,
+        x: startX,
+        y: startY + 24,
+      });
+    }, 1000);
+  };
+
+  const handlePageTabMouseMove = (e: React.MouseEvent) => {
+    if (hoverStartCoordRef.current) {
+      const dx = Math.abs(e.clientX - hoverStartCoordRef.current.x);
+      const dy = Math.abs(e.clientY - hoverStartCoordRef.current.y);
+      if (dx > 15 || dy > 15) {
+        if (hoverTooltipTimerRef.current) clearTimeout(hoverTooltipTimerRef.current);
+        setHoveredPageTooltip(null);
+        hoverStartCoordRef.current = null;
+      }
+    }
+  };
+
+  const handlePageTabMouseLeave = () => {
+    if (hoverTooltipTimerRef.current) clearTimeout(hoverTooltipTimerRef.current);
+    setHoveredPageTooltip(null);
+    hoverStartCoordRef.current = null;
+  };
+
+  // Phase 3.2: Reorder Drag & Drop Handlers
+  const handleTabDragStart = (e: React.DragEvent, index: number) => {
+    setDraggedPageIdx(index);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', String(index));
+  };
+
+  const handleTabDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    if (draggedPageIdx !== null && draggedPageIdx !== index) {
+      setDropTargetIdx(index);
+    }
+  };
+
+  const handleTabDrop = (e: React.DragEvent, targetIndex: number) => {
+    e.preventDefault();
+    if (draggedPageIdx !== null && draggedPageIdx !== targetIndex) {
+      const currentList = [...displayPages];
+      const [movedItem] = currentList.splice(draggedPageIdx, 1);
+      currentList.splice(targetIndex, 0, movedItem);
+      setPendingPages(currentList);
+    }
+    setDraggedPageIdx(null);
+    setDropTargetIdx(null);
+  };
+
+  const handleTabDragEnd = () => {
+    setDraggedPageIdx(null);
+    setDropTargetIdx(null);
+  };
+
+  const commitReorderedPages = useCallback(() => {
+    if (!pendingPages) return;
+    const reindexed = pendingPages.map((p, i) => ({
+      ...p,
+      index: i + 1,
+    }));
+    onReorderPages?.(reindexed);
+    setPendingPages(null);
+    setSaveOrderArmed(false);
+  }, [pendingPages, onReorderPages]);
+
+  const handleSaveOrderClick = () => {
+    if (!isDoubleConfirmEnabled) {
+      commitReorderedPages();
+    } else {
+      if (saveOrderArmed) {
+        commitReorderedPages();
+      } else {
+        setSaveOrderArmed(true);
+        setTimeout(() => setSaveOrderArmed(false), 3500);
+      }
+    }
+  };
+
+  const handleSaveOrderDoubleClick = () => {
+    commitReorderedPages();
+  };
+
+  const handleCancelReorder = () => {
+    setPendingPages(null);
+    setSaveOrderArmed(false);
+  };
 
   const hasPrevPage = currentPageIndex > 0;
   const hasNextPage = currentPageIndex >= 0 && currentPageIndex < pages.length - 1;
@@ -190,6 +322,20 @@ export const Workbench: React.FC<WorkbenchProps> = ({
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         toggleKeyboard();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        if (!isInputFocused) {
+          e.preventDefault();
+          if (e.shiftKey) {
+            if (effectivePageId) redoBubbleAction(effectivePageId);
+          } else {
+            if (effectivePageId) undoBubbleAction(effectivePageId);
+          }
+        }
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+        if (!isInputFocused) {
+          e.preventDefault();
+          if (effectivePageId) redoBubbleAction(effectivePageId);
+        }
       } else if (e.key === 'Escape') {
         if (isSettingsOpen) {
           setIsSettingsOpen(false);
@@ -482,23 +628,36 @@ export const Workbench: React.FC<WorkbenchProps> = ({
 
           <div className="h-4 w-px bg-white/10 shrink-0" />
 
-          {/* Page Pills: Page 1, Page 2... fixed-width with centered text; selected tab shows X delete */}
-          <div className="flex items-center gap-1 overflow-x-auto custom-scrollbar">
-            {pages.length > 0 ? (
+          {/* Page Pills with Drag & Drop Reordering + Filename Tooltips */}
+          <div className="flex items-center gap-1.5 overflow-x-auto custom-scrollbar">
+            {displayPages.length > 0 ? (
               <>
-                {pages.map((p, idx) => {
+                {displayPages.map((p, idx) => {
                   const isTabActive = effectivePageId === p.id;
                   const pageNum = p.index || idx + 1;
                   const isPageScanning = pageStatuses[p.id] === 'scanning';
                   const isArmingDelete = deletingPageId === p.id;
+                  const isDropTarget = dropTargetIdx === idx && draggedPageIdx !== idx;
 
                   if (!isTabActive) {
                     return (
                       <button
                         key={p.id}
                         type="button"
+                        draggable
+                        onDragStart={(e) => handleTabDragStart(e, idx)}
+                        onDragOver={(e) => handleTabDragOver(e, idx)}
+                        onDrop={(e) => handleTabDrop(e, idx)}
+                        onDragEnd={handleTabDragEnd}
+                        onMouseEnter={(e) => handlePageTabMouseEnter(e, p.fileName)}
+                        onMouseMove={handlePageTabMouseMove}
+                        onMouseLeave={handlePageTabMouseLeave}
                         onClick={() => { setDeletingPageId(null); setActivePageId(p.id); }}
-                        className="relative transition-all duration-150 cursor-pointer inline-flex items-center justify-center w-[76px] min-w-[76px] max-w-[76px] h-8 rounded-full shrink-0 text-xs text-center whitespace-nowrap text-zinc-400 hover:text-white hover:bg-white/5 font-medium"
+                        className={`relative transition-all duration-150 cursor-pointer inline-flex items-center justify-center w-[76px] min-w-[76px] max-w-[76px] h-8 rounded-full shrink-0 text-xs text-center whitespace-nowrap font-medium ${
+                          isDropTarget
+                            ? 'border-2 border-sky-400 bg-sky-950/40 text-white shadow-[0_0_12px_rgba(56,189,248,0.3)]'
+                            : 'text-zinc-400 hover:text-white hover:bg-white/5'
+                        }`}
                       >
                         {isPageScanning && (
                           <span className="absolute left-1.5 w-1.5 h-1.5 rounded-full bg-sky-400 animate-ping" />
@@ -511,18 +670,29 @@ export const Workbench: React.FC<WorkbenchProps> = ({
                   return (
                     <div
                       key={p.id}
+                      draggable
+                      onDragStart={(e) => handleTabDragStart(e, idx)}
+                      onDragOver={(e) => handleTabDragOver(e, idx)}
+                      onDrop={(e) => handleTabDrop(e, idx)}
+                      onDragEnd={handleTabDragEnd}
+                      onMouseEnter={(e) => handlePageTabMouseEnter(e, p.fileName)}
+                      onMouseMove={handlePageTabMouseMove}
+                      onMouseLeave={handlePageTabMouseLeave}
                       className={`relative inline-flex items-center shrink-0 h-8 rounded-full transition-all duration-150 ${
+                        isDropTarget
+                          ? 'ring-2 ring-sky-400 min-w-[104px]'
+                          : ''
+                      } ${
                         isArmingDelete
                           ? 'bg-red-500 text-white min-w-[104px]'
                           : 'bg-white text-zinc-950 min-w-[104px]'
                       }`}
-                      onMouseLeave={() => { if (deletingPageId === p.id) setDeletingPageId(null); }}
                     >
                       <button
                         type="button"
                         onClick={() => { if (!isArmingDelete) { setDeletingPageId(null); } }}
                         onDoubleClick={() => { setDeletingPageId(p.id); }}
-                        className={`flex-1 h-full px-3 inline-flex items-center justify-center text-xs font-bold rounded-full text-center whitespace-nowrap relative ${
+                        className={`flex-1 h-full px-3 inline-flex items-center justify-center text-xs font-bold rounded-full text-center whitespace-nowrap relative cursor-grab active:cursor-grabbing ${
                           isArmingDelete ? 'text-white' : 'text-zinc-950'
                         }`}
                       >
@@ -539,8 +709,17 @@ export const Workbench: React.FC<WorkbenchProps> = ({
                             onDeletePage?.(p.id);
                             setDeletingPageId(null);
                           } else {
-                            setDeletingPageId(p.id);
+                            if (!isDoubleConfirmEnabled) {
+                              onDeletePage?.(p.id);
+                            } else {
+                              setDeletingPageId(p.id);
+                            }
                           }
+                        }}
+                        onDoubleClick={(e) => {
+                          e.stopPropagation();
+                          onDeletePage?.(p.id);
+                          setDeletingPageId(null);
                         }}
                         className={`mr-2 w-4 h-4 rounded-full flex items-center justify-center transition-colors shrink-0 ${
                           isArmingDelete
@@ -554,6 +733,36 @@ export const Workbench: React.FC<WorkbenchProps> = ({
                     </div>
                   );
                 })}
+
+                {/* Phase 3.2: Pending Reorder Status Bar */}
+                {pendingPages && (
+                  <div className="flex items-center gap-2 ml-1 px-2.5 py-0.5 rounded-full bg-sky-950/70 border border-sky-500/40 shadow-sm shrink-0">
+                    <span className="text-[11px] text-sky-200 font-semibold uppercase tracking-wider whitespace-nowrap">
+                      Pending Order
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleSaveOrderClick}
+                      onDoubleClick={handleSaveOrderDoubleClick}
+                      className={`px-3 py-0.5 rounded-full text-xs font-semibold shadow-sm transition-all cursor-pointer whitespace-nowrap ${
+                        saveOrderArmed
+                          ? 'bg-amber-400 text-black hover:bg-amber-300 animate-pulse'
+                          : 'bg-blue-600 hover:bg-blue-500 text-white'
+                      }`}
+                      title={isDoubleConfirmEnabled ? (saveOrderArmed ? "Click again to confirm Save Order" : "Double-click to Save Order") : "Save Order"}
+                    >
+                      {saveOrderArmed ? 'Confirm Save?' : 'Save Order'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCancelReorder}
+                      className="px-2 py-0.5 rounded-full text-xs text-zinc-400 hover:text-white transition-colors cursor-pointer whitespace-nowrap"
+                      title="Cancel reordering and revert"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
               </>
             ) : (
               <span className="text-xs text-zinc-600 px-2 py-0.5">
@@ -564,7 +773,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
         </div>
 
         {/* Right utility actions: Add Page "+", Keyboard, Settings */}
-        <div className="flex items-center gap-1.5 shrink-0 pr-[140px] [-webkit-app-region:no-drag]">
+        <div className="flex items-center gap-1.5 shrink-0 [-webkit-app-region:no-drag]">
           {/* Add Page "+" — fixed on the right, unaffected by page pills */}
           <button
             type="button"
@@ -745,119 +954,120 @@ export const Workbench: React.FC<WorkbenchProps> = ({
           </ToolbarTooltip>
         </div>
 
-        {/* Right (aligned above Feed): Page tools LEFT side, All tools RIGHT side — separated */}
-        <div className="flex-1 flex items-center gap-2 overflow-x-auto py-0.5 custom-scrollbar">
-          {/* Group 1: Single Page Tools — left-aligned */}
-          <button
-            type="button"
-            onClick={handleScanThisPage}
-            disabled={isScanningSinglePage}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl border text-xs font-medium transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
-              isScanningSinglePage
-                ? 'bg-[#181920] border-sky-500/40 text-sky-300 animate-pulse'
-                : 'bg-[#121317] border-white/[0.08] hover:bg-[#181920] hover:border-white/[0.16] text-zinc-200'
-            }`}
-            title="Scan Current Page OCR & Translate"
-          >
-            {isScanningSinglePage ? (
-              <svg className="w-3.5 h-3.5 animate-spin text-sky-300" viewBox="0 0 24 24" fill="none">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-              </svg>
-            ) : (
-              <Sparkles className="w-3.5 h-3.5 text-zinc-300" />
-            )}
-            <span>Scan Page</span>
-          </button>
+        {/* Subheader Actions: Page actions grouped and aligned on the right of the page toolbar area; Batch actions at far right */}
+        <div className="flex-1 flex items-center justify-between gap-2 overflow-x-auto py-0.5 custom-scrollbar">
+          {/* Phase 4.1: Page Actions Group — Scan Page | Review Page | Extract Page */}
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={handleScanThisPage}
+              disabled={isScanningSinglePage}
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl border text-xs font-medium transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
+                isScanningSinglePage
+                  ? 'bg-[#181920] border-sky-500/40 text-sky-300 animate-pulse'
+                  : 'bg-[#121317] border-white/[0.08] hover:bg-[#181920] hover:border-white/[0.16] text-zinc-200'
+              }`}
+              title="Scan Current Page OCR & Translate"
+            >
+              {isScanningSinglePage ? (
+                <svg className="w-3.5 h-3.5 animate-spin text-sky-300" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                </svg>
+              ) : (
+                <Sparkles className="w-3.5 h-3.5 text-zinc-300" />
+              )}
+              <span>Scan Page</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={handleReviewThisPage}
-            disabled={isReviewingSinglePage}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl border text-xs font-medium transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
-              isReviewingSinglePage
-                ? 'bg-[#181920] border-amber-400/40 text-amber-300 animate-pulse'
-                : 'bg-[#121317] border-white/[0.08] hover:bg-[#181920] hover:border-white/[0.16] text-zinc-200'
-            }`}
-            title={flaggedCount > 0 ? `Review Page (${flaggedCount} flags)` : "Review Page"}
-          >
-            {isReviewingSinglePage ? (
-              <svg className="w-3.5 h-3.5 animate-spin text-amber-300" viewBox="0 0 24 24" fill="none">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-              </svg>
-            ) : (
-              <Search className="w-3.5 h-3.5 text-zinc-300" />
-            )}
-            <span>Review Page</span>
-          </button>
+            <button
+              type="button"
+              onClick={handleReviewThisPage}
+              disabled={isReviewingSinglePage}
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl border text-xs font-medium transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
+                isReviewingSinglePage
+                  ? 'bg-[#181920] border-amber-400/40 text-amber-300 animate-pulse'
+                  : 'bg-[#121317] border-white/[0.08] hover:bg-[#181920] hover:border-white/[0.16] text-zinc-200'
+              }`}
+              title={flaggedCount > 0 ? `Review Page (${flaggedCount} flags)` : "Review Page"}
+            >
+              {isReviewingSinglePage ? (
+                <svg className="w-3.5 h-3.5 animate-spin text-amber-300" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                </svg>
+              ) : (
+                <Search className="w-3.5 h-3.5 text-zinc-300" />
+              )}
+              <span>Review Page</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={handleExtractPage}
-            className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-[#121317] border border-white/[0.08] hover:bg-[#181920] hover:border-white/[0.16] text-xs font-medium text-zinc-200 transition-all cursor-pointer shadow-sm active:scale-95 shrink-0"
-            title="Extract Current Page Text (No Translation)"
-          >
-            <FileText className="w-3.5 h-3.5 text-zinc-300" />
-            <span>Extract Page</span>
-          </button>
+            <button
+              type="button"
+              onClick={handleExtractPage}
+              className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-[#121317] border border-white/[0.08] hover:bg-[#181920] hover:border-white/[0.16] text-xs font-medium text-zinc-200 transition-all cursor-pointer shadow-sm active:scale-95 shrink-0"
+              title="Extract Current Page Text (No Translation)"
+            >
+              <FileText className="w-3.5 h-3.5 text-zinc-300" />
+              <span>Extract Page</span>
+            </button>
+          </div>
 
-          {/* Flexible gap to push "All" group to the right */}
-          <div className="flex-1" />
+          {/* Phase 4.1: Batch Actions Group — Extract All | Review All | Scan All at the far right */}
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={handleExtractAll}
+              className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-[#121317] border border-white/[0.08] hover:bg-[#181920] hover:border-white/[0.16] text-xs font-medium text-zinc-200 transition-all cursor-pointer shadow-sm active:scale-95 shrink-0"
+              title="Extract All Chapter Text (No Translation)"
+            >
+              <FileText className="w-3.5 h-3.5 text-zinc-300" />
+              <span>Extract All</span>
+            </button>
 
-          {/* Group 2: Global Action Cluster — Exact Swapped Order: Extract All (Left) | Review All (Middle) | Scan All (Far Right) */}
-          <button
-            type="button"
-            onClick={handleExtractAll}
-            className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-[#121317] border border-white/[0.08] hover:bg-[#181920] hover:border-white/[0.16] text-xs font-medium text-zinc-200 transition-all cursor-pointer shadow-sm active:scale-95 shrink-0"
-            title="Extract All Chapter Text (No Translation)"
-          >
-            <FileText className="w-3.5 h-3.5 text-zinc-300" />
-            <span>Extract All</span>
-          </button>
+            <button
+              type="button"
+              onClick={handleReviewChapterClick}
+              disabled={isReviewingChapter}
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-medium transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
+                isReviewingChapter
+                  ? 'bg-amber-300 text-black animate-pulse'
+                  : 'bg-amber-400 hover:bg-amber-300 text-black'
+              }`}
+              title="Review Entire Chapter"
+            >
+              {isReviewingChapter ? (
+                <svg className="w-3.5 h-3.5 animate-spin text-black" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                </svg>
+              ) : (
+                <Search className="w-3.5 h-3.5" />
+              )}
+              <span>Review All</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={handleReviewChapterClick}
-            disabled={isReviewingChapter}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-medium transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
-              isReviewingChapter
-                ? 'bg-amber-300 text-black animate-pulse'
-                : 'bg-amber-400 hover:bg-amber-300 text-black'
-            }`}
-            title="Review Entire Chapter"
-          >
-            {isReviewingChapter ? (
-              <svg className="w-3.5 h-3.5 animate-spin text-black" viewBox="0 0 24 24" fill="none">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-              </svg>
-            ) : (
-              <Search className="w-3.5 h-3.5" />
-            )}
-            <span>Review All</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleScanAll}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-medium transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
-              isScanningActive
-                ? 'bg-blue-400 text-white animate-pulse'
-                : 'bg-blue-600 hover:bg-blue-500 text-white'
-            }`}
-            title="Batch Scan Entire Chapter"
-          >
-            {isScanningActive ? (
-              <svg className="w-3.5 h-3.5 animate-spin text-white" viewBox="0 0 24 24" fill="none">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-              </svg>
-            ) : (
-              <Sparkles className="w-3.5 h-3.5" />
-            )}
-            <span>{isScanningActive && scanProgressText ? scanProgressText : 'Scan All'}</span>
-          </button>
+            <button
+              type="button"
+              onClick={handleScanAll}
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-medium transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
+                isScanningActive
+                  ? 'bg-blue-400 text-white animate-pulse'
+                  : 'bg-blue-600 hover:bg-blue-500 text-white'
+              }`}
+              title="Batch Scan Entire Chapter"
+            >
+              {isScanningActive ? (
+                <svg className="w-3.5 h-3.5 animate-spin text-white" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                </svg>
+              ) : (
+                <Sparkles className="w-3.5 h-3.5" />
+              )}
+              <span>{isScanningActive && scanProgressText ? scanProgressText : 'Scan All'}</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -905,6 +1115,11 @@ export const Workbench: React.FC<WorkbenchProps> = ({
             onDeleteBubble={(bubbleId) => {
               if (effectivePageId) {
                 deleteBubble(effectivePageId, bubbleId);
+              }
+            }}
+            onSplitBubble={(bubbleId, splitIndex) => {
+              if (effectivePageId) {
+                splitBubble(effectivePageId, bubbleId, splitIndex);
               }
             }}
             onTranslateBubble={handleTranslateBubble}
@@ -971,6 +1186,17 @@ export const Workbench: React.FC<WorkbenchProps> = ({
         isOpen={isKeyboardOpen}
         onClose={() => setIsKeyboardOpen(false)}
       />
+
+      {/* Phase 3.1: Original Filename Tooltip (~1000ms delay) */}
+      {hoveredPageTooltip && (
+        <div
+          style={{ left: `${hoveredPageTooltip.x}px`, top: `${hoveredPageTooltip.y}px` }}
+          className="fixed z-50 pointer-events-none -translate-x-1/2 px-2.5 py-1 rounded-lg bg-[#121318] border border-white/[0.14] text-xs text-zinc-200 font-mono shadow-2xl animate-in fade-in duration-150"
+        >
+          <span className="text-[10px] text-zinc-500 mr-1.5 uppercase font-sans">Source:</span>
+          <span>{hoveredPageTooltip.fileName}</span>
+        </div>
+      )}
     </div>
   );
 };

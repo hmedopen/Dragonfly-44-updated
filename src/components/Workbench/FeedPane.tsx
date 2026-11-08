@@ -14,6 +14,7 @@ interface FeedPaneProps {
   onFocusBubble?: (bubble: BubbleItem) => void;
   onUpdateBubble: (bubbleId: string, patch: Partial<BubbleItem>) => void;
   onDeleteBubble: (bubbleId: string) => void;
+  onSplitBubble?: (bubbleId: string, splitIndex: number) => void;
   onTranslateBubble?: (bubbleId: string) => Promise<void>;
   onAcceptFlag: (bubbleId: string, flagId: string) => void;
   onDismissFlag: (bubbleId: string, flagId: string) => void;
@@ -32,6 +33,7 @@ export const FeedPane: React.FC<FeedPaneProps> = ({
   onFocusBubble,
   onUpdateBubble,
   onDeleteBubble,
+  onSplitBubble,
   onTranslateBubble,
   onAcceptFlag,
   onDismissFlag,
@@ -81,6 +83,7 @@ export const FeedPane: React.FC<FeedPaneProps> = ({
           onFocusBubble={onFocusBubble}
           onUpdateBubble={onUpdateBubble}
           onDeleteBubble={onDeleteBubble}
+          onSplitBubble={onSplitBubble}
           onTranslateBubble={onTranslateBubble}
           onAcceptFlag={onAcceptFlag}
           onDismissFlag={onDismissFlag}

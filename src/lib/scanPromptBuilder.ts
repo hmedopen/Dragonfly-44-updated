@@ -34,9 +34,12 @@ RESPONSIBILITIES:
    - Detect all dialogue balloons, thought bubbles, narration boxes, captions, signs, vocalizations, and in-art text.
    - Bounding boxes [ymin, xmin, ymax, xmax] must tightly enclose the text-bearing boundary (0-1000 integer scale).
    ${includeSFX ? '- Detect environmental and combat sound effects (SFX) rendered in the artwork.' : '- Focus on dialogue, narration, thoughts, and vocalizations.'}
+   - EMPTY & SYMBOL-ONLY BUBBLES: Do NOT create text regions for empty bubbles, punctuation-only content (such as "...", "…", "?", "!", "?!"), or isolated non-linguistic decorative marks.
+   - SHORT MEANINGFUL DIALOGUE: PRESERVE short meaningful expressions and conversational reactions (e.g. "Oh", "Ah", "Ha?", "Huh?", "Eh?", "Hm", "...ha?", "...Oh", "?! What?"). Never discard short meaningful fragments.
 
 3. VERBATIM OCR CANDIDATE ENGINE:
    - Transcribe the exact visible characters (Japanese kanji/kana, Korean hangul, Chinese hanzi, English) verbatim.
+   - DIALOGUE NORMALIZATION: Transcribe dialogue as naturally readable, continuous text rather than reproducing physical visual line wrapping inside speech bubbles. Join words and sentences split across visual lines with appropriate natural spacing. Preserve every source word, punctuation mark, meaningful sentence boundary, and dialogue order. Preserve intentional paragraph breaks where they carry distinct meaning, but do not reproduce arbitrary line wraps caused purely by bubble shape constraints.
    - NEVER invent missing text, complete cut-off sentences, infer unseen words, or silently fix typos.
    - If characters are ambiguous or blurry, record possible alternatives in 'ocrAlternatives' and set 'isAmbiguous': true.
    - If characters are partially cut off at panel/page edges, set 'isClipped': true.

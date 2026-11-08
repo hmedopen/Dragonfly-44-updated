@@ -75,6 +75,7 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
     panelsVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_panels_visible').value,
     reviewMarkersVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_review_markers_visible').value,
     coordinateDiagnostics: settingsService.getEffectiveValue<boolean>('workspace.coordinate_diagnostics').value,
+    includeSFX: settingsService.getEffectiveValue<boolean>('scanning.include_sfx').value,
   }));
 
   useEffect(() => {
@@ -85,6 +86,7 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
         panelsVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_panels_visible').value,
         reviewMarkersVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_review_markers_visible').value,
         coordinateDiagnostics: settingsService.getEffectiveValue<boolean>('workspace.coordinate_diagnostics').value,
+        includeSFX: settingsService.getEffectiveValue<boolean>('scanning.include_sfx').value,
       });
     });
     return () => unsub();
@@ -97,6 +99,59 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
     zoomLevelRef.current = zoomLevel;
     onZoomChangeRef.current = onZoomChange;
   }, [zoomLevel, onZoomChange]);
+
+  // Phase 1.3: Dynamic SFX visibility filtering
+  const visibleBubbles = useMemo(() => {
+    if (overlaySettings.includeSFX) {
+      return bubbles;
+    }
+    return bubbles.filter((b) => b.type !== 'sfx' && b.typerPrefix !== 'SFX:');
+  }, [bubbles, overlaySettings.includeSFX]);
+
+  // Phase 2.1: Group bubbles into shared physical visual regions
+  interface VisualRegionGroup {
+    regionKey: string;
+    box_2d: [number, number, number, number];
+    bubbles: BubbleItem[];
+    indices: number[];
+    label: string;
+    isSelected: boolean;
+    isFlagged: boolean;
+    primaryBubbleId: string;
+  }
+
+  const visualRegions = useMemo(() => {
+    const groups = new Map<string, BubbleItem[]>();
+    for (const b of visibleBubbles) {
+      const key = b.regionId || `${b.box_2d[0]}-${b.box_2d[1]}-${b.box_2d[2]}-${b.box_2d[3]}`;
+      const list = groups.get(key) || [];
+      list.push(b);
+      groups.set(key, list);
+    }
+
+    const result: VisualRegionGroup[] = [];
+    for (const [key, items] of groups.entries()) {
+      const sorted = [...items].sort((a, b) => a.index - b.index);
+      const indices = sorted.map((b) => b.index);
+      const isSelected = sorted.some((b) => b.id === selectedBubbleId);
+      const isFlagged = sorted.some(
+        (b) => overlaySettings.reviewMarkersVisible && b.reviewFlags && b.reviewFlags.length > 0
+      );
+      const label = indices.map((idx) => `#${idx}`).join('/');
+
+      result.push({
+        regionKey: key,
+        box_2d: sorted[0].box_2d,
+        bubbles: sorted,
+        indices,
+        label,
+        isSelected,
+        isFlagged,
+        primaryBubbleId: sorted[0].id,
+      });
+    }
+    return result;
+  }, [visibleBubbles, selectedBubbleId, overlaySettings.reviewMarkersVisible]);
 
   // Box drawing state (0-1000 normalized coordinates)
   const [drawingStart, setDrawingStart] = useState<{ x: number; y: number } | null>(null);
@@ -330,7 +385,7 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
       if (coords) {
         const hit = hitTestWorkspace(
           { x: coords.x, y: coords.y },
-          bubbles,
+          visibleBubbles,
           {
             sourceDimensions: { width: 1000, height: 1000 },
             viewportDimensions: { width: rect.width, height: rect.height },
@@ -424,8 +479,8 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
 
   // Reading order sequence links for layer rendering
   const sortedBubbles = useMemo(() => {
-    return [...bubbles].sort((a, b) => a.index - b.index);
-  }, [bubbles]);
+    return [...visibleBubbles].sort((a, b) => a.index - b.index);
+  }, [visibleBubbles]);
 
   return (
     <div
@@ -576,19 +631,16 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                   transition: 'opacity 150ms ease',
                 }}
               >
-                {bubbles.map((bubble) => {
-                  const ymin = bubble.box_2d[0];
-                  const xmin = bubble.box_2d[1];
-                  const ymax = bubble.box_2d[2];
-                  const xmax = bubble.box_2d[3];
+                {visualRegions.map((region) => {
+                  const ymin = region.box_2d[0];
+                  const xmin = region.box_2d[1];
+                  const ymax = region.box_2d[2];
+                  const xmax = region.box_2d[3];
 
                   const width = Math.max(xmax - xmin, 16);
                   const height = Math.max(ymax - ymin, 16);
-                  const isSelected = selectedBubbleId === bubble.id;
-                  const isFlagged =
-                    overlaySettings.reviewMarkersVisible &&
-                    bubble.reviewFlags &&
-                    bubble.reviewFlags.length > 0;
+                  const isSelected = region.isSelected;
+                  const isFlagged = region.isFlagged;
 
                   let strokeColor = '#38bdf8';
                   let strokeWidth = '1.5';
@@ -608,12 +660,16 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
 
                   return (
                     <g
-                      key={bubble.id}
+                      key={`region-box-${region.regionKey}`}
                       onClick={(e) => {
                         if (didMoveRef.current) return;
                         if (e.button !== 0) return;
                         e.stopPropagation();
-                        onSelectBubble(bubble.id);
+                        const currentSelIdx = region.bubbles.findIndex((b) => b.id === selectedBubbleId);
+                        const nextBubble = currentSelIdx >= 0 && currentSelIdx < region.bubbles.length - 1
+                          ? region.bubbles[currentSelIdx + 1]
+                          : region.bubbles[0];
+                        onSelectBubble(nextBubble.id);
                       }}
                       className="cursor-pointer group"
                     >
@@ -671,16 +727,13 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                 transition: 'opacity 150ms ease',
               }}
             >
-              {bubbles.map((bubble) => {
-                const isSelected = selectedBubbleId === bubble.id;
-                const isFlagged =
-                  overlaySettings.reviewMarkersVisible &&
-                  bubble.reviewFlags &&
-                  bubble.reviewFlags.length > 0;
-                const paddedIndex = String(bubble.index).padStart(2, '0');
+              {visualRegions.map((region) => {
+                const isSelected = region.isSelected;
+                const isFlagged = region.isFlagged;
+                const labelText = region.label;
 
                 // Use primary box coordinates (normalized 0-1000)
-                const [ymin, xmin] = bubble.box_2d;
+                const [ymin, xmin] = region.box_2d;
 
                 // Collision & edge detection:
                 const isNearTop = ymin < 40;
@@ -709,12 +762,16 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
 
                 return (
                   <div
-                    key={`badge-overlay-${bubble.id}`}
+                    key={`badge-region-${region.regionKey}`}
                     onClick={(e) => {
                       if (didMoveRef.current) return;
                       if (e.button !== 0) return;
                       e.stopPropagation();
-                      onSelectBubble(bubble.id);
+                      const currentSelIdx = region.bubbles.findIndex((b) => b.id === selectedBubbleId);
+                      const nextBubble = currentSelIdx >= 0 && currentSelIdx < region.bubbles.length - 1
+                        ? region.bubbles[currentSelIdx + 1]
+                        : region.bubbles[0];
+                      onSelectBubble(nextBubble.id);
                     }}
                     style={{
                       position: 'absolute',
@@ -732,9 +789,9 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                         ? 'ring-2 ring-white ring-offset-1 ring-offset-black scale-110 z-30'
                         : 'hover:scale-110 hover:shadow-lg z-20'
                     }`}
-                    title={`Balloon #${paddedIndex} — Click to select`}
+                    title={`Balloon ${labelText} — Click to select`}
                   >
-                    #{paddedIndex}
+                    {labelText}
                   </div>
                 );
               })}

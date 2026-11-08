@@ -84,7 +84,11 @@ export const ChapterList: React.FC<ChapterListProps> = ({
   const viewingChapter = chapters.find((c) => c.id === viewingChapterId) || null;
   const displayPages = draggedId ? localPages : (viewingChapter?.pageList || []);
 
-  const handleChapterClick = (chapter: Chapter) => {
+  const handleChapterSelect = (chapter: Chapter) => {
+    onSelectChapter(chapter.id);
+  };
+
+  const handleChapterDoubleClick = (chapter: Chapter) => {
     onSelectChapter(chapter.id);
     const firstPageId = chapter.pageList?.[0]?.id || null;
     openChapter(chapter.id, activeFolder?.id, firstPageId);
@@ -349,7 +353,14 @@ export const ChapterList: React.FC<ChapterListProps> = ({
       </div>
 
       {/* Chapters List Body */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-2.5 custom-scrollbar">
+      <div
+        onClick={(e) => {
+          if (e.target === e.currentTarget) {
+            onSelectChapter('');
+          }
+        }}
+        className="flex-1 overflow-y-auto p-4 space-y-2.5 custom-scrollbar"
+      >
         {!isFolderSelected ? (
           <div className="h-64 flex flex-col items-center justify-center text-center p-6 border border-dashed border-white/[0.06] rounded-xl">
             <FolderOpen className="w-8 h-8 text-zinc-600 mb-2 stroke-1" />
@@ -377,7 +388,14 @@ export const ChapterList: React.FC<ChapterListProps> = ({
             return (
               <div
                 key={chapter.id}
-                onClick={() => handleChapterClick(chapter)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleChapterSelect(chapter);
+                }}
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  handleChapterDoubleClick(chapter);
+                }}
                 onDragOver={(e) => {
                   e.stopPropagation();
                   setDropTargetChapterId(chapter.id);
@@ -407,7 +425,11 @@ export const ChapterList: React.FC<ChapterListProps> = ({
                     </span>
                   )}
 
-                  <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
+                  <div 
+                    onClick={(e) => e.stopPropagation()} 
+                    onDoubleClick={(e) => e.stopPropagation()} 
+                    className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity"
+                  >
                     <button
                       onClick={(e) => {
                         e.stopPropagation();

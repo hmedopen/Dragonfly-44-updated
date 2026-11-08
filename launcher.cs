@@ -69,7 +69,7 @@ namespace FolioScript
                 browserPath = @"C:\Program Files\Microsoft\Edge\Application\msedge.exe";
             }
 
-            string appArgs = "--app=\"http://127.0.0.1:5173/?v=fs2\" --window-size=1280,820";
+            string appArgs = "--app=\"http://127.0.0.1:5173/?v=fs3\" --window-size=1280,820";
 
             ProcessStartInfo windowInfo = new ProcessStartInfo
             {

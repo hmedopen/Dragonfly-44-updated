@@ -467,6 +467,11 @@ export function App() {
             handleDeletePageFromChapter(effectiveChapterId, pageId);
           }
         }}
+        onReorderPages={(updatedPages) => {
+          if (effectiveChapterId) {
+            handleReorderPages(effectiveChapterId, updatedPages);
+          }
+        }}
         onAppendPages={(newPages) => {
           if (!activeChapterFolder || !effectiveChapterId) return;
           setFolders((prev) =>

@@ -198,6 +198,7 @@ export function scanResultToBubbleItems(
       pageId: scan.pageId,
       index: region.order.sequenceIndex || idx + 1,
       box_2d: safeBox,
+      regionId: existing?.regionId || region.regionId,
       type: selectedType,
       typerPrefix: selectedPrefix,
       sourceLanguage: region.sourceLanguage || 'ja',

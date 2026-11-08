@@ -13,7 +13,8 @@ import {
   X, 
   RotateCcw,
   HelpCircle,
-  Languages
+  Languages,
+  Scissors
 } from 'lucide-react';
 
 interface DialogueCardProps {
@@ -23,6 +24,7 @@ interface DialogueCardProps {
   onFocusBubble?: (bubble: BubbleItem) => void;
   onUpdate: (bubbleId: string, patch: Partial<BubbleItem>) => void;
   onDelete: (bubbleId: string) => void;
+  onSplitBubble?: (bubbleId: string, splitIndex: number) => void;
   onTranslate?: (bubbleId: string) => Promise<void>;
   onAcceptFlag?: (flagId: string) => void;
   onDismissFlag?: (flagId: string) => void;
@@ -48,6 +50,7 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
   onFocusBubble,
   onUpdate,
   onDelete,
+  onSplitBubble,
   onTranslate,
   onAcceptFlag,
   onDismissFlag,
@@ -63,6 +66,7 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
   const translationTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [isTypeDropdownOpen, setIsTypeDropdownOpen] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
+  const [splitTip, setSplitTip] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Review flags expansion: OPEN by default when flags appear, only closes on click
@@ -197,6 +201,28 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
     onUpdate(bubble.id, { translatedText: e.target.value });
     autoResize(e.target);
   }, [bubble.id, onUpdate]);
+
+  const handleSplitClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!onSplitBubble) return;
+
+    const textarea = sourceTextareaRef.current;
+    const text = bubble.sourceText || '';
+    if (!textarea) return;
+
+    const selStart = textarea.selectionStart;
+
+    if (selStart !== null && selStart > 0 && selStart < text.length) {
+      setSplitTip(null);
+      onSplitBubble(bubble.id, selStart);
+    } else {
+      setSplitTip('Place cursor in raw dialogue where you want to split.');
+      textarea.focus();
+      setTimeout(() => {
+        setSplitTip(null);
+      }, 4000);
+    }
+  }, [bubble.id, bubble.sourceText, onSplitBubble]);
 
   return (
     <div
@@ -375,21 +401,39 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
             <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">
               RAW / SOURCE DIALOGUE
             </label>
-            {canRevertSource && (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onRevertSource?.();
-                }}
-                className="flex items-center gap-1 text-[10px] text-amber-400 hover:text-amber-300 cursor-pointer transition-colors"
-                title="Restore initial scanned source text"
-              >
-                <RotateCcw className="w-2.5 h-2.5" />
-                <span>Revert</span>
-              </button>
-            )}
+            <div className="flex items-center gap-2">
+              {onSplitBubble && (
+                <button
+                  type="button"
+                  onClick={handleSplitClick}
+                  className="flex items-center gap-1 text-[10px] text-zinc-400 hover:text-sky-300 cursor-pointer transition-colors px-1.5 py-0.5 rounded border border-transparent hover:border-sky-500/20 hover:bg-sky-500/10"
+                  title="Place cursor in raw dialogue and click to split this bubble into two records"
+                >
+                  <Scissors className="w-2.5 h-2.5" />
+                  <span>Split Bubble</span>
+                </button>
+              )}
+              {canRevertSource && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRevertSource?.();
+                  }}
+                  className="flex items-center gap-1 text-[10px] text-amber-400 hover:text-amber-300 cursor-pointer transition-colors"
+                  title="Restore initial scanned source text"
+                >
+                  <RotateCcw className="w-2.5 h-2.5" />
+                  <span>Revert</span>
+                </button>
+              )}
+            </div>
           </div>
+          {splitTip && (
+            <div className="mb-1.5 text-[10px] text-amber-300 bg-amber-500/10 border border-amber-500/20 px-2 py-1 rounded-md">
+              {splitTip}
+            </div>
+          )}
           <div className="rounded-xl bg-[#08080a] border border-white/[0.05] focus-within:border-white/[0.18] transition-colors px-3.5 py-2.5">
             <textarea
               ref={sourceTextareaRef}

@@ -1,4 +1,5 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, nativeTheme } = require('electron');
+nativeTheme.themeSource = 'dark';
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -15,12 +16,6 @@ function createWindow() {
     minWidth: 1000,
     minHeight: 650,
     backgroundColor: '#000000',
-    titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#000000',
-      symbolColor: '#a1a1aa',
-      height: 40,
-    },
     icon: path.join(__dirname, '../public/icon.ico'),
     webPreferences: {
       nodeIntegration: false,
@@ -98,25 +93,24 @@ if (isDev) {
           fileSize: stats.size,
           modifiedTime: stats.mtimeMs,
           mimeType,
-          hash,
+          sha256: hash,
         });
-      } catch (err) {
-        console.warn(`[TrainingStudio] Could not read candidate image: ${fullPath}`, err);
+      } catch (e) {
+        console.warn(`[TrainingStudio] Failed reading candidate: ${entry.name}`, e);
       }
     }
 
-    // Natural alphanumeric sort by filename
-    const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-    candidates.sort((a, b) => collator.compare(a.fileName, b.fileName));
+    // Sort naturally by filename
+    candidates.sort((a, b) => a.fileName.localeCompare(b.fileName, undefined, { numeric: true, sensitivity: 'base' }));
 
     return {
-      folderPath,
       candidates,
       ignoredCount,
+      totalScanned: entries.length,
     };
   });
 
-  // 3. Read specific image file into base64 for safe managed import
+  // 3. Read image as Data URL
   ipcMain.handle('training:readImageFile', async (_event, filePath) => {
     if (!isDev) {
       throw new Error('Training Studio is strictly restricted to development builds.');
@@ -131,23 +125,8 @@ if (isDev) {
     else if (ext === '.webp') mimeType = 'image/webp';
 
     const fileBuffer = await fs.promises.readFile(filePath);
-    return {
-      filePath,
-      base64: fileBuffer.toString('base64'),
-      mimeType,
-      size: fileBuffer.length,
-    };
-  });
-} else {
-  // In production builds, explicitly reject any call to training IPC channels
-  ipcMain.handle('training:selectFolder', () => {
-    throw new Error('Training Studio is strictly restricted to development builds.');
-  });
-  ipcMain.handle('training:scanFolder', () => {
-    throw new Error('Training Studio is strictly restricted to development builds.');
-  });
-  ipcMain.handle('training:readImageFile', () => {
-    throw new Error('Training Studio is strictly restricted to development builds.');
+    const base64 = fileBuffer.toString('base64');
+    return `data:${mimeType};base64,${base64}`;
   });
 }
 
@@ -155,7 +134,9 @@ app.whenReady().then(() => {
   createWindow();
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+    }
   });
 });
 

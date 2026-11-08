@@ -32,6 +32,75 @@ import type {
 } from '../types/scanning';
 import { blobToBase64 } from './geminiScan';
 
+/**
+ * Normalizes extracted dialogue into continuous, naturally readable text.
+ * Joins words and sentences split across physical bubble line wraps with appropriate spacing
+ * while preserving intentional multi-line paragraph breaks, original words, and punctuation.
+ */
+export function normalizeExtractedDialogue(text: string): string {
+  if (!text) return '';
+
+  // Preserve intentional paragraph breaks (2 or more consecutive newlines)
+  const paragraphs = text.split(/\r?\n\s*\r?\n/);
+
+  const normalizedParagraphs = paragraphs.map((para) => {
+    const lines = para
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+
+    if (lines.length <= 1) return lines.join('');
+
+    let result = '';
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (i === 0) {
+        result = line;
+        continue;
+      }
+
+      // Check if previous line ended with a hyphen connecting a split word (e.g. "custom-\n ers")
+      const prevEndsWithHyphen = /([A-Za-z]+)-$/.test(result);
+      const currStartsWithLetter = /^[A-Za-z]/.test(line);
+
+      if (prevEndsWithHyphen && currStartsWithLetter) {
+        result = result.slice(0, -1) + line;
+        continue;
+      }
+
+      // Check for CJK characters at junction
+      const lastChar = result.slice(-1);
+      const firstChar = line.charAt(0);
+      const isCJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+
+      if (isCJK.test(lastChar) && isCJK.test(firstChar)) {
+        // CJK text wraps without spaces
+        result += line;
+      } else {
+        // Latin/Arabic/other: join with a single space
+        result += ' ' + line;
+      }
+    }
+    return result;
+  });
+
+  return normalizedParagraphs.join('\n\n');
+}
+
+/**
+ * Checks whether an OCR candidate contains meaningful linguistic content.
+ * Rejects empty bubbles, punctuation-only (..., ?, !, ?!), and purely decorative marks.
+ * Unconditionally preserves short dialogue and interjections (e.g. "Oh", "Ah", "Ha?", "Huh?", "Eh?", "Hm", "...ha?", "...Oh", "?! What?").
+ */
+export function isMeaningfulLinguisticContent(text: string | null | undefined): boolean {
+  if (!text) return false;
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return false;
+
+  // Must contain at least one letter or number in any script (Latin, CJK, Arabic, Hangul, etc.)
+  return /[\p{L}\p{N}]/u.test(trimmed);
+}
+
 export interface ScanMangaPageOptions {
   pageId: string;
   apiKey: string;
@@ -150,6 +219,9 @@ export async function scanMangaPage(options: ScanMangaPageOptions): Promise<Page
     detectedRelationships,
   } = validated.data;
 
+  // Filter out empty and symbol-only regions (Phase 1.2)
+  const meaningfulRegions = rawRegions.filter((r) => isMeaningfulLinguisticContent(r.rawOCR));
+
   // 6. Build PanelRegion entities
   const panels: PanelRegion[] = rawPanels.map((p, idx) => ({
     panelId: p.panelId || `panel-${idx + 1}`,
@@ -164,7 +236,7 @@ export async function scanMangaPage(options: ScanMangaPageOptions): Promise<Page
   const issues: ScanIssue[] = [];
 
   // 7. Build TextRegion entities with Multidimensional Confidence
-  let textRegions: TextRegion[] = rawRegions.map((r, idx) => {
+  let textRegions: TextRegion[] = meaningfulRegions.map((r, idx) => {
     const flags: ScanIssueFlag[] = [];
     if (r.isAmbiguous) flags.push('OCR_AMBIGUOUS');
     if (r.isClipped) flags.push('TEXT_CLIPPED');
@@ -183,11 +255,13 @@ export async function scanMangaPage(options: ScanMangaPageOptions): Promise<Page
     const isHighRes = dimensions.width >= 1000 && dimensions.height >= 1400;
     const imageQualityConfidence = isHighRes ? 0.98 : 0.80;
 
+    const normalizedRawOCR = normalizeExtractedDialogue(r.rawOCR);
+
     // OCR confidence calibration
     let ocrConfidence = 0.95;
     if (r.isAmbiguous) ocrConfidence = 0.65;
     if (r.isClipped) ocrConfidence = Math.min(ocrConfidence, 0.70);
-    if (!r.rawOCR || r.rawOCR.trim().length === 0) ocrConfidence = 0.50;
+    if (!normalizedRawOCR || normalizedRawOCR.trim().length === 0) ocrConfidence = 0.50;
 
     // Apply configured OCR confidence threshold for ambiguity flag
     if (ocrConfidence < ocrConfidenceThreshold && !flags.includes('OCR_AMBIGUOUS')) {
@@ -203,8 +277,8 @@ export async function scanMangaPage(options: ScanMangaPageOptions): Promise<Page
         coordinateSpace: 'normalized_1000',
         box_2d: r.box_2d,
       },
-      rawOCR: r.rawOCR,
-      ocrAlternatives: r.ocrAlternatives,
+      rawOCR: normalizedRawOCR,
+      ocrAlternatives: (r.ocrAlternatives || []).map(normalizeExtractedDialogue),
       confidence: {
         imageQuality: imageQualityConfidence,
         regionDetection: regionDetectionConfidence,

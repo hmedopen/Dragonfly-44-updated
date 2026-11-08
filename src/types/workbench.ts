@@ -43,6 +43,7 @@ export interface BubbleItem {
   chapterId?: string;
   index: number;
   box_2d: [number, number, number, number]; // Normalized [ymin, xmin, ymax, xmax] (0-1000)
+  regionId?: string;              // Physical visual region identity (enables multiple split records per physical bubble)
   type: BubbleType;
   typerPrefix: TyperPrefix;
   sourceLanguage?: string;

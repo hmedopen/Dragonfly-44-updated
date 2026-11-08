@@ -18,4 +18,3 @@ const appBridge = {
 };
 
 contextBridge.exposeInMainWorld('folioScript', appBridge);
-contextBridge.exposeInMainWorld('dragonfly', appBridge);
