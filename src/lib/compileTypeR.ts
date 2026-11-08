@@ -16,6 +16,7 @@ export interface TypeRCompileOptions {
   symbolPosition?: TyperSymbolPosition;
   includeSourceComments: boolean;
   includeFlagNotes: boolean;
+  includeSFX?: boolean;
 }
 
 export interface RawTextExtractOptions {
@@ -28,6 +29,7 @@ export interface RawTextExtractOptions {
   symbolPosition?: TyperSymbolPosition;
   textDirection?: ExtractedTextDirection;
   tagPlacement?: 'suffix' | 'prefix';
+  includeSFX?: boolean;
 }
 
 /**
@@ -39,6 +41,7 @@ export function compileRawTextExtract(options: RawTextExtractOptions): string {
     chapterName,
     pages,
     includePageHeaders = true,
+    includeSFX = true,
     includeIndexTags = true,
     includePrefixTags = true,
     prefixPosition,
@@ -68,7 +71,8 @@ export function compileRawTextExtract(options: RawTextExtractOptions): string {
       lines.push(`### PAGE ${pageNumPadded}\n`);
     }
 
-    const sortedBubbles = [...page.bubbles].sort((a, b) => a.index - b.index);
+    const pageBubbles = includeSFX ? page.bubbles : page.bubbles.filter((b) => b.type !== 'sfx' && b.typerPrefix !== 'SFX:');
+    const sortedBubbles = [...pageBubbles].sort((a, b) => a.index - b.index);
 
     for (const bubble of sortedBubbles) {
       const idxStr = includeIndexTags ? `#${String(bubble.index).padStart(2, '0')} ` : '';
@@ -110,6 +114,7 @@ export function compileTypeRScript(options: TypeRCompileOptions): string {
     symbolPosition,
     includeSourceComments = true,
     includeFlagNotes = false,
+    includeSFX = true,
   } = options;
 
   const lines: string[] = [];
@@ -127,7 +132,8 @@ export function compileTypeRScript(options: TypeRCompileOptions): string {
     }
 
     // Sort bubbles by index (1, 2, 3...)
-    const sortedBubbles = [...page.bubbles].sort((a, b) => a.index - b.index);
+    const pageBubbles = includeSFX ? page.bubbles : page.bubbles.filter((b) => b.type !== 'sfx' && b.typerPrefix !== 'SFX:');
+    const sortedBubbles = [...pageBubbles].sort((a, b) => a.index - b.index);
 
     for (const bubble of sortedBubbles) {
       const idxStr = includeIndexTags ? `#${String(bubble.index).padStart(2, '0')} ` : '';

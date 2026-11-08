@@ -11,6 +11,7 @@ import {
 import type { BubbleItem } from '../../types/workbench';
 import { loadTyperSettings, saveTyperSettings, type TyperSymbolPosition } from '../../types/typers';
 import { compileTypeRScript, compileRawTextExtract } from '../../lib/compileTypeR';
+import { settingsService } from '../../services/settings/settingsService';
 
 interface TypeRModalProps {
   isOpen: boolean;
@@ -53,6 +54,8 @@ export const TypeRModal: React.FC<TypeRModalProps> = ({
   }, [scope, allChapterPages, activePageIndex, bubbles]);
 
   const generatedScript = useMemo(() => {
+    const includeSFX = settingsService.getEffectiveValue<boolean>('scanning.include_sfx').value;
+
     if (exportMode === 'raw_text') {
       return compileRawTextExtract({
         chapterName,
@@ -62,6 +65,7 @@ export const TypeRModal: React.FC<TypeRModalProps> = ({
         includePrefixTags,
         symbolPosition,
         textDirection: typerSettings.textDirection,
+        includeSFX,
       });
     }
 
@@ -74,6 +78,7 @@ export const TypeRModal: React.FC<TypeRModalProps> = ({
       symbolPosition,
       includeSourceComments,
       includeFlagNotes,
+      includeSFX,
     });
   }, [
     exportMode,

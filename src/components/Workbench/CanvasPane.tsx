@@ -561,6 +561,7 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                         stroke="#f59e0b"
                         strokeWidth="2"
                         strokeDasharray="4 3"
+                        vectorEffect="non-scaling-stroke"
                       />
                     );
                   })}
@@ -588,31 +589,21 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                     overlaySettings.reviewMarkersVisible &&
                     bubble.reviewFlags &&
                     bubble.reviewFlags.length > 0;
-                  const paddedIndex = String(bubble.index).padStart(2, '0');
-
-                  const chipY = ymin >= 20 ? ymin - 18 : ymin + 2;
-                  const chipX = Math.max(xmin, 2);
 
                   let strokeColor = '#38bdf8';
                   let strokeWidth = '1.5';
                   let strokeDasharray = 'none';
                   let fillColor = isSelected ? 'rgba(56, 189, 248, 0.08)' : 'rgba(56, 189, 248, 0.03)';
-                  let badgeBg = '#38bdf8';
-                  let badgeTextColor = '#050507';
 
                   if (isFlagged) {
                     strokeColor = '#f59e0b';
                     strokeWidth = isSelected ? '2.0' : '1.5';
                     strokeDasharray = '5 3';
                     fillColor = isSelected ? 'rgba(245, 158, 11, 0.18)' : 'rgba(245, 158, 11, 0.08)';
-                    badgeBg = '#f59e0b';
-                    badgeTextColor = '#050507';
                   } else if (isSelected) {
                     strokeColor = '#38bdf8';
                     strokeWidth = '2';
                     fillColor = 'rgba(56, 189, 248, 0.12)';
-                    badgeBg = '#38bdf8';
-                    badgeTextColor = '#050507';
                   }
 
                   return (
@@ -635,40 +626,18 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                         stroke={strokeColor}
                         strokeWidth={strokeWidth}
                         strokeDasharray={strokeDasharray}
+                        vectorEffect="non-scaling-stroke"
                         fill={fillColor}
                         className="transition-all duration-150 group-hover:stroke-sky-300"
                       />
 
-                      {/* Corner Index Tag #01 / #02 */}
-                      <rect
-                        x={chipX}
-                        y={chipY}
-                        width="26"
-                        height="15"
-                        rx="3"
-                        fill={badgeBg}
-                        className="transition-colors duration-150"
-                      />
-
-                      <text
-                        x={chipX + 3}
-                        y={chipY + 11}
-                        fill={badgeTextColor}
-                        fontSize="9.5"
-                        fontFamily="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif"
-                        fontWeight="700"
-                        className="select-none pointer-events-none"
-                      >
-                        #{paddedIndex}
-                      </text>
-
                       {/* Selection handles (Section 4.5) */}
                       {isSelected && (
                         <>
-                          <rect x={xmin - 3} y={ymin - 3} width="6" height="6" fill="#38bdf8" rx="1" />
-                          <rect x={xmax - 3} y={ymin - 3} width="6" height="6" fill="#38bdf8" rx="1" />
-                          <rect x={xmin - 3} y={ymax - 3} width="6" height="6" fill="#38bdf8" rx="1" />
-                          <rect x={xmax - 3} y={ymax - 3} width="6" height="6" fill="#38bdf8" rx="1" />
+                          <rect x={xmin - 3} y={ymin - 3} width="6" height="6" fill="#38bdf8" rx="1" vectorEffect="non-scaling-stroke" />
+                          <rect x={xmax - 3} y={ymin - 3} width="6" height="6" fill="#38bdf8" rx="1" vectorEffect="non-scaling-stroke" />
+                          <rect x={xmin - 3} y={ymax - 3} width="6" height="6" fill="#38bdf8" rx="1" vectorEffect="non-scaling-stroke" />
+                          <rect x={xmax - 3} y={ymax - 3} width="6" height="6" fill="#38bdf8" rx="1" vectorEffect="non-scaling-stroke" />
                         </>
                       )}
                     </g>
@@ -687,10 +656,89 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                   stroke="#38bdf8"
                   strokeWidth="2"
                   strokeDasharray="4 4"
+                  vectorEffect="non-scaling-stroke"
                   fill="rgba(56, 189, 248, 0.15)"
                 />
               )}
             </svg>
+
+            {/* Layer 5: Dedicated Non-Stretching Number Badge Overlay */}
+            <div
+              className="absolute inset-0 pointer-events-none select-none overflow-visible"
+              style={{
+                opacity: effectiveShowBoxes ? 1 : 0,
+                pointerEvents: effectiveShowBoxes ? 'auto' : 'none',
+                transition: 'opacity 150ms ease',
+              }}
+            >
+              {bubbles.map((bubble) => {
+                const isSelected = selectedBubbleId === bubble.id;
+                const isFlagged =
+                  overlaySettings.reviewMarkersVisible &&
+                  bubble.reviewFlags &&
+                  bubble.reviewFlags.length > 0;
+                const paddedIndex = String(bubble.index).padStart(2, '0');
+
+                // Use primary box coordinates (normalized 0-1000)
+                const [ymin, xmin] = bubble.box_2d;
+
+                // Collision & edge detection:
+                const isNearTop = ymin < 40;
+                const isNearRight = xmin > 850;
+
+                // Zoom compensation factor: keeps badges compact, readable, and non-distorted across extreme zoom levels
+                const effectiveZoom = Math.max(25, zoomLevel);
+                const badgeZoomScale = Math.min(1.8, Math.max(0.65, 100 / effectiveZoom));
+
+                let badgeBg = '#38bdf8';
+                let badgeTextColor = '#050507';
+                let borderColor = 'rgba(255, 255, 255, 0.2)';
+
+                if (isFlagged) {
+                  badgeBg = '#f59e0b';
+                  badgeTextColor = '#050507';
+                  borderColor = 'rgba(255, 255, 255, 0.4)';
+                }
+
+                const transformStr = isNearTop
+                  ? (isNearRight ? `translate(-100%, 4px) scale(${badgeZoomScale})` : `translate(4px, 4px) scale(${badgeZoomScale})`)
+                  : (isNearRight ? `translate(-100%, -100%) translateY(-4px) scale(${badgeZoomScale})` : `translate(0, -100%) translateY(-4px) scale(${badgeZoomScale})`);
+                const transformOriginStr = isNearTop
+                  ? (isNearRight ? 'top right' : 'top left')
+                  : (isNearRight ? 'bottom right' : 'bottom left');
+
+                return (
+                  <div
+                    key={`badge-overlay-${bubble.id}`}
+                    onClick={(e) => {
+                      if (didMoveRef.current) return;
+                      if (e.button !== 0) return;
+                      e.stopPropagation();
+                      onSelectBubble(bubble.id);
+                    }}
+                    style={{
+                      position: 'absolute',
+                      top: `${ymin / 10}%`,
+                      left: `${xmin / 10}%`,
+                      transform: transformStr,
+                      transformOrigin: transformOriginStr,
+                      backgroundColor: badgeBg,
+                      color: badgeTextColor,
+                      borderColor,
+                      pointerEvents: effectiveShowBoxes ? 'auto' : 'none',
+                    }}
+                    className={`cursor-pointer inline-flex items-center justify-center px-1.5 py-0.5 rounded-[3px] border shadow-md font-mono text-[10px] font-bold leading-none select-none tracking-tight transition-transform duration-100 ${
+                      isSelected
+                        ? 'ring-2 ring-white ring-offset-1 ring-offset-black scale-110 z-30'
+                        : 'hover:scale-110 hover:shadow-lg z-20'
+                    }`}
+                    title={`Balloon #${paddedIndex} — Click to select`}
+                  >
+                    #{paddedIndex}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 

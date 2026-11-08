@@ -30,6 +30,7 @@ import {
   Activity
 } from 'lucide-react';
 import { ToolbarTooltip } from './ToolbarTooltip';
+import { isTrainingStudioEnabled } from '../../lib/training/env';
 
 interface WorkbenchProps {
   folder: Folder | null;
@@ -38,6 +39,7 @@ interface WorkbenchProps {
   onAddManualBubble?: () => void;
   onAppendPages?: (newPages: any[]) => void;
   onDeletePage?: (pageId: string) => void;
+  onOpenTrainingStudio?: () => void;
 }
 
 export const Workbench: React.FC<WorkbenchProps> = ({
@@ -47,6 +49,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
   onAddManualBubble,
   onAppendPages,
   onDeletePage,
+  onOpenTrainingStudio,
 }) => {
   const {
     activePageId,
@@ -573,6 +576,17 @@ export const Workbench: React.FC<WorkbenchProps> = ({
           </button>
 
           <div className="h-4 w-px bg-white/10" />
+
+          {isTrainingStudioEnabled() && onOpenTrainingStudio && (
+            <button
+              type="button"
+              onClick={onOpenTrainingStudio}
+              className="p-1.5 rounded-full text-xs transition-colors cursor-pointer bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 border border-amber-500/30"
+              title="Training Studio (Dev Only)"
+            >
+              <Sparkles className="w-4 h-4 text-amber-400" />
+            </button>
+          )}
 
           <button
             type="button"

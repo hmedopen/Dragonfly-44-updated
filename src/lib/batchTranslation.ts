@@ -19,6 +19,7 @@ import type {
 import { compileInstructions } from './instructionCompiler';
 import { humanizeArabicText } from './arabicHumanizer';
 import { extractCleanJson } from './translationValidator';
+import { assembleTaskTrainingContext } from './training/trainingPromptInjection';
 
 export interface BatchTranslateOptions {
   bubbles: BubbleItem[];
@@ -34,6 +35,7 @@ export interface BatchTranslateOptions {
   isMasterPromptActive?: boolean;
   projectLore?: ProjectLoreLedger | null;
   chapterIntelligence?: ChapterIntelligence | null;
+  includeSFX?: boolean;
   rollingContextSnippet?: string;
   signal?: AbortSignal;
 }
@@ -68,6 +70,7 @@ export async function batchTranslateBubbles(
     isMasterPromptActive,
     projectLore,
     chapterIntelligence,
+    includeSFX,
     rollingContextSnippet,
     signal,
   } = options;
@@ -80,6 +83,7 @@ export async function batchTranslateBubbles(
   const pendingBubbles = bubbles.filter((b) => {
     if (!b.sourceText || b.sourceText.trim().length === 0) return false;
     if (b.isManuallyEdited) return false;
+    if (!includeSFX && (b.type === 'sfx' || b.typerPrefix === 'SFX:')) return false;
     // If not translated yet, it needs translation
     if (!b.translatedText || b.translatedText.trim().length === 0) return true;
     // If originalSourceText is tracked and differs from current sourceText, machine translation is invalidated
@@ -118,8 +122,22 @@ export async function batchTranslateBubbles(
     isMasterPromptActive,
     projectLore,
     chapterIntelligence,
+    includeSFX,
     rollingContextSnippet,
   });
+
+  // Query applicable enabled Reference Sets (Development Training Studio)
+  const trainingContext = await assembleTaskTrainingContext({
+    task: 'translation_quality',
+    model: selectedModel,
+    operationId: `translate_${Date.now()}`,
+  });
+
+  const effectiveSystemInstruction = trainingContext.hasTrainingContext
+    ? `${compiled.systemInstruction}
+
+${trainingContext.systemInstructionDirective}`
+    : compiled.systemInstruction;
 
   const formattedDialogueList = pendingBubbles
     .map(
@@ -147,7 +165,7 @@ Return strictly pure JSON with no markdown wrapping:
 
   const payload = {
     system_instruction: {
-      parts: [{ text: compiled.systemInstruction }],
+      parts: [{ text: effectiveSystemInstruction }],
     },
     contents: [
       {

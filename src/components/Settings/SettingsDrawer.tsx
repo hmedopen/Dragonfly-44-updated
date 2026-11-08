@@ -14,6 +14,8 @@ import {
   Trash2,
   Type
 } from 'lucide-react';
+import { settingsService } from '../../services/settings/settingsService';
+import { useWorkbenchStore } from '../../store/workbenchStore';
 import type { 
   GeminiModelKey, 
   EloquenceLevel,
@@ -134,6 +136,8 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({ isOpen, onClose 
 
   useEffect(() => {
     localStorage.setItem('dragonfly44_include_sfx', String(includeSFX));
+    settingsService.setSettingValue('scanning.include_sfx', includeSFX);
+    useWorkbenchStore.getState().reconcileActiveSFXState(includeSFX);
   }, [includeSFX]);
 
   useEffect(() => {

@@ -88,6 +88,7 @@ interface WorkbenchState {
   revertTranslatedText: (pageId: string, bubbleId: string) => void;
   revertToRawTranslation: (pageId: string, bubbleId: string) => void;
   revertToHumanizedTranslation: (pageId: string, bubbleId: string) => void;
+  reconcileActiveSFXState: (includeSFX: boolean) => Promise<void>;
 
   // Four Core AI Operations
   startBatchScan: (
@@ -609,6 +610,44 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     savePageBubbles(pageId, updated).catch((err) =>
       console.error('[WorkbenchStore] Failed to revert to humanized translation in IDB', err)
     );
+  },
+
+  reconcileActiveSFXState: async (includeSFX: boolean) => {
+    const state = get();
+    const updatedBubblesByPage: Record<string, BubbleItem[]> = {};
+
+    for (const [pageId, bubbles] of Object.entries(state.bubblesByPage)) {
+      if (!includeSFX) {
+        // Toggled OFF: filter out active SFX unless manually edited
+        const filtered = bubbles.filter((b) => {
+          const isSfx = b.type === 'sfx' || b.typerPrefix === 'SFX:';
+          if (isSfx && !b.isManuallyEdited) {
+            return false;
+          }
+          return true;
+        });
+
+        // Re-index remaining active bubbles sequentially 1..N
+        const reindexed = filtered.map((b, idx) => ({
+          ...b,
+          index: idx + 1,
+        }));
+
+        updatedBubblesByPage[pageId] = reindexed;
+        savePageBubbles(pageId, reindexed).catch((err) =>
+          console.error('[WorkbenchStore] Failed to save reconciled bubbles in IDB', err)
+        );
+      } else {
+        updatedBubblesByPage[pageId] = bubbles;
+      }
+    }
+
+    set({
+      bubblesByPage: {
+        ...state.bubblesByPage,
+        ...updatedBubblesByPage,
+      },
+    });
   },
 
   // 1. Scan All (Batch Chapter Scan)

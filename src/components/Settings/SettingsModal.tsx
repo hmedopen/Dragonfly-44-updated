@@ -18,8 +18,12 @@ import {
   Layers,
 } from 'lucide-react';
 import { settingsService } from '../../services/settings/settingsService';
+import { useWorkbenchStore } from '../../store/workbenchStore';
 import { ENGINE_PRESETS } from '../../services/settings/presets';
 import { GEMINI_MODEL_PROFILES, type GeminiModelKey } from '../../types/workbench';
+import { isTrainingStudioEnabled } from '../../lib/training/env';
+import { TrainingStudioScreen } from '../Training/TrainingStudioScreen';
+import { Sparkles } from 'lucide-react';
 import {
   loadTyperSettings,
   saveTyperSettings,
@@ -45,7 +49,8 @@ type SettingsCategory =
   | 'memory'
   | 'workspace'
   | 'quality'
-  | 'typers';
+  | 'typers'
+  | 'training';
 
 const PROMPT_PRESETS = [
   {
@@ -87,6 +92,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   useEffect(() => {
     const unsub = settingsService.subscribe(() => {
       setRevision(settingsService.getRevision());
+
     });
     return () => unsub();
   }, []);
@@ -110,7 +116,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const setVal = (key: string, val: any) => {
     settingsService.setSettingValue(key, val, { projectId, scope: projectId ? 'project' : 'global' });
+    if (key === 'scanning.include_sfx') {
+      useWorkbenchStore.getState().reconcileActiveSFXState(Boolean(val));
+    }
     setRevision(settingsService.getRevision());
+
   };
 
   const handleResetCategory = () => {
@@ -124,6 +134,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     if (window.confirm(`Reset all settings in "${activeCategory}" to default?`)) {
       settingsService.resetCategory(activeCategory, { projectId });
       setRevision(settingsService.getRevision());
+
     }
   };
 
@@ -131,6 +142,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     const res = settingsService.applyPreset(presetId, { projectId });
     if (res.success) {
       setRevision(settingsService.getRevision());
+
     }
   };
 
@@ -229,6 +241,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     { id: 'workspace', label: 'Workspace & Presentation', icon: <Layers className="w-4 h-4" />, desc: 'Workspace canvas scale, reading navigation, overlays, and coordinate diagnostics.' },
     { id: 'typers', label: 'Typers & Tags', icon: <Type className="w-4 h-4" />, desc: 'Tag prefixes, Arabic RTL positioning, and AI functional classification rules.' },
     { id: 'quality', label: 'Benchmarks & Release Gates', icon: <Activity className="w-4 h-4" />, desc: 'System #6: Benchmark regression gates, CER ceilings, and quality qualifications.' },
+    ...(isTrainingStudioEnabled()
+      ? [
+          {
+            id: 'training' as SettingsCategory,
+            label: 'Training Studio',
+            icon: <Sparkles className="w-4 h-4 text-amber-400" />,
+            desc: 'Development Studio: Multimodal Reference Sets, ground-truth visual annotations, and Gemini prompt training.',
+          },
+        ]
+      : []),
     { id: 'general', label: 'General & API Vault', icon: <Cpu className="w-4 h-4" />, desc: 'Gemini API keys, hardware telemetry latency, and global credentials.' },
   ];
 
@@ -344,7 +366,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
 
           {/* Right Controls Panel */}
-          <div className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6">
+          <div className={activeCategory === 'training' ? "flex-1 flex flex-col overflow-hidden p-0" : "flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6"}>
             {/* Category Header Banner */}
             <div className="pb-3 border-b border-white/[0.06]">
               <h2 className="text-sm font-mono uppercase font-bold tracking-wider text-zinc-100 flex items-center gap-2">
@@ -1020,6 +1042,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   />
                 </div>
               </div>
+            )}
+
+            {/* CATEGORY: TRAINING STUDIO (DEV ONLY) */}
+            {activeCategory === 'training' && isTrainingStudioEnabled() && (
+              <TrainingStudioScreen />
             )}
 
             {/* CATEGORY 8: GENERAL & API VAULT */}

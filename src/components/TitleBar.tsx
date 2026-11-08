@@ -1,16 +1,19 @@
 import React, { useState } from 'react';
-import { Layers, Minus, Square, X, Sliders, Activity } from 'lucide-react';
+import { Layers, Minus, Square, X, Sliders, Activity, Sparkles } from 'lucide-react';
+import { isTrainingStudioEnabled } from '../lib/training/env';
 
 interface TitleBarProps {
   activeFolderName: string;
   onOpenSettings?: () => void;
   onOpenBenchmark?: () => void;
+  onOpenTrainingStudio?: () => void;
 }
 
 export const TitleBar: React.FC<TitleBarProps> = ({
   activeFolderName,
   onOpenSettings,
   onOpenBenchmark,
+  onOpenTrainingStudio,
 }) => {
   const [isMaximized, setIsMaximized] = useState(false);
 
@@ -73,6 +76,18 @@ export const TitleBar: React.FC<TitleBarProps> = ({
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500/80 animate-pulse" />
           Workspace Ready
         </span>
+
+        {isTrainingStudioEnabled() && onOpenTrainingStudio && (
+          <button
+            type="button"
+            onClick={onOpenTrainingStudio}
+            className="flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[11px] font-mono text-amber-300 hover:text-amber-100 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 transition-colors cursor-pointer shadow-sm"
+            title="Open Training Studio (Dev Only)"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+            <span>Training Studio</span>
+          </button>
+        )}
 
         {onOpenBenchmark && (
           <button

@@ -33,7 +33,7 @@ import type {
 } from '../types/review';
 
 const DB_NAME = 'dragonfly44_db';
-const DB_VERSION = 7;
+export const DB_VERSION = 8;
 
 const STORE_PAGE_BLOBS = 'page_blobs';
 const STORE_PAGE_BUBBLES = 'page_bubbles';
@@ -56,6 +56,8 @@ const STORE_KNOWLEDGE_QUARANTINE = 'knowledge_quarantine';
 const STORE_KNOWLEDGE_CONFLICTS = 'knowledge_conflicts';
 const STORE_KNOWLEDGE_IDEMPOTENCY = 'knowledge_idempotency';
 const STORE_MEMORY_SETTINGS = 'memory_settings';
+export const STORE_TRAINING_REFERENCE_SETS = 'training_reference_sets';
+export const STORE_TRAINING_BLOBS = 'training_blobs';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -170,6 +172,14 @@ export function getDatabase(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(STORE_MEMORY_SETTINGS)) {
         db.createObjectStore(STORE_MEMORY_SETTINGS, { keyPath: 'project_id' });
+      }
+      if (!db.objectStoreNames.contains(STORE_TRAINING_REFERENCE_SETS)) {
+        const refStore = db.createObjectStore(STORE_TRAINING_REFERENCE_SETS, { keyPath: 'id' });
+        refStore.createIndex('enabled', 'enabled', { unique: false });
+        refStore.createIndex('priority', 'priority', { unique: false });
+      }
+      if (!db.objectStoreNames.contains(STORE_TRAINING_BLOBS)) {
+        db.createObjectStore(STORE_TRAINING_BLOBS);
       }
     };
 

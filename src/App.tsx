@@ -5,6 +5,8 @@ import { Workbench } from './components/Workbench/Workbench';
 import { TitleBar } from './components/TitleBar';
 import { SettingsModal } from './components/Settings/SettingsModal';
 import { BenchmarkScreen } from './components/Benchmark/BenchmarkScreen';
+import { TrainingStudioModal } from './components/Training/TrainingStudioModal';
+import { isTrainingStudioEnabled } from './lib/training/env';
 import { useWorkbenchStore } from './store/workbenchStore';
 import { initialFolders } from './mockData';
 import type { Folder, Chapter, PageMetadata } from './types';
@@ -77,6 +79,7 @@ export function App() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isGlobalSettingsOpen, setIsGlobalSettingsOpen] = useState(false);
   const [isBenchmarkOpen, setIsBenchmarkOpen] = useState(false);
+  const [isTrainingStudioOpen, setIsTrainingStudioOpen] = useState(false);
 
   // Global Ctrl+, shortcut for Settings
   useEffect(() => {
@@ -495,17 +498,31 @@ export function App() {
         activeFolderName={activeFolder ? activeFolder.name : 'No project selected'}
         onOpenSettings={() => setIsGlobalSettingsOpen(true)}
         onOpenBenchmark={() => setIsBenchmarkOpen(true)}
+        onOpenTrainingStudio={() => setIsTrainingStudioOpen(true)}
       />
 
       {/* Main Workspace */}
       <div className="flex-1 flex flex-col p-6 overflow-hidden">
-        {/* Active Project Title */}
-        <div className="mb-4 flex items-baseline justify-between">
+        {/* Active Project Title & Developer Toolbar */}
+        <div className="mb-4 flex items-center justify-between">
           <h1 className={`text-2xl font-medium tracking-tight capitalize ${
             activeFolder ? 'text-white' : 'text-zinc-600'
           }`}>
             {activeFolder ? activeFolder.name : 'No project selected'}
           </h1>
+
+          {isTrainingStudioEnabled() && (
+            <button
+              type="button"
+              onClick={() => setIsTrainingStudioOpen(true)}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 font-mono text-xs font-semibold shadow-lg shadow-amber-950/20 transition-all cursor-pointer"
+              title="Open Training Studio to manage Reference Sets and visual annotations"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+              <span>Training Studio</span>
+              <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 font-bold border border-amber-500/40">DEV</span>
+            </button>
+          )}
         </div>
 
         {/* 2-Column Split: Chapters Hub on Left, Folder Organization on Right */}
@@ -568,6 +585,12 @@ export function App() {
       <BenchmarkScreen
         isOpen={isBenchmarkOpen}
         onClose={() => setIsBenchmarkOpen(false)}
+      />
+
+      {/* Training Studio Modal (Dev Only) */}
+      <TrainingStudioModal
+        isOpen={isTrainingStudioOpen}
+        onClose={() => setIsTrainingStudioOpen(false)}
       />
     </div>
   );
