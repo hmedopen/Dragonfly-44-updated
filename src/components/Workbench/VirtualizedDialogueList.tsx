@@ -5,11 +5,22 @@ import { DialogueCard } from './DialogueCard';
 interface VirtualizedDialogueListProps {
   bubbles: BubbleItem[];
   selectedBubbleId: string | null;
+  activeEyeBubbleId?: string | null;
   onSelectBubble: (bubbleId: string) => void;
   onFocusBubble?: (bubble: BubbleItem) => void;
   onUpdateBubble: (bubbleId: string, patch: Partial<BubbleItem>) => void;
   onDeleteBubble: (bubbleId: string) => void;
   onSplitBubble?: (bubbleId: string, splitIndex: number) => void;
+  onTransferText?: (params: {
+    sourceBubbleId: string;
+    sourceField: 'sourceText' | 'translatedText';
+    sourceStart: number;
+    sourceEnd: number;
+    destBubbleId: string;
+    destField: 'sourceText' | 'translatedText';
+    dropPos: number;
+    transferredText: string;
+  }) => void;
   onTranslateBubble?: (bubbleId: string) => Promise<void>;
   onAcceptFlag: (bubbleId: string, flagId: string) => void;
   onDismissFlag: (bubbleId: string, flagId: string) => void;
@@ -23,11 +34,13 @@ interface VirtualizedDialogueListProps {
 export const VirtualizedDialogueList: React.FC<VirtualizedDialogueListProps> = ({
   bubbles,
   selectedBubbleId,
+  activeEyeBubbleId,
   onSelectBubble,
   onFocusBubble,
   onUpdateBubble,
   onDeleteBubble,
   onSplitBubble,
+  onTransferText,
   onTranslateBubble,
   onAcceptFlag,
   onDismissFlag,
@@ -77,11 +90,13 @@ export const VirtualizedDialogueList: React.FC<VirtualizedDialogueListProps> = (
             bubble={bubble}
             index={index}
             isSelected={selectedBubbleId === bubble.id}
+            isEyeActive={activeEyeBubbleId === bubble.id}
             onSelect={onSelectBubble}
             onFocusBubble={onFocusBubble}
             onUpdate={onUpdateBubble}
             onDelete={onDeleteBubble}
             onSplitBubble={onSplitBubble}
+            onTransferText={onTransferText}
             onTranslate={onTranslateBubble}
             onAcceptFlag={(flagId) => onAcceptFlag(bubble.id, flagId)}
             onDismissFlag={(flagId) => onDismissFlag(bubble.id, flagId)}

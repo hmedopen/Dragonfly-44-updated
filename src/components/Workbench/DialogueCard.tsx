@@ -3,6 +3,8 @@ import type { BubbleItem } from '../../types/workbench';
 import { BUBBLE_TYPE_CONFIG, REVIEW_CATEGORY_LABELS } from '../../types/workbench';
 import { loadTyperSettings } from '../../types/typers';
 import { focusRegistry } from '../../lib/focusRegistry';
+import { internalTextDrag, type TextDragPayload } from '../../lib/internalTextDrag';
+import { useConfirmationSetting } from '../../lib/confirmation';
 import { 
   Eye, 
   Trash2, 
@@ -20,11 +22,22 @@ import {
 interface DialogueCardProps {
   bubble: BubbleItem;
   isSelected: boolean;
+  isEyeActive?: boolean;
   onSelect: (bubbleId: string) => void;
   onFocusBubble?: (bubble: BubbleItem) => void;
   onUpdate: (bubbleId: string, patch: Partial<BubbleItem>) => void;
   onDelete: (bubbleId: string) => void;
   onSplitBubble?: (bubbleId: string, splitIndex: number) => void;
+  onTransferText?: (params: {
+    sourceBubbleId: string;
+    sourceField: 'sourceText' | 'translatedText';
+    sourceStart: number;
+    sourceEnd: number;
+    destBubbleId: string;
+    destField: 'sourceText' | 'translatedText';
+    dropPos: number;
+    transferredText: string;
+  }) => void;
   onTranslate?: (bubbleId: string) => Promise<void>;
   onAcceptFlag?: (flagId: string) => void;
   onDismissFlag?: (flagId: string) => void;
@@ -46,11 +59,13 @@ function autoResize(el: HTMLTextAreaElement | null) {
 export const DialogueCard: React.FC<DialogueCardProps> = ({
   bubble,
   isSelected,
+  isEyeActive = false,
   onSelect,
   onFocusBubble,
   onUpdate,
   onDelete,
   onSplitBubble,
+  onTransferText,
   onTranslate,
   onAcceptFlag,
   onDismissFlag,
@@ -68,6 +83,30 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
   const [isTranslating, setIsTranslating] = useState(false);
   const [splitTip, setSplitTip] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Phase 1.2: Local draft state for robust Save/Revert controls and automatic cancellation
+  const [draftSourceText, setDraftSourceText] = useState(bubble.sourceText || '');
+  const [draftTranslatedText, setDraftTranslatedText] = useState(bubble.translatedText || '');
+
+  // Keep draft in sync with external bubble updates
+  useEffect(() => {
+    setDraftSourceText(bubble.sourceText || '');
+  }, [bubble.sourceText]);
+
+  useEffect(() => {
+    setDraftTranslatedText(bubble.translatedText || '');
+  }, [bubble.translatedText]);
+
+  const isSourceDirty = draftSourceText !== (bubble.sourceText || '');
+  const isTranslationDirty = draftTranslatedText !== (bubble.translatedText || '');
+
+  // System #6 Unified Confirmation Setting & Armed Button States
+  const isConfirmationEnabled = useConfirmationSetting();
+  const [isArmedSourceSave, setIsArmedSourceSave] = useState(false);
+  const [isArmedSourceRevert, setIsArmedSourceRevert] = useState(false);
+  const [isArmedTransSave, setIsArmedTransSave] = useState(false);
+  const [isArmedTransRevert, setIsArmedTransRevert] = useState(false);
+  const [isArmedDeleteBubble, setIsArmedDeleteBubble] = useState(false);
 
   // Review flags expansion: OPEN by default when flags appear, only closes on click
   const [selectedFlagId, setSelectedFlagId] = useState<string | null>(null);
@@ -90,12 +129,12 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
   // Auto-resize source textarea when value changes
   useEffect(() => {
     autoResize(sourceTextareaRef.current);
-  }, [bubble.sourceText]);
+  }, [draftSourceText]);
 
   // Auto-resize translation textarea when value changes
   useEffect(() => {
     autoResize(translationTextareaRef.current);
-  }, [bubble.translatedText]);
+  }, [draftTranslatedText]);
 
   // Listen to typer settings updates dynamically
   const [typerSettings, setTyperSettings] = useState(() => loadTyperSettings());
@@ -132,7 +171,6 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
   const currentLabel = useMemo(() => {
     if (currentTyper) return currentTyper.name;
     if (bubble.type === 'none' || !bubble.type) return 'None';
-    // Fallback to legacy config if present
     const legacy = BUBBLE_TYPE_CONFIG[bubble.type as keyof typeof BUBBLE_TYPE_CONFIG];
     return legacy ? legacy.label : bubble.type;
   }, [currentTyper, bubble.type]);
@@ -144,11 +182,12 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
   }, [currentTyper, bubble.type, bubble.typerPrefix]);
 
   const canRevertSource = Boolean(
-    bubble.originalSourceText && bubble.sourceText !== bubble.originalSourceText
+    !isSourceDirty && bubble.originalSourceText && bubble.sourceText !== bubble.originalSourceText
   );
   const canRevertTranslation = Boolean(
-    (bubble.humanizedTranslatedText && bubble.translatedText !== bubble.humanizedTranslatedText) ||
-    (bubble.rawTranslatedText && bubble.translatedText !== bubble.rawTranslatedText)
+    !isTranslationDirty &&
+    ((bubble.humanizedTranslatedText && bubble.translatedText !== bubble.humanizedTranslatedText) ||
+     (bubble.rawTranslatedText && bubble.translatedText !== bubble.rawTranslatedText))
   );
 
   const revertTranslationLabel = useMemo(() => {
@@ -192,28 +231,156 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
     }
   };
 
+  // Input change handlers
   const handleSourceInput = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    onUpdate(bubble.id, { sourceText: e.target.value });
+    setDraftSourceText(e.target.value);
     autoResize(e.target);
-  }, [bubble.id, onUpdate]);
+  }, []);
 
   const handleTranslationInput = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    onUpdate(bubble.id, { translatedText: e.target.value });
+    setDraftTranslatedText(e.target.value);
     autoResize(e.target);
-  }, [bubble.id, onUpdate]);
+  }, []);
 
+  // Save / Revert actions with unified confirmation transform support
+  const handleSaveSourceClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!isConfirmationEnabled) {
+      setIsArmedSourceSave(false);
+      onUpdate(bubble.id, { sourceText: draftSourceText, isManuallyEdited: true });
+      return;
+    }
+    if (isArmedSourceSave) {
+      setIsArmedSourceSave(false);
+      onUpdate(bubble.id, { sourceText: draftSourceText, isManuallyEdited: true });
+    } else {
+      setIsArmedSourceSave(true);
+    }
+  }, [isConfirmationEnabled, isArmedSourceSave, bubble.id, draftSourceText, onUpdate]);
+
+  const handleRevertSourceDraftClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!isConfirmationEnabled) {
+      setIsArmedSourceRevert(false);
+      setDraftSourceText(bubble.sourceText || '');
+      if (sourceTextareaRef.current) {
+        sourceTextareaRef.current.value = bubble.sourceText || '';
+        autoResize(sourceTextareaRef.current);
+      }
+      return;
+    }
+    if (isArmedSourceRevert) {
+      setIsArmedSourceRevert(false);
+      setDraftSourceText(bubble.sourceText || '');
+      if (sourceTextareaRef.current) {
+        sourceTextareaRef.current.value = bubble.sourceText || '';
+        autoResize(sourceTextareaRef.current);
+      }
+    } else {
+      setIsArmedSourceRevert(true);
+    }
+  }, [isConfirmationEnabled, isArmedSourceRevert, bubble.sourceText]);
+
+  const handleRevertSourceHistoryClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!isConfirmationEnabled) {
+      setIsArmedSourceRevert(false);
+      onRevertSource?.();
+      return;
+    }
+    if (isArmedSourceRevert) {
+      setIsArmedSourceRevert(false);
+      onRevertSource?.();
+    } else {
+      setIsArmedSourceRevert(true);
+    }
+  }, [isConfirmationEnabled, isArmedSourceRevert, onRevertSource]);
+
+  const handleSaveTranslationClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!isConfirmationEnabled) {
+      setIsArmedTransSave(false);
+      onUpdate(bubble.id, { translatedText: draftTranslatedText, isManuallyEdited: true });
+      return;
+    }
+    if (isArmedTransSave) {
+      setIsArmedTransSave(false);
+      onUpdate(bubble.id, { translatedText: draftTranslatedText, isManuallyEdited: true });
+    } else {
+      setIsArmedTransSave(true);
+    }
+  }, [isConfirmationEnabled, isArmedTransSave, bubble.id, draftTranslatedText, onUpdate]);
+
+  const handleRevertTranslationDraftClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!isConfirmationEnabled) {
+      setIsArmedTransRevert(false);
+      setDraftTranslatedText(bubble.translatedText || '');
+      if (translationTextareaRef.current) {
+        translationTextareaRef.current.value = bubble.translatedText || '';
+        autoResize(translationTextareaRef.current);
+      }
+      return;
+    }
+    if (isArmedTransRevert) {
+      setIsArmedTransRevert(false);
+      setDraftTranslatedText(bubble.translatedText || '');
+      if (translationTextareaRef.current) {
+        translationTextareaRef.current.value = bubble.translatedText || '';
+        autoResize(translationTextareaRef.current);
+      }
+    } else {
+      setIsArmedTransRevert(true);
+    }
+  }, [isConfirmationEnabled, isArmedTransRevert, bubble.translatedText]);
+
+  const handleRevertTranslationHistoryClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!isConfirmationEnabled) {
+      setIsArmedTransRevert(false);
+      onRevertTranslation?.();
+      return;
+    }
+    if (isArmedTransRevert) {
+      setIsArmedTransRevert(false);
+      onRevertTranslation?.();
+    } else {
+      setIsArmedTransRevert(true);
+    }
+  }, [isConfirmationEnabled, isArmedTransRevert, onRevertTranslation]);
+
+  const handleDeleteBubbleClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!isConfirmationEnabled) {
+      setIsArmedDeleteBubble(false);
+      onDelete(bubble.id);
+      return;
+    }
+    if (isArmedDeleteBubble) {
+      setIsArmedDeleteBubble(false);
+      onDelete(bubble.id);
+    } else {
+      setIsArmedDeleteBubble(true);
+    }
+  }, [isConfirmationEnabled, isArmedDeleteBubble, bubble.id, onDelete]);
+
+  // Phase 1.4: Move Split Bubble into toolbar handler
   const handleSplitClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     if (!onSplitBubble) return;
 
     const textarea = sourceTextareaRef.current;
-    const text = bubble.sourceText || '';
+    const text = draftSourceText;
     if (!textarea) return;
 
     const selStart = textarea.selectionStart;
 
     if (selStart !== null && selStart > 0 && selStart < text.length) {
       setSplitTip(null);
+      // If there are unsaved edits, commit them first before splitting
+      if (draftSourceText !== (bubble.sourceText || '')) {
+        onUpdate(bubble.id, { sourceText: draftSourceText, isManuallyEdited: true });
+      }
       onSplitBubble(bubble.id, selStart);
     } else {
       setSplitTip('Place cursor in raw dialogue where you want to split.');
@@ -222,14 +389,125 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
         setSplitTip(null);
       }, 4000);
     }
-  }, [bubble.id, bubble.sourceText, onSplitBubble]);
+  }, [bubble.id, bubble.sourceText, draftSourceText, onSplitBubble, onUpdate]);
+
+  // Phase 1.1: Internal Text Drag & Drop handlers
+  const handleTextareaDragStart = (
+    e: React.DragEvent<HTMLTextAreaElement>,
+    field: 'sourceText' | 'translatedText'
+  ) => {
+    const el = e.currentTarget;
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    if (start === null || end === null || start === end) {
+      e.preventDefault();
+      return;
+    }
+    const selected = el.value.slice(start, end);
+    if (!selected) {
+      e.preventDefault();
+      return;
+    }
+
+    const payload: TextDragPayload = {
+      sourceBubbleId: bubble.id,
+      sourceField: field,
+      selectedText: selected,
+      rangeStart: start,
+      rangeEnd: end,
+    };
+
+    internalTextDrag.startDrag(payload);
+    e.dataTransfer.setData('application/x-folio-text-drag', JSON.stringify(payload));
+    e.dataTransfer.setData('text/plain', selected);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleTextareaDragEnd = () => {
+    internalTextDrag.endDrag();
+  };
+
+  const handleTextareaDragOver = (e: React.DragEvent<HTMLTextAreaElement>) => {
+    if (internalTextDrag.isDragging() || e.dataTransfer.types.includes('application/x-folio-text-drag')) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = 'move';
+    }
+  };
+
+  const handleTextareaDrop = (
+    e: React.DragEvent<HTMLTextAreaElement>,
+    destField: 'sourceText' | 'translatedText'
+  ) => {
+    if (!internalTextDrag.isDragging() && !e.dataTransfer.types.includes('application/x-folio-text-drag')) {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+
+    let dragData = internalTextDrag.getActiveDrag();
+    if (!dragData) {
+      try {
+        const raw = e.dataTransfer.getData('application/x-folio-text-drag');
+        if (raw) dragData = JSON.parse(raw);
+      } catch {}
+    }
+
+    if (!dragData) {
+      internalTextDrag.endDrag();
+      return;
+    }
+
+    const targetEl = e.currentTarget;
+    let dropPos = targetEl.value.length;
+
+    if ((document as any).caretPositionFromPoint) {
+      const pos = (document as any).caretPositionFromPoint(e.clientX, e.clientY);
+      if (pos && typeof pos.offset === 'number') {
+        dropPos = pos.offset;
+      }
+    } else if ((document as any).caretRangeFromPoint) {
+      const range = (document as any).caretRangeFromPoint(e.clientX, e.clientY);
+      if (range && typeof range.startOffset === 'number') {
+        dropPos = range.startOffset;
+      }
+    } else if (typeof targetEl.selectionStart === 'number') {
+      dropPos = targetEl.selectionStart;
+    }
+
+    dropPos = Math.max(0, Math.min(targetEl.value.length, dropPos));
+
+    if (onTransferText) {
+      onTransferText({
+        sourceBubbleId: dragData.sourceBubbleId,
+        sourceField: dragData.sourceField,
+        sourceStart: dragData.rangeStart,
+        sourceEnd: dragData.rangeEnd,
+        destBubbleId: bubble.id,
+        destField,
+        dropPos,
+        transferredText: dragData.selectedText,
+      });
+    }
+
+    internalTextDrag.endDrag();
+  };
 
   return (
     <div
       ref={cardRef}
       onClick={() => onSelect(bubble.id)}
-      onDragEnter={(e) => onDragEnter(e, index)}
-      onDragOver={(e) => e.preventDefault()}
+      onDragEnter={(e) => {
+        if (internalTextDrag.isDragging()) return;
+        onDragEnter(e, index);
+      }}
+      onDragOver={(e) => {
+        if (internalTextDrag.isDragging()) {
+          e.preventDefault();
+          return;
+        }
+        e.preventDefault();
+      }}
       className={`group/card relative rounded-2xl border transition-all duration-150 select-none p-4 ${
         isSelected
           ? 'bg-[#14151a] border-sky-500/70 shadow-[0_0_24px_rgba(56,189,248,0.12)] ring-1 ring-sky-500/30'
@@ -329,7 +607,7 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
             )}
           </div>
 
-          {/* Header Flag Indicator — no count */}
+          {/* Header Flag Indicator */}
           {hasFlags && (
             <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-amber-400 text-black text-[10px] font-bold">
               <span>FLAGGED</span>
@@ -337,9 +615,9 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
           )}
         </div>
 
-        {/* Right: Translate Button [Languages], Camera Focus & Zoom Button [👁], Delete Button [🗑] */}
+        {/* Phase 1.4: Unified 4-Action Toolbar: Translate, Eye / Preview, Split Bubble, Delete */}
         <div className="flex items-center gap-2.5 text-zinc-400">
-          {/* Translate Single Bubble Button */}
+          {/* 1. Translate Single Bubble Button */}
           <button
             type="button"
             onClick={handleTranslate}
@@ -361,7 +639,7 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
             )}
           </button>
 
-          {/* Camera Focus & Zoom Button [👁] */}
+          {/* 2. Camera Focus & Zoom Button [👁] with reversible visual feedback */}
           <button
             type="button"
             onClick={(e) => {
@@ -372,23 +650,40 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
                 onSelect(bubble.id);
               }
             }}
-            title="Focus page and zoom on canvas bubble"
-            className="hover:text-white transition-colors cursor-pointer p-0.5"
+            title={isEyeActive ? 'Exit focused zoom (Restore previous view)' : 'Focus page and zoom on canvas bubble'}
+            className={`transition-colors cursor-pointer p-0.5 ${
+              isEyeActive ? 'text-sky-400 drop-shadow-[0_0_6px_rgba(56,189,248,0.5)]' : 'text-zinc-400 hover:text-white'
+            }`}
           >
             <Eye className="w-4 h-4" />
           </button>
 
-          {/* Delete Button [🗑] */}
+          {/* 3. Split Bubble Button [✂] Moved into action toolbar */}
+          {onSplitBubble && (
+            <button
+              type="button"
+              onClick={handleSplitClick}
+              title="Place cursor in raw dialogue and click to split this bubble into two records"
+              className="text-zinc-400 hover:text-amber-300 transition-colors cursor-pointer p-0.5"
+            >
+              <Scissors className="w-4 h-4" />
+            </button>
+          )}
+
+          {/* 4. Delete Button [🗑] with Confirmation Transform */}
           <button
             type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete(bubble.id);
-            }}
-            title="Delete card"
-            className="hover:text-red-400 transition-colors cursor-pointer p-0.5"
+            onClick={handleDeleteBubbleClick}
+            onMouseLeave={() => setIsArmedDeleteBubble(false)}
+            title={isConfirmationEnabled ? (isArmedDeleteBubble ? "Click again to confirm delete" : "Delete card") : "Delete card"}
+            className={`transition-colors cursor-pointer p-0.5 flex items-center gap-1 ${
+              isArmedDeleteBubble
+                ? 'px-2 py-0.5 rounded bg-red-600 hover:bg-red-500 text-white text-[10px] font-bold animate-pulse shadow-sm'
+                : 'hover:text-red-400 text-zinc-400'
+            }`}
           >
-            <Trash2 className="w-4 h-4" />
+            <Trash2 className="w-4 h-4 pointer-events-none" />
+            {isArmedDeleteBubble && <span className="pointer-events-none">Delete?</span>}
           </button>
         </div>
       </div>
@@ -397,40 +692,63 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
       <div className="flex flex-col gap-3">
         {/* Source Text Box */}
         <div className="flex flex-col">
-          <div className="flex items-center justify-between mb-1.5">
+          <div className="flex items-center justify-between mb-1.5 min-h-[22px]">
             <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">
               RAW / SOURCE DIALOGUE
             </label>
             <div className="flex items-center gap-2">
-              {onSplitBubble && (
+              {/* Phase 1.2: Inline Save/Revert controls with independent confirmation transform */}
+              {isSourceDirty ? (
+                <div className="flex items-center gap-1.5 animate-in fade-in duration-100">
+                  <button
+                    type="button"
+                    onClick={handleSaveSourceClick}
+                    onMouseLeave={() => setIsArmedSourceSave(false)}
+                    className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer transition-colors shadow-sm ${
+                      isArmedSourceSave
+                        ? 'bg-amber-400 hover:bg-amber-300 text-black animate-pulse'
+                        : 'bg-emerald-500 hover:bg-emerald-400 text-black'
+                    }`}
+                    title={isConfirmationEnabled ? (isArmedSourceSave ? "Click again to confirm Save" : "Save changes to source dialogue") : "Save changes to source dialogue"}
+                  >
+                    <Check className="w-2.5 h-2.5 stroke-[2.5] pointer-events-none" />
+                    <span className="pointer-events-none">{isArmedSourceSave ? 'Confirm Save?' : 'Save'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRevertSourceDraftClick}
+                    onMouseLeave={() => setIsArmedSourceRevert(false)}
+                    className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium cursor-pointer transition-colors ${
+                      isArmedSourceRevert
+                        ? 'bg-amber-600 hover:bg-amber-500 text-white font-bold animate-pulse'
+                        : 'bg-zinc-700 hover:bg-zinc-600 text-zinc-200'
+                    }`}
+                    title={isConfirmationEnabled ? (isArmedSourceRevert ? "Click again to confirm Revert" : "Cancel unsaved source edits") : "Cancel unsaved source edits"}
+                  >
+                    <X className="w-2.5 h-2.5 pointer-events-none" />
+                    <span className="pointer-events-none">{isArmedSourceRevert ? 'Confirm Revert?' : 'Revert'}</span>
+                  </button>
+                </div>
+              ) : canRevertSource ? (
                 <button
                   type="button"
-                  onClick={handleSplitClick}
-                  className="flex items-center gap-1 text-[10px] text-zinc-400 hover:text-sky-300 cursor-pointer transition-colors px-1.5 py-0.5 rounded border border-transparent hover:border-sky-500/20 hover:bg-sky-500/10"
-                  title="Place cursor in raw dialogue and click to split this bubble into two records"
+                  onClick={handleRevertSourceHistoryClick}
+                  onMouseLeave={() => setIsArmedSourceRevert(false)}
+                  className={`flex items-center gap-1 text-[10px] cursor-pointer transition-colors ${
+                    isArmedSourceRevert
+                      ? 'px-2 py-0.5 rounded bg-amber-500 text-black font-bold animate-pulse'
+                      : 'text-amber-400 hover:text-amber-300'
+                  }`}
+                  title={isConfirmationEnabled ? (isArmedSourceRevert ? "Click again to confirm Revert" : "Restore initial scanned source text") : "Restore initial scanned source text"}
                 >
-                  <Scissors className="w-2.5 h-2.5" />
-                  <span>Split Bubble</span>
+                  <RotateCcw className="w-2.5 h-2.5 pointer-events-none" />
+                  <span className="pointer-events-none">{isArmedSourceRevert ? 'Confirm Revert?' : 'Revert'}</span>
                 </button>
-              )}
-              {canRevertSource && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onRevertSource?.();
-                  }}
-                  className="flex items-center gap-1 text-[10px] text-amber-400 hover:text-amber-300 cursor-pointer transition-colors"
-                  title="Restore initial scanned source text"
-                >
-                  <RotateCcw className="w-2.5 h-2.5" />
-                  <span>Revert</span>
-                </button>
-              )}
+              ) : null}
             </div>
           </div>
           {splitTip && (
-            <div className="mb-1.5 text-[10px] text-amber-300 bg-amber-500/10 border border-amber-500/20 px-2 py-1 rounded-md">
+            <div className="mb-1.5 text-[10px] text-amber-300 bg-amber-500/10 border border-amber-500/20 px-2 py-1 rounded-md animate-in fade-in duration-150">
               {splitTip}
             </div>
           )}
@@ -439,35 +757,75 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
               ref={sourceTextareaRef}
               dir="auto"
               rows={1}
-              value={bubble.sourceText}
+              value={draftSourceText}
               onChange={handleSourceInput}
+              onDragStart={(e) => handleTextareaDragStart(e, 'sourceText')}
+              onDragEnd={handleTextareaDragEnd}
+              onDragOver={handleTextareaDragOver}
+              onDrop={(e) => handleTextareaDrop(e, 'sourceText')}
               onClick={(e) => e.stopPropagation()}
               placeholder="Type or paste source dialogue..."
-              className="w-full bg-transparent text-zinc-200 placeholder-zinc-600 focus:outline-none text-xs leading-relaxed resize-none font-sans block overflow-hidden"
+              className="w-full bg-transparent text-zinc-200 placeholder-zinc-600 focus:outline-none text-xs leading-relaxed resize-none font-sans block overflow-hidden select-text"
             />
           </div>
         </div>
 
         {/* Translation Box */}
         <div className="flex flex-col">
-          <div className="flex items-center justify-between mb-1.5">
+          <div className="flex items-center justify-between mb-1.5 min-h-[22px]">
             <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">
               ARABIC TRANSLATION
             </label>
-            {canRevertTranslation && (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onRevertTranslation?.();
-                }}
-                className="flex items-center gap-1 text-[10px] text-amber-400 hover:text-amber-300 cursor-pointer transition-colors"
-                title="Restore prior translation version without losing edit history"
-              >
-                <RotateCcw className="w-2.5 h-2.5" />
-                <span>{revertTranslationLabel}</span>
-              </button>
-            )}
+            <div className="flex items-center gap-2">
+              {/* Phase 1.2: Inline Save/Revert controls for pending unsaved translation edits */}
+              {isTranslationDirty ? (
+                <div className="flex items-center gap-1.5 animate-in fade-in duration-100">
+                  <button
+                    type="button"
+                    onClick={handleSaveTranslationClick}
+                    onMouseLeave={() => setIsArmedTransSave(false)}
+                    className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer transition-colors shadow-sm ${
+                      isArmedTransSave
+                        ? 'bg-amber-400 hover:bg-amber-300 text-black animate-pulse'
+                        : 'bg-emerald-500 hover:bg-emerald-400 text-black'
+                    }`}
+                    title={isConfirmationEnabled ? (isArmedTransSave ? "Click again to confirm Save" : "Save changes to translation") : "Save changes to translation"}
+                  >
+                    <Check className="w-2.5 h-2.5 stroke-[2.5] pointer-events-none" />
+                    <span className="pointer-events-none">{isArmedTransSave ? 'Confirm Save?' : 'Save'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRevertTranslationDraftClick}
+                    onMouseLeave={() => setIsArmedTransRevert(false)}
+                    className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium cursor-pointer transition-colors ${
+                      isArmedTransRevert
+                        ? 'bg-amber-600 hover:bg-amber-500 text-white font-bold animate-pulse'
+                        : 'bg-zinc-700 hover:bg-zinc-600 text-zinc-200'
+                    }`}
+                    title={isConfirmationEnabled ? (isArmedTransRevert ? "Click again to confirm Revert" : "Cancel unsaved translation edits") : "Cancel unsaved translation edits"}
+                  >
+                    <X className="w-2.5 h-2.5 pointer-events-none" />
+                    <span className="pointer-events-none">{isArmedTransRevert ? 'Confirm Revert?' : 'Revert'}</span>
+                  </button>
+                </div>
+              ) : canRevertTranslation ? (
+                <button
+                  type="button"
+                  onClick={handleRevertTranslationHistoryClick}
+                  onMouseLeave={() => setIsArmedTransRevert(false)}
+                  className={`flex items-center gap-1 text-[10px] cursor-pointer transition-colors ${
+                    isArmedTransRevert
+                      ? 'px-2 py-0.5 rounded bg-amber-500 text-black font-bold animate-pulse'
+                      : 'text-amber-400 hover:text-amber-300'
+                  }`}
+                  title={isConfirmationEnabled ? (isArmedTransRevert ? "Click again to confirm Revert" : "Restore prior translation version without losing edit history") : "Restore prior translation version without losing edit history"}
+                >
+                  <RotateCcw className="w-2.5 h-2.5 pointer-events-none" />
+                  <span className="pointer-events-none">{isArmedTransRevert ? 'Confirm Revert?' : revertTranslationLabel}</span>
+                </button>
+              ) : null}
+            </div>
           </div>
 
           <div
@@ -478,11 +836,15 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
               ref={translationTextareaRef}
               dir="rtl"
               rows={1}
-              value={bubble.translatedText}
+              value={draftTranslatedText}
               onFocus={() => focusRegistry.register(translationTextareaRef.current)}
               onChange={handleTranslationInput}
+              onDragStart={(e) => handleTextareaDragStart(e, 'translatedText')}
+              onDragEnd={handleTextareaDragEnd}
+              onDragOver={handleTextareaDragOver}
+              onDrop={(e) => handleTextareaDrop(e, 'translatedText')}
               placeholder="اكتب الترجمة العربية هنا..."
-              className="w-full bg-transparent text-zinc-100 placeholder-zinc-600 focus:outline-none font-sans text-sm leading-relaxed text-right resize-none block overflow-hidden"
+              className="w-full bg-transparent text-zinc-100 placeholder-zinc-600 focus:outline-none font-sans text-sm leading-relaxed text-right resize-none block overflow-hidden select-text"
             />
           </div>
         </div>
@@ -490,8 +852,7 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
         {/* 3. Multi-Flag Review Container */}
         {hasFlags && (
           <div className="mt-1 pt-2.5 border-t border-white/[0.06] flex flex-col gap-2">
-
-            {/* Flag Pills row — Accept/Dismiss sit inline on the same line */}
+            {/* Flag Pills row */}
             <div className="flex flex-wrap items-center gap-1.5">
               {flags.map((flag) => {
                 const isExpanded = effectiveExpandedFlagId === flag.id;
@@ -522,7 +883,7 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
                       )}
                     </button>
 
-                    {/* Accept / Dismiss inline — same height as the flag pill, only shown when pill is active */}
+                    {/* Accept / Dismiss inline */}
                     {isExpanded && (
                       <>
                         <button
@@ -554,14 +915,13 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
               })}
             </div>
 
-            {/* Expanded Flag Detail — reason plain, suggested fix in translation-style box */}
+            {/* Expanded Flag Detail */}
             {effectiveExpandedFlagId && (() => {
               const currentFlag = flags.find((f) => f.id === effectiveExpandedFlagId);
               if (!currentFlag) return null;
 
               return (
                 <div className="flex flex-col gap-2">
-                  {/* Reason — plain RTL text, no box */}
                   <p
                     dir="rtl"
                     className="text-zinc-300 text-sm leading-relaxed text-right font-sans"
@@ -569,14 +929,12 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
                     {currentFlag.reasonAr}
                   </p>
 
-                  {/* Evidence — visual cue from artwork or text */}
                   {currentFlag.evidence && (
                     <p className="text-[11px] text-zinc-400 font-mono italic">
                       Evidence: {currentFlag.evidence}
                     </p>
                   )}
 
-                  {/* Suggested fix — in a box identical to the Arabic translation box */}
                   {currentFlag.suggestedTextAr && (
                     <div className="rounded-xl bg-[#08080a] border border-white/[0.05] px-3.5 py-2.5">
                       <p

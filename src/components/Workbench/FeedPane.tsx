@@ -2,6 +2,7 @@ import React, { useRef } from 'react';
 import type { BubbleItem } from '../../types/workbench';
 import type { FeedFilterMode } from '../../store/workbenchStore';
 import { VirtualizedDialogueList } from './VirtualizedDialogueList';
+import { internalTextDrag } from '../../lib/internalTextDrag';
 import { 
   MessageSquare
 } from 'lucide-react';
@@ -9,12 +10,23 @@ import {
 interface FeedPaneProps {
   bubbles: BubbleItem[];
   selectedBubbleId: string | null;
+  activeEyeBubbleId?: string | null;
   feedFilter: FeedFilterMode;
   onSelectBubble: (bubbleId: string) => void;
   onFocusBubble?: (bubble: BubbleItem) => void;
   onUpdateBubble: (bubbleId: string, patch: Partial<BubbleItem>) => void;
   onDeleteBubble: (bubbleId: string) => void;
   onSplitBubble?: (bubbleId: string, splitIndex: number) => void;
+  onTransferText?: (params: {
+    sourceBubbleId: string;
+    sourceField: 'sourceText' | 'translatedText';
+    sourceStart: number;
+    sourceEnd: number;
+    destBubbleId: string;
+    destField: 'sourceText' | 'translatedText';
+    dropPos: number;
+    transferredText: string;
+  }) => void;
   onTranslateBubble?: (bubbleId: string) => Promise<void>;
   onAcceptFlag: (bubbleId: string, flagId: string) => void;
   onDismissFlag: (bubbleId: string, flagId: string) => void;
@@ -28,12 +40,14 @@ interface FeedPaneProps {
 export const FeedPane: React.FC<FeedPaneProps> = ({
   bubbles,
   selectedBubbleId,
+  activeEyeBubbleId,
   feedFilter,
   onSelectBubble,
   onFocusBubble,
   onUpdateBubble,
   onDeleteBubble,
   onSplitBubble,
+  onTransferText,
   onTranslateBubble,
   onAcceptFlag,
   onDismissFlag,
@@ -59,6 +73,7 @@ export const FeedPane: React.FC<FeedPaneProps> = ({
 
   const handleDragEnter = (e: React.DragEvent, targetIndex: number) => {
     e.preventDefault();
+    if (internalTextDrag.isDragging()) return;
     if (
       draggedIndexRef.current !== null &&
       draggedIndexRef.current !== targetIndex
@@ -79,11 +94,13 @@ export const FeedPane: React.FC<FeedPaneProps> = ({
         <VirtualizedDialogueList
           bubbles={displayedBubbles}
           selectedBubbleId={selectedBubbleId}
+          activeEyeBubbleId={activeEyeBubbleId}
           onSelectBubble={onSelectBubble}
           onFocusBubble={onFocusBubble}
           onUpdateBubble={onUpdateBubble}
           onDeleteBubble={onDeleteBubble}
           onSplitBubble={onSplitBubble}
+          onTransferText={onTransferText}
           onTranslateBubble={onTranslateBubble}
           onAcceptFlag={onAcceptFlag}
           onDismissFlag={onDismissFlag}

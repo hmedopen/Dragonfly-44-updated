@@ -31,7 +31,7 @@ import {
 } from 'lucide-react';
 import { ToolbarTooltip } from './ToolbarTooltip';
 import { isTrainingStudioEnabled } from '../../lib/training/env';
-import { settingsService } from '../../services/settings/settingsService';
+import { useConfirmationSetting } from '../../lib/confirmation';
 import type { PageMetadata } from '../../types';
 
 interface WorkbenchProps {
@@ -103,6 +103,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
     isReviewingSinglePage,
     runChapterReview,
     translateSingleBubble,
+    transferText,
   } = useWorkbenchStore();
 
   const [loadedBlobState, setLoadedBlobState] = useState<{ pageId: string | null; url: string | null }>({
@@ -117,6 +118,12 @@ export const Workbench: React.FC<WorkbenchProps> = ({
   const [isFlipPageActive, setIsFlipPageActive] = useState(false);
   const [canvasViewResetKey, setCanvasViewResetKey] = useState(0);
   const [focusTarget, setFocusTarget] = useState<{ bubbleId: string; box_2d: [number, number, number, number]; trigger: number } | null>(null);
+  const [centerTarget, setCenterTarget] = useState<{ bubbleId: string; box_2d: [number, number, number, number]; trigger: number } | null>(null);
+  const [panTarget, setPanTarget] = useState<{ x: number; y: number; trigger: number } | null>(null);
+  const [activeEyeBubbleId, setActiveEyeBubbleId] = useState<string | null>(null);
+  const savedViewBeforeEyeRef = useRef<{ zoom: number; pan: { x: number; y: number } } | null>(null);
+  const prevPageIdRef = useRef<string | null>(null);
+  const currentPanRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const pendingFocusRef = useRef<{ bubbleId: string; pageId: string } | null>(null);
   const zoomMenuRef = useRef<HTMLDivElement>(null);
   const [deletingPageId, setDeletingPageId] = useState<string | null>(null);
@@ -134,7 +141,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
   const [saveOrderArmed, setSaveOrderArmed] = useState(false);
   const pendingTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  const isDoubleConfirmEnabled = settingsService.getEffectiveValue<boolean>('workspace.double_click_confirmation').value ?? true;
+  const isDoubleConfirmEnabled = useConfirmationSetting(folder?.id);
 
   const pages = chapter?.pageList || [];
   const displayPages = pendingPages || pages;
@@ -238,7 +245,6 @@ export const Workbench: React.FC<WorkbenchProps> = ({
         commitReorderedPages();
       } else {
         setSaveOrderArmed(true);
-        setTimeout(() => setSaveOrderArmed(false), 3500);
       }
     }
   };
@@ -257,21 +263,46 @@ export const Workbench: React.FC<WorkbenchProps> = ({
 
   const handlePrevPage = () => {
     if (hasPrevPage) {
+      setDeletingPageId(null);
+      setIsConfirmingExit(false);
       setActivePageId(pages[currentPageIndex - 1].id);
     }
   };
 
   const handleNextPage = () => {
     if (hasNextPage) {
+      setDeletingPageId(null);
+      setIsConfirmingExit(false);
       setActivePageId(pages[currentPageIndex + 1].id);
     }
   };
 
   const handleBackClick = () => {
+    if (!isDoubleConfirmEnabled) {
+      setIsConfirmingExit(false);
+      onBack();
+      return;
+    }
     if (isConfirmingExit) {
+      setIsConfirmingExit(false);
       onBack();
     } else {
       setIsConfirmingExit(true);
+    }
+  };
+
+  const handleDeletePageClick = (e: React.MouseEvent, pageId: string) => {
+    e.stopPropagation();
+    if (!isDoubleConfirmEnabled) {
+      setDeletingPageId(null);
+      onDeletePage?.(pageId);
+      return;
+    }
+    if (deletingPageId === pageId) {
+      setDeletingPageId(null);
+      onDeletePage?.(pageId);
+    } else {
+      setDeletingPageId(pageId);
     }
   };
 
@@ -306,6 +337,29 @@ export const Workbench: React.FC<WorkbenchProps> = ({
       return () => document.removeEventListener('mousedown', handleOutsideClick);
     }
   }, [isZoomDropdownOpen]);
+
+  // Req #3: Reset armed page delete on outside click
+  useEffect(() => {
+    if (!deletingPageId) return;
+    const handleOutsideClick = () => {
+      setDeletingPageId(null);
+    };
+    window.addEventListener('mousedown', handleOutsideClick);
+    return () => window.removeEventListener('mousedown', handleOutsideClick);
+  }, [deletingPageId]);
+
+  // Req #8: Reset canvas zoom & view when switching pages
+  useEffect(() => {
+    if (effectivePageId && prevPageIdRef.current && prevPageIdRef.current !== effectivePageId) {
+      resetZoom();
+      setCanvasViewResetKey((k) => k + 1);
+      setActiveEyeBubbleId(null);
+      savedViewBeforeEyeRef.current = null;
+      setFocusTarget(null);
+      setCenterTarget(null);
+    }
+    prevPageIdRef.current = effectivePageId;
+  }, [effectivePageId, resetZoom]);
 
   // Global Keyboard shortcuts: Escape, Ctrl+, Ctrl+K, J, K (focus-guarded)
   useEffect(() => {
@@ -536,7 +590,30 @@ export const Workbench: React.FC<WorkbenchProps> = ({
   };
 
   const handleFocusBubble = (bubble: BubbleItem) => {
+    if (activeEyeBubbleId === bubble.id) {
+      setActiveEyeBubbleId(null);
+      setFocusTarget(null);
+      if (savedViewBeforeEyeRef.current) {
+        setZoomLevel(savedViewBeforeEyeRef.current.zoom);
+        setPanTarget({ ...savedViewBeforeEyeRef.current.pan, trigger: Date.now() });
+        savedViewBeforeEyeRef.current = null;
+      } else {
+        resetZoom();
+        setCanvasViewResetKey((k) => k + 1);
+      }
+      return;
+    }
+
+    if (!activeEyeBubbleId) {
+      savedViewBeforeEyeRef.current = {
+        zoom: zoomLevel,
+        pan: { ...currentPanRef.current },
+      };
+    }
+
+    setActiveEyeBubbleId(bubble.id);
     setSelectedBubbleId(bubble.id);
+
     if (bubble.pageId && bubble.pageId !== effectivePageId) {
       pendingFocusRef.current = { bubbleId: bubble.id, pageId: bubble.pageId };
       setActivePageId(bubble.pageId);
@@ -547,6 +624,22 @@ export const Workbench: React.FC<WorkbenchProps> = ({
         trigger: Date.now(),
       });
     }
+  };
+
+  const handleCardSelectBubble = (bubbleId: string) => {
+    setSelectedBubbleId(bubbleId);
+    const bubble = currentBubbles.find((b) => b.id === bubbleId);
+    if (bubble && bubble.box_2d) {
+      setCenterTarget({
+        bubbleId: bubble.id,
+        box_2d: bubble.box_2d,
+        trigger: Date.now(),
+      });
+    }
+  };
+
+  const handleCanvasSelectBubble = (bubbleId: string) => {
+    setSelectedBubbleId(bubbleId);
   };
 
   useEffect(() => {
@@ -620,9 +713,9 @@ export const Workbench: React.FC<WorkbenchProps> = ({
             title={isConfirmingExit ? 'Click again to Exit' : 'Return to Hub (Esc)'}
           >
             {isConfirmingExit ? (
-              <span className="whitespace-nowrap select-none">Exit?</span>
+              <span className="whitespace-nowrap select-none pointer-events-none">Exit?</span>
             ) : (
-              <ArrowLeft className="w-4 h-4" />
+              <ArrowLeft className="w-4 h-4 pointer-events-none" />
             )}
           </button>
 
@@ -652,7 +745,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
                         onMouseEnter={(e) => handlePageTabMouseEnter(e, p.fileName)}
                         onMouseMove={handlePageTabMouseMove}
                         onMouseLeave={handlePageTabMouseLeave}
-                        onClick={() => { setDeletingPageId(null); setActivePageId(p.id); }}
+                        onClick={() => { setDeletingPageId(null); setIsConfirmingExit(false); setActivePageId(p.id); }}
                         className={`relative transition-all duration-150 cursor-pointer inline-flex items-center justify-center w-[76px] min-w-[76px] max-w-[76px] h-8 rounded-full shrink-0 text-xs text-center whitespace-nowrap font-medium ${
                           isDropTarget
                             ? 'border-2 border-sky-400 bg-sky-950/40 text-white shadow-[0_0_12px_rgba(56,189,248,0.3)]'
@@ -677,7 +770,12 @@ export const Workbench: React.FC<WorkbenchProps> = ({
                       onDragEnd={handleTabDragEnd}
                       onMouseEnter={(e) => handlePageTabMouseEnter(e, p.fileName)}
                       onMouseMove={handlePageTabMouseMove}
-                      onMouseLeave={handlePageTabMouseLeave}
+                      onMouseLeave={() => {
+                        handlePageTabMouseLeave();
+                        if (deletingPageId === p.id) {
+                          setDeletingPageId(null);
+                        }
+                      }}
                       className={`relative inline-flex items-center shrink-0 h-8 rounded-full transition-all duration-150 ${
                         isDropTarget
                           ? 'ring-2 ring-sky-400 min-w-[104px]'
@@ -690,45 +788,33 @@ export const Workbench: React.FC<WorkbenchProps> = ({
                     >
                       <button
                         type="button"
-                        onClick={() => { if (!isArmingDelete) { setDeletingPageId(null); } }}
-                        onDoubleClick={() => { setDeletingPageId(p.id); }}
+                        onClick={(e) => {
+                          if (isArmingDelete) {
+                            e.stopPropagation();
+                            onDeletePage?.(p.id);
+                            setDeletingPageId(null);
+                          }
+                        }}
                         className={`flex-1 h-full px-3 inline-flex items-center justify-center text-xs font-bold rounded-full text-center whitespace-nowrap relative cursor-grab active:cursor-grabbing ${
                           isArmingDelete ? 'text-white' : 'text-zinc-950'
                         }`}
                       >
                         {isPageScanning && (
-                          <span className="absolute left-1.5 w-1.5 h-1.5 rounded-full bg-sky-400 animate-ping" />
+                          <span className="absolute left-1.5 w-1.5 h-1.5 rounded-full bg-sky-400 animate-ping pointer-events-none" />
                         )}
-                        <span>{isArmingDelete ? 'Delete?' : `Page ${pageNum}`}</span>
+                        <span className="pointer-events-none">{isArmingDelete ? 'Delete?' : `Page ${pageNum}`}</span>
                       </button>
                       <button
                         type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (isArmingDelete) {
-                            onDeletePage?.(p.id);
-                            setDeletingPageId(null);
-                          } else {
-                            if (!isDoubleConfirmEnabled) {
-                              onDeletePage?.(p.id);
-                            } else {
-                              setDeletingPageId(p.id);
-                            }
-                          }
-                        }}
-                        onDoubleClick={(e) => {
-                          e.stopPropagation();
-                          onDeletePage?.(p.id);
-                          setDeletingPageId(null);
-                        }}
-                        className={`mr-2 w-4 h-4 rounded-full flex items-center justify-center transition-colors shrink-0 ${
+                        onClick={(e) => handleDeletePageClick(e, p.id)}
+                        className={`mr-2 w-4 h-4 rounded-full flex items-center justify-center transition-colors shrink-0 cursor-pointer ${
                           isArmingDelete
                             ? 'bg-white/20 hover:bg-white/40 text-white'
                             : 'bg-zinc-200 hover:bg-zinc-300 text-zinc-950'
                         }`}
-                        title={isArmingDelete ? "Click to confirm delete" : "Delete page"}
+                        title={isDoubleConfirmEnabled ? (isArmingDelete ? "Click again to confirm delete" : "Delete page") : "Delete page"}
                       >
-                        <X className="w-2.5 h-2.5 stroke-[2.5]" />
+                        <X className="w-2.5 h-2.5 stroke-[2.5] pointer-events-none" />
                       </button>
                     </div>
                   );
@@ -744,6 +830,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
                       type="button"
                       onClick={handleSaveOrderClick}
                       onDoubleClick={handleSaveOrderDoubleClick}
+                      onMouseLeave={() => setSaveOrderArmed(false)}
                       className={`px-3 py-0.5 rounded-full text-xs font-semibold shadow-sm transition-all cursor-pointer whitespace-nowrap ${
                         saveOrderArmed
                           ? 'bg-amber-400 text-black hover:bg-amber-300 animate-pulse'
@@ -751,7 +838,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
                       }`}
                       title={isDoubleConfirmEnabled ? (saveOrderArmed ? "Click again to confirm Save Order" : "Double-click to Save Order") : "Save Order"}
                     >
-                      {saveOrderArmed ? 'Confirm Save?' : 'Save Order'}
+                      <span className="pointer-events-none">{saveOrderArmed ? 'Confirm Save?' : 'Save Order'}</span>
                     </button>
                     <button
                       type="button"
@@ -1082,6 +1169,8 @@ export const Workbench: React.FC<WorkbenchProps> = ({
             bubbles={currentBubbles}
             selectedBubbleId={selectedBubbleId}
             focusTarget={focusTarget}
+            centerTarget={centerTarget}
+            panTarget={panTarget}
             isDrawBoxActive={isDrawBoxActive}
             zoomLevel={zoomLevel}
             showBoxes={showBoxes}
@@ -1093,7 +1182,8 @@ export const Workbench: React.FC<WorkbenchProps> = ({
             onZoomChange={setZoomLevel}
             onResetZoom={handleResetZoom}
             resetViewTrigger={canvasViewResetKey}
-            onSelectBubble={setSelectedBubbleId}
+            onPanChange={(p) => { currentPanRef.current = p; }}
+            onSelectBubble={handleCanvasSelectBubble}
             onAddManualBubbleWithCoords={handleAddManualBubbleWithCoords}
             onIngestDroppedFiles={handleIngestDroppedOnCanvas}
           />
@@ -1104,8 +1194,14 @@ export const Workbench: React.FC<WorkbenchProps> = ({
           <FeedPane
             bubbles={currentBubbles}
             selectedBubbleId={selectedBubbleId}
+            activeEyeBubbleId={activeEyeBubbleId}
             feedFilter={feedFilter}
-            onSelectBubble={setSelectedBubbleId}
+            onSelectBubble={handleCardSelectBubble}
+            onTransferText={(params) => {
+              if (effectivePageId) {
+                transferText(effectivePageId, params);
+              }
+            }}
             onFocusBubble={handleFocusBubble}
             onUpdateBubble={(bubbleId, patch) => {
               if (effectivePageId) {

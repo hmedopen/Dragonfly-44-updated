@@ -17,6 +17,7 @@ import { PageThumbnail } from './PageThumbnail';
 import { PageImageViewer } from './PageImageViewer';
 import { formatDraftName, extractFilesFromDataTransfer } from '../services/fileIngestion';
 import { useWorkbenchStore } from '../store/workbenchStore';
+import { useConfirmationSetting } from '../lib/confirmation';
 
 interface ChapterListProps {
   activeFolder: Folder | null;
@@ -74,8 +75,10 @@ export const ChapterList: React.FC<ChapterListProps> = ({
   const [editingChapter, setEditingChapter] = useState<Chapter | null>(null);
   const [renameValue, setRenameValue] = useState('');
 
-  // Delete confirm state
-  const [deletingChapter, setDeletingChapter] = useState<Chapter | null>(null);
+  // System #6 Unified Confirmation Setting & Armed States
+  const isConfirmationEnabled = useConfirmationSetting(activeFolder?.id);
+  const [armedChapterId, setArmedChapterId] = useState<string | null>(null);
+  const [armedDeleteChapterId, setArmedDeleteChapterId] = useState<string | null>(null);
 
   const chapters = activeFolder ? activeFolder.chapters : [];
   const isFolderSelected = activeFolder !== null;
@@ -84,15 +87,46 @@ export const ChapterList: React.FC<ChapterListProps> = ({
   const viewingChapter = chapters.find((c) => c.id === viewingChapterId) || null;
   const displayPages = draggedId ? localPages : (viewingChapter?.pageList || []);
 
-  const handleChapterSelect = (chapter: Chapter) => {
-    onSelectChapter(chapter.id);
-  };
-
-  const handleChapterDoubleClick = (chapter: Chapter) => {
+  const executeOpenChapter = (chapter: Chapter) => {
     onSelectChapter(chapter.id);
     const firstPageId = chapter.pageList?.[0]?.id || null;
     openChapter(chapter.id, activeFolder?.id, firstPageId);
     onOpenChapter?.(chapter);
+  };
+
+  const handleChapterClick = (chapter: Chapter) => {
+    if (!isConfirmationEnabled) {
+      setArmedChapterId(null);
+      executeOpenChapter(chapter);
+      return;
+    }
+    if (armedChapterId === chapter.id) {
+      setArmedChapterId(null);
+      executeOpenChapter(chapter);
+    } else {
+      onSelectChapter(chapter.id);
+      setArmedChapterId(chapter.id);
+    }
+  };
+
+  const handleChapterDoubleClick = (chapter: Chapter) => {
+    setArmedChapterId(null);
+    executeOpenChapter(chapter);
+  };
+
+  const handleDeleteChapterClick = (e: React.MouseEvent, chapter: Chapter) => {
+    e.stopPropagation();
+    if (!isConfirmationEnabled) {
+      setArmedDeleteChapterId(null);
+      onDeleteChapter(chapter.id);
+      return;
+    }
+    if (armedDeleteChapterId === chapter.id) {
+      setArmedDeleteChapterId(null);
+      onDeleteChapter(chapter.id);
+    } else {
+      setArmedDeleteChapterId(chapter.id);
+    }
   };
 
   // Sorting logic
@@ -199,18 +233,6 @@ export const ChapterList: React.FC<ChapterListProps> = ({
     if (!editingChapter || !renameValue.trim()) return;
     onRenameChapter(editingChapter.id, renameValue.trim());
     setEditingChapter(null);
-  };
-
-  const handleOpenDelete = (chapter: Chapter, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setDeletingChapter(chapter);
-  };
-
-  const handleConfirmDelete = () => {
-    if (deletingChapter) {
-      onDeleteChapter(deletingChapter.id);
-      setDeletingChapter(null);
-    }
   };
 
   // OS Native Drag & Drop Handlers
@@ -390,11 +412,16 @@ export const ChapterList: React.FC<ChapterListProps> = ({
                 key={chapter.id}
                 onClick={(e) => {
                   e.stopPropagation();
-                  handleChapterSelect(chapter);
+                  handleChapterClick(chapter);
                 }}
                 onDoubleClick={(e) => {
                   e.stopPropagation();
                   handleChapterDoubleClick(chapter);
+                }}
+                onMouseLeave={() => {
+                  if (armedChapterId === chapter.id) {
+                    setArmedChapterId(null);
+                  }
                 }}
                 onDragOver={(e) => {
                   e.stopPropagation();
@@ -403,6 +430,8 @@ export const ChapterList: React.FC<ChapterListProps> = ({
                 className={`group relative flex items-center justify-between px-5 py-3.5 rounded-2xl cursor-pointer transition-all duration-150 ${
                   isTargeted
                     ? 'bg-sky-950/60 border-2 border-sky-400 shadow-[0_0_15px_rgba(56,189,248,0.3)]'
+                    : armedChapterId === chapter.id
+                    ? 'bg-sky-950/40 border-2 border-sky-400 shadow-[0_0_15px_rgba(56,189,248,0.25)]'
                     : isSelected
                     ? 'bg-[#181820] border-2 border-white shadow-[0_0_15px_rgba(255,255,255,0.08)]'
                     : 'bg-[#141418] border border-white/[0.08] hover:border-white/[0.22] hover:bg-[#18181e]'
@@ -415,6 +444,11 @@ export const ChapterList: React.FC<ChapterListProps> = ({
                   }`}>
                     {chapter.name}
                   </span>
+                  {armedChapterId === chapter.id && (
+                    <span className="px-2 py-0.5 rounded-full bg-sky-400 text-black text-xs font-bold animate-pulse pointer-events-none">
+                      Click again to open
+                    </span>
+                  )}
                 </div>
 
                 {/* Right: Pages info & Action Buttons */}
@@ -458,12 +492,25 @@ export const ChapterList: React.FC<ChapterListProps> = ({
                       <Pencil className="w-3.5 h-3.5" />
                     </button>
                     <button
-                      onClick={(e) => handleOpenDelete(chapter, e)}
-                      className="p-1.5 rounded-lg text-zinc-400 hover:text-red-400 hover:bg-red-500/10 transition-colors"
-                      title="Delete"
+                      type="button"
+                      onClick={(e) => handleDeleteChapterClick(e, chapter)}
+                      onMouseLeave={() => {
+                        if (armedDeleteChapterId === chapter.id) {
+                          setArmedDeleteChapterId(null);
+                        }
+                      }}
+                      className={`transition-colors cursor-pointer flex items-center gap-1 ${
+                        armedDeleteChapterId === chapter.id
+                          ? 'px-2 py-1 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-bold animate-pulse shadow-sm'
+                          : 'p-1.5 rounded-lg text-zinc-400 hover:text-red-400 hover:bg-red-500/10'
+                      }`}
+                      title={isConfirmationEnabled ? (armedDeleteChapterId === chapter.id ? "Click again to confirm delete" : "Delete chapter") : "Delete chapter"}
                       aria-label={`Delete ${chapter.name}`}
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
+                      <Trash2 className="w-3.5 h-3.5 pointer-events-none" />
+                      {armedDeleteChapterId === chapter.id && (
+                        <span className="pointer-events-none">Delete?</span>
+                      )}
                     </button>
                   </div>
                 </div>
@@ -619,30 +666,6 @@ export const ChapterList: React.FC<ChapterListProps> = ({
           onClose={() => setFullscreenPageIndex(null)}
         />
       )}
-
-      {/* Delete Confirmation Modal */}
-      <Modal
-        isOpen={!!deletingChapter}
-        onClose={() => setDeletingChapter(null)}
-        title={`Delete "${deletingChapter?.name}"?`}
-      >
-        <div className="flex justify-end gap-2 pt-2">
-          <button
-            type="button"
-            onClick={() => setDeletingChapter(null)}
-            className="px-4 py-2 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleConfirmDelete}
-            className="px-4 py-2 rounded-lg text-xs font-medium bg-red-600 text-white hover:bg-red-500 transition-colors"
-          >
-            Delete
-          </button>
-        </div>
-      </Modal>
     </div>
   );
 };

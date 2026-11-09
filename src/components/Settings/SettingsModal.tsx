@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   X,
   Eye,
@@ -20,6 +20,7 @@ import {
 import { settingsService } from '../../services/settings/settingsService';
 import { useWorkbenchStore } from '../../store/workbenchStore';
 import { ENGINE_PRESETS } from '../../services/settings/presets';
+import { SETTINGS_REGISTRY } from '../../services/settings/settingsRegistry';
 import { GEMINI_MODEL_PROFILES, type GeminiModelKey } from '../../types/workbench';
 import { isTrainingStudioEnabled } from '../../lib/training/env';
 import { TrainingStudioScreen } from '../Training/TrainingStudioScreen';
@@ -70,6 +71,14 @@ const PROMPT_PRESETS = [
   },
 ];
 
+const getInitialSettingsValues = (projectId: string | null) => {
+  const vals: Record<string, any> = {};
+  for (const key of Object.keys(SETTINGS_REGISTRY)) {
+    vals[key] = settingsService.getEffectiveValue(key, { projectId }).value;
+  }
+  return vals;
+};
+
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   onClose,
@@ -86,63 +95,161 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isKeyVisible, setIsKeyVisible] = useState(false);
 
-  // Custom Typers State
-  const [typerSettings, setTyperSettings] = useState<TyperSettings>(() => loadTyperSettings());
+  // Staged Draft & Applied Snapshot State for Unsaved Changes Protection (Req #9)
+  const appliedSnapshotRef = useRef<{
+    values: Record<string, any>;
+    typers: TyperSettings;
+  }>({
+    values: getInitialSettingsValues(projectId),
+    typers: JSON.parse(JSON.stringify(loadTyperSettings())),
+  });
 
+  const [draftValues, setDraftValues] = useState<Record<string, any>>(() => appliedSnapshotRef.current.values);
+  const [typerSettings, setTyperSettings] = useState<TyperSettings>(() => appliedSnapshotRef.current.typers);
+  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+
+  // Sync draft and applied snapshot when modal opens or projectId changes
   useEffect(() => {
-    const unsub = settingsService.subscribe(() => {
-      setRevision(settingsService.getRevision());
+    if (isOpen) {
+      const vals = getInitialSettingsValues(projectId);
+      const typers = loadTyperSettings();
+      appliedSnapshotRef.current = {
+        values: vals,
+        typers: JSON.parse(JSON.stringify(typers)),
+      };
+      setDraftValues(vals);
+      setTyperSettings(typers);
+      setShowDiscardConfirm(false);
+    }
+  }, [isOpen, projectId]);
 
-    });
-    return () => unsub();
-  }, []);
+  // Deep comparison to track actual differences between draft and last applied settings
+  const hasUnsavedChanges = useCallback((): boolean => {
+    const appliedVals = appliedSnapshotRef.current.values;
+    for (const key of Object.keys(draftValues)) {
+      const draftVal = draftValues[key];
+      const appliedVal = appliedVals[key];
+      if (JSON.stringify(draftVal) !== JSON.stringify(appliedVal)) {
+        return true;
+      }
+    }
+    const appliedTypers = appliedSnapshotRef.current.typers;
+    if (JSON.stringify(typerSettings) !== JSON.stringify(appliedTypers)) {
+      return true;
+    }
+    return false;
+  }, [draftValues, typerSettings]);
 
-  // Keyboard shortcut: Esc to close
+  const handleRequestClose = useCallback(() => {
+    if (!hasUnsavedChanges()) {
+      onClose();
+    } else {
+      setShowDiscardConfirm(true);
+    }
+  }, [hasUnsavedChanges, onClose]);
+
+  // Keyboard shortcut: Esc to close (guarded with unsaved changes confirmation)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isOpen) {
-        onClose();
+        if (showDiscardConfirm) {
+          setShowDiscardConfirm(false);
+        } else {
+          handleRequestClose();
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
+  }, [isOpen, showDiscardConfirm, handleRequestClose]);
+
+  useEffect(() => {
+    const unsub = settingsService.subscribe(() => {
+      setRevision(settingsService.getRevision());
+    });
+    return () => unsub();
+  }, []);
 
   if (!isOpen) return null;
 
   const getVal = <T,>(key: string): T => {
+    if (key in draftValues) {
+      return draftValues[key] as T;
+    }
     return settingsService.getEffectiveValue<T>(key, { projectId }).value;
   };
 
   const setVal = (key: string, val: any) => {
-    settingsService.setSettingValue(key, val, { projectId, scope: projectId ? 'project' : 'global' });
-    if (key === 'scanning.include_sfx') {
-      useWorkbenchStore.getState().reconcileActiveSFXState(Boolean(val));
-    }
-    setRevision(settingsService.getRevision());
-
+    setDraftValues((prev) => ({
+      ...prev,
+      [key]: val,
+    }));
   };
 
   const handleResetCategory = () => {
     if (activeCategory === 'typers') {
       if (window.confirm('Reset all typers back to initial 9 manga defaults?')) {
-        setTyperSettings({ ...typerSettings, typers: DEFAULT_TYPERS });
-        saveTyperSettings({ ...typerSettings, typers: DEFAULT_TYPERS });
+        setTyperSettings((prev) => ({ ...prev, typers: DEFAULT_TYPERS }));
       }
       return;
     }
     if (window.confirm(`Reset all settings in "${activeCategory}" to default?`)) {
-      settingsService.resetCategory(activeCategory, { projectId });
-      setRevision(settingsService.getRevision());
-
+      const resetVals: Record<string, any> = {};
+      for (const [key, def] of Object.entries(SETTINGS_REGISTRY)) {
+        if (def.category === activeCategory) {
+          resetVals[key] = def.default_value;
+        }
+      }
+      setDraftValues((prev) => ({ ...prev, ...resetVals }));
     }
   };
 
   const handleApplyPreset = (presetId: string) => {
-    const res = settingsService.applyPreset(presetId, { projectId });
-    if (res.success) {
-      setRevision(settingsService.getRevision());
+    const preset = ENGINE_PRESETS[presetId];
+    if (preset && preset.values) {
+      setDraftValues((prev) => ({
+        ...prev,
+        ...preset.values,
+      }));
+    }
+  };
 
+  const handleApply = () => {
+    try {
+      const appliedVals = appliedSnapshotRef.current.values;
+      let sfxChanged = false;
+      let newSfxVal = false;
+
+      for (const [key, val] of Object.entries(draftValues)) {
+        if (JSON.stringify(val) !== JSON.stringify(appliedVals[key])) {
+          settingsService.setSettingValue(key, val, {
+            projectId,
+            scope: projectId ? 'project' : 'global',
+          });
+          if (key === 'scanning.include_sfx') {
+            sfxChanged = true;
+            newSfxVal = Boolean(val);
+          }
+        }
+      }
+
+      if (sfxChanged) {
+        useWorkbenchStore.getState().reconcileActiveSFXState(newSfxVal);
+      }
+
+      if (JSON.stringify(typerSettings) !== JSON.stringify(appliedSnapshotRef.current.typers)) {
+        saveTyperSettings(typerSettings);
+      }
+
+      appliedSnapshotRef.current = {
+        values: { ...draftValues },
+        typers: JSON.parse(JSON.stringify(typerSettings)),
+      };
+
+      setRevision(settingsService.getRevision());
+    } catch (err) {
+      console.error('Failed to apply settings:', err);
+      alert(`Failed to apply settings: ${err}`);
     }
   };
 
@@ -184,39 +291,29 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   // Typer handlers
   const handleToggleIncludeTyperSymbols = (checked: boolean) => {
-    const updated = { ...typerSettings, includeTyperSymbols: checked };
-    setTyperSettings(updated);
-    saveTyperSettings(updated);
+    setTyperSettings((prev) => ({ ...prev, includeTyperSymbols: checked }));
   };
 
   const handleSetSymbolPosition = (position: TyperSymbolPosition) => {
-    const updated = { ...typerSettings, symbolPosition: position };
-    setTyperSettings(updated);
-    saveTyperSettings(updated);
+    setTyperSettings((prev) => ({ ...prev, symbolPosition: position }));
   };
 
   const handleSetTextDirection = (direction: ExtractedTextDirection) => {
-    const updated = { ...typerSettings, textDirection: direction };
-    setTyperSettings(updated);
-    saveTyperSettings(updated);
+    setTyperSettings((prev) => ({ ...prev, textDirection: direction }));
   };
 
   const handleUpdateTyper = (id: string, patch: Partial<CustomTyperConfig>) => {
-    const updated = {
-      ...typerSettings,
-      typers: typerSettings.typers.map((t) => (t.id === id ? { ...t, ...patch } : t)),
-    };
-    setTyperSettings(updated);
-    saveTyperSettings(updated);
+    setTyperSettings((prev) => ({
+      ...prev,
+      typers: prev.typers.map((t) => (t.id === id ? { ...t, ...patch } : t)),
+    }));
   };
 
   const handleDeleteTyper = (id: string) => {
-    const updated = {
-      ...typerSettings,
-      typers: typerSettings.typers.filter((t) => t.id !== id),
-    };
-    setTyperSettings(updated);
-    saveTyperSettings(updated);
+    setTyperSettings((prev) => ({
+      ...prev,
+      typers: prev.typers.filter((t) => t.id !== id),
+    }));
   };
 
   const handleAddTyper = () => {
@@ -228,9 +325,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       instructions: '',
       isDefault: false,
     };
-    const updated = { ...typerSettings, typers: [...typerSettings.typers, newTyper] };
-    setTyperSettings(updated);
-    saveTyperSettings(updated);
+    setTyperSettings((prev) => ({
+      ...prev,
+      typers: [...prev.typers, newTyper],
+    }));
   };
 
   const categories: { id: SettingsCategory; label: string; icon: React.ReactNode; desc: string }[] = [
@@ -286,7 +384,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </span>
             <button
               type="button"
-              onClick={onClose}
+              onClick={handleRequestClose}
               className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
               title="Close (Esc)"
             >
@@ -1122,20 +1220,76 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
         </div>
 
-        {/* 4. Modal Footer */}
+        {/* 4. Modal Footer: Separate Apply and Close buttons (Req #9) */}
         <div className="h-12 px-6 border-t border-white/[0.08] bg-[#08080b] flex items-center justify-between shrink-0">
-          <span className="text-[10px] font-mono text-zinc-500">
-            FOLIO SCRIPT // SYSTEM #6 ACTIVE
-          </span>
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-5 py-1.5 rounded-lg bg-zinc-100 hover:bg-white text-zinc-950 font-mono text-xs font-bold transition-all cursor-pointer shadow-sm active:scale-95"
-          >
-            APPLY & CLOSE
-          </button>
+          <div className="flex items-center gap-2.5">
+            <span className="text-[10px] font-mono text-zinc-500">
+              FOLIO SCRIPT // SYSTEM #6 ACTIVE
+            </span>
+            {hasUnsavedChanges() && (
+              <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[10px] font-mono font-medium">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                <span>UNSAVED CHANGES</span>
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-5">
+            {/* Separate Close control: placed directly on existing background without button container, white text by default, turns red on hover */}
+            <button
+              type="button"
+              onClick={handleRequestClose}
+              className="text-zinc-200 hover:text-red-400 font-mono text-xs font-semibold cursor-pointer transition-colors bg-transparent border-none p-0 outline-none select-none"
+            >
+              Close
+            </button>
+            {/* Apply button: retains existing white button styling, saves and applies all pending changes, keeps window open */}
+            <button
+              type="button"
+              onClick={handleApply}
+              className="px-5 py-1.5 rounded-lg bg-zinc-100 hover:bg-white text-zinc-950 font-mono text-xs font-bold transition-all cursor-pointer shadow-sm active:scale-95 select-none"
+            >
+              Apply
+            </button>
+          </div>
         </div>
       </div>
+
+      {/* Unsaved Changes Confirmation Dialog (Req #9) */}
+      {showDiscardConfirm && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-100">
+          <div className="w-full max-w-md bg-[#12131a] border border-white/[0.16] rounded-xl p-5 shadow-2xl space-y-4">
+            <div className="space-y-1.5">
+              <h3 className="text-sm font-bold text-white font-mono uppercase tracking-wider">
+                Unapplied Changes
+              </h3>
+              <p className="text-xs text-zinc-400">
+                You have unsaved changes that have not been applied. If you close now, these changes will be lost.
+              </p>
+            </div>
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowDiscardConfirm(false)}
+                className="px-3.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-mono text-xs font-semibold cursor-pointer transition-colors"
+              >
+                Keep Editing
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDiscardConfirm(false);
+                  setDraftValues({ ...appliedSnapshotRef.current.values });
+                  setTyperSettings(JSON.parse(JSON.stringify(appliedSnapshotRef.current.typers)));
+                  onClose();
+                }}
+                className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-mono text-xs font-bold cursor-pointer transition-colors shadow-sm"
+              >
+                Discard Changes & Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

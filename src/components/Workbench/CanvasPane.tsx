@@ -17,6 +17,8 @@ interface CanvasPaneProps {
   bubbles: BubbleItem[];
   selectedBubbleId: string | null;
   focusTarget?: { bubbleId: string; box_2d: [number, number, number, number]; trigger: number } | null;
+  centerTarget?: { bubbleId: string; box_2d: [number, number, number, number]; trigger: number } | null;
+  panTarget?: { x: number; y: number; trigger: number } | null;
   isDrawBoxActive: boolean;
   zoomLevel: number;
   showBoxes?: boolean;
@@ -28,6 +30,7 @@ interface CanvasPaneProps {
   onZoomChange?: (newZoom: number) => void;
   onResetZoom?: () => void;
   resetViewTrigger?: number;
+  onPanChange?: (pan: { x: number; y: number }) => void;
   onSelectBubble: (bubbleId: string) => void;
   onAddManualBubbleWithCoords?: (box_2d: [number, number, number, number]) => void;
   onIngestDroppedFiles?: (files: File[]) => void;
@@ -40,6 +43,8 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
   bubbles,
   selectedBubbleId,
   focusTarget,
+  centerTarget,
+  panTarget,
   isDrawBoxActive,
   zoomLevel,
   showBoxes = true,
@@ -51,6 +56,7 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
   onZoomChange,
   onResetZoom,
   resetViewTrigger = 0,
+  onPanChange,
   onSelectBubble,
   onAddManualBubbleWithCoords,
   onIngestDroppedFiles,
@@ -66,7 +72,16 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
   const viewportRef = useRef<HTMLDivElement>(null);
   const zoomLevelRef = useRef(zoomLevel);
   const onZoomChangeRef = useRef(onZoomChange);
+  const onPanChangeRef = useRef(onPanChange);
   const svgRef = useRef<SVGSVGElement>(null);
+
+  useEffect(() => {
+    onPanChangeRef.current = onPanChange;
+  }, [onPanChange]);
+
+  useEffect(() => {
+    onPanChangeRef.current?.(pan);
+  }, [pan]);
 
   // Settings subscription for overlay visibility & diagnostics HUD
   const [overlaySettings, setOverlaySettings] = useState(() => ({
@@ -123,7 +138,29 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
   const visualRegions = useMemo(() => {
     const groups = new Map<string, BubbleItem[]>();
     for (const b of visibleBubbles) {
-      const key = b.regionId || `${b.box_2d[0]}-${b.box_2d[1]}-${b.box_2d[2]}-${b.box_2d[3]}`;
+      const isSfx = b.type === 'sfx' || b.typerPrefix === 'SFX:';
+      let key = `box-${b.id}`;
+
+      // SFX records are independent sound effects and must NEVER collapse into composite regions.
+      // For non-SFX records with a regionId, only group if they share physical bounding box coordinates (split bubble lobes).
+      if (!isSfx && b.regionId) {
+        const candidateKey = `region-${b.regionId}`;
+        const existingGroup = groups.get(candidateKey);
+        if (existingGroup && existingGroup.length > 0) {
+          const first = existingGroup[0];
+          const isSamePhysicalBox =
+            Math.abs(first.box_2d[0] - b.box_2d[0]) <= 25 &&
+            Math.abs(first.box_2d[1] - b.box_2d[1]) <= 25 &&
+            Math.abs(first.box_2d[2] - b.box_2d[2]) <= 25 &&
+            Math.abs(first.box_2d[3] - b.box_2d[3]) <= 25;
+          if (isSamePhysicalBox) {
+            key = candidateKey;
+          }
+        } else {
+          key = candidateKey;
+        }
+      }
+
       const list = groups.get(key) || [];
       list.push(b);
       groups.set(key, list);
@@ -230,6 +267,34 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
       y: Math.round(-normOffsetY * unscaledH * newScale),
     });
   }, [focusTarget, isLoading]);
+
+  // Center on bubble without changing zoom level (triggered by clicking dialogue card)
+  useEffect(() => {
+    if (!centerTarget || isLoading || !svgRef.current || !viewportRef.current) return;
+    const { box_2d } = centerTarget;
+    const [ymin, xmin, ymax, xmax] = box_2d;
+    const boxCenterX = (xmin + xmax) / 2;
+    const boxCenterY = (ymin + ymax) / 2;
+
+    const svgRect = svgRef.current.getBoundingClientRect();
+    const currentScale = (zoomLevelRef.current || 100) / 100;
+    const unscaledW = svgRect.width / currentScale;
+    const unscaledH = svgRect.height / currentScale;
+
+    const normOffsetX = (boxCenterX - 500) / 1000;
+    const normOffsetY = (boxCenterY - 500) / 1000;
+
+    setPan({
+      x: Math.round(-normOffsetX * unscaledW * currentScale),
+      y: Math.round(-normOffsetY * unscaledH * currentScale),
+    });
+  }, [centerTarget, isLoading]);
+
+  // Restore pan target if provided
+  useEffect(() => {
+    if (!panTarget) return;
+    setPan({ x: panTarget.x, y: panTarget.y });
+  }, [panTarget]);
 
   // Window mousemove / mouseup for smooth panning
   useEffect(() => {
@@ -516,13 +581,17 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                 e.stopPropagation();
                 onPrevPage?.();
               }}
-              className={`absolute inset-y-0 left-0 w-[5.5%] z-30 flex items-center justify-start pl-1 transition-all select-none ${
-                hasPrevPage ? 'cursor-pointer hover:bg-sky-500/10 group' : 'cursor-not-allowed opacity-25'
+              className={`absolute inset-y-0 left-0 w-[8%] min-w-[56px] max-w-[96px] z-30 flex items-center justify-start pl-2 select-none transition-all duration-300 ease-out group ${
+                hasPrevPage
+                  ? 'cursor-pointer bg-gradient-to-r from-sky-500/25 via-sky-500/[0.08] to-transparent opacity-0 hover:opacity-100'
+                  : 'cursor-not-allowed opacity-0 pointer-events-none'
               }`}
               title={hasPrevPage ? 'Previous Page' : 'First Page'}
             >
               {hasPrevPage && (
-                <div className="w-1.5 h-12 rounded-full bg-sky-400/50 opacity-0 group-hover:opacity-100 transition-opacity shadow-sm" />
+                <div className="flex items-center gap-1">
+                  <div className="w-1 h-16 rounded-full bg-sky-400/70 shadow-[0_0_12px_rgba(56,189,248,0.45)] transition-transform duration-300 group-hover:scale-y-110" />
+                </div>
               )}
             </div>
 
@@ -532,13 +601,17 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                 e.stopPropagation();
                 onNextPage?.();
               }}
-              className={`absolute inset-y-0 right-0 w-[5.5%] z-30 flex items-center justify-end pr-1 transition-all select-none ${
-                hasNextPage ? 'cursor-pointer hover:bg-sky-500/10 group' : 'cursor-not-allowed opacity-25'
+              className={`absolute inset-y-0 right-0 w-[8%] min-w-[56px] max-w-[96px] z-30 flex items-center justify-end pr-2 select-none transition-all duration-300 ease-out group ${
+                hasNextPage
+                  ? 'cursor-pointer bg-gradient-to-l from-sky-500/25 via-sky-500/[0.08] to-transparent opacity-0 hover:opacity-100'
+                  : 'cursor-not-allowed opacity-0 pointer-events-none'
               }`}
               title={hasNextPage ? 'Next Page' : 'Last Page'}
             >
               {hasNextPage && (
-                <div className="w-1.5 h-12 rounded-full bg-sky-400/50 opacity-0 group-hover:opacity-100 transition-opacity shadow-sm" />
+                <div className="flex items-center gap-1">
+                  <div className="w-1 h-16 rounded-full bg-sky-400/70 shadow-[0_0_12px_rgba(56,189,248,0.45)] transition-transform duration-300 group-hover:scale-y-110" />
+                </div>
               )}
             </div>
           </>

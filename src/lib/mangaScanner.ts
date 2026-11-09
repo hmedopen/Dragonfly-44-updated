@@ -236,6 +236,7 @@ export async function scanMangaPage(options: ScanMangaPageOptions): Promise<Page
   const issues: ScanIssue[] = [];
 
   // 7. Build TextRegion entities with Multidimensional Confidence
+  const seenScannerRegionIds = new Set<string>();
   let textRegions: TextRegion[] = meaningfulRegions.map((r, idx) => {
     const flags: ScanIssueFlag[] = [];
     if (r.isAmbiguous) flags.push('OCR_AMBIGUOUS');
@@ -272,7 +273,14 @@ export async function scanMangaPage(options: ScanMangaPageOptions): Promise<Page
     const classificationConfidence = r.primaryClass === 'unknown' ? 0.50 : 0.90;
 
     return {
-      regionId: r.regionId || `r-${Date.now()}-${idx + 1}-${Math.random().toString(36).substring(2, 6)}`,
+      regionId: (() => {
+        let rId = r.regionId || `r-${Date.now()}-${idx + 1}-${Math.random().toString(36).substring(2, 6)}`;
+        if (seenScannerRegionIds.has(rId)) {
+          rId = `${rId}-${idx + 1}`;
+        }
+        seenScannerRegionIds.add(rId);
+        return rId;
+      })(),
       geometry: {
         coordinateSpace: 'normalized_1000',
         box_2d: r.box_2d,

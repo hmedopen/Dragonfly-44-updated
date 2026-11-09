@@ -83,6 +83,19 @@ interface WorkbenchState {
   deleteBubble: (pageId: string, bubbleId: string) => void;
   reorderBubbles: (pageId: string, startIndex: number, endIndex: number) => void;
   splitBubble: (pageId: string, bubbleId: string, splitIndex: number) => void;
+  transferText: (
+    pageId: string,
+    params: {
+      sourceBubbleId: string;
+      sourceField: 'sourceText' | 'translatedText';
+      sourceStart: number;
+      sourceEnd: number;
+      destBubbleId: string;
+      destField: 'sourceText' | 'translatedText';
+      dropPos: number;
+      transferredText: string;
+    }
+  ) => void;
   undoBubbleAction: (pageId: string) => void;
   redoBubbleAction: (pageId: string) => void;
   bubbleUndoStack: Record<string, BubbleItem[][]>;
@@ -447,6 +460,91 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
 
     savePageBubbles(pageId, updatedList).catch((err) =>
       console.error('[WorkbenchStore] Failed to save split bubble to IDB', err)
+    );
+  },
+
+  transferText: (pageId, params) => {
+    const {
+      sourceBubbleId,
+      sourceField,
+      sourceStart,
+      sourceEnd,
+      destBubbleId,
+      destField,
+      dropPos,
+      transferredText,
+    } = params;
+    if (!transferredText) return;
+
+    const state = get();
+    const existing = state.bubblesByPage[pageId] || [];
+    const sourceIdx = existing.findIndex((b) => b.id === sourceBubbleId);
+    const destIdx = existing.findIndex((b) => b.id === destBubbleId);
+    if (sourceIdx === -1 || destIdx === -1) return;
+
+    const now = Date.now();
+    const updatedList = [...existing];
+
+    if (sourceBubbleId === destBubbleId && sourceField === destField) {
+      const target = { ...existing[sourceIdx] };
+      const currentVal = target[sourceField] || '';
+      const before = currentVal.slice(0, sourceStart);
+      const after = currentVal.slice(sourceEnd);
+      const remaining = before + after;
+
+      if (dropPos >= sourceStart && dropPos <= sourceEnd) {
+        return;
+      }
+      let adjDropPos = dropPos;
+      if (dropPos > sourceEnd) {
+        adjDropPos = dropPos - (sourceEnd - sourceStart);
+      }
+      adjDropPos = Math.max(0, Math.min(remaining.length, adjDropPos));
+      const finalVal = remaining.slice(0, adjDropPos) + transferredText + remaining.slice(adjDropPos);
+
+      target[sourceField] = finalVal;
+      target.isManuallyEdited = true;
+      target.updatedAt = now;
+      updatedList[sourceIdx] = target;
+    } else {
+      const source = { ...existing[sourceIdx] };
+      const dest = { ...existing[destIdx] };
+
+      const sourceVal = source[sourceField] || '';
+      const sourceBefore = sourceVal.slice(0, sourceStart);
+      const sourceAfter = sourceVal.slice(sourceEnd);
+      source[sourceField] = sourceBefore + sourceAfter;
+      source.isManuallyEdited = true;
+      source.updatedAt = now;
+
+      const destVal = dest[destField] || '';
+      const safeDropPos = Math.max(0, Math.min(destVal.length, dropPos));
+      dest[destField] = destVal.slice(0, safeDropPos) + transferredText + destVal.slice(safeDropPos);
+      dest.isManuallyEdited = true;
+      dest.updatedAt = now;
+
+      updatedList[sourceIdx] = source;
+      updatedList[destIdx] = dest;
+    }
+
+    const pageUndo = state.bubbleUndoStack[pageId] || [];
+    set((s) => ({
+      bubblesByPage: {
+        ...s.bubblesByPage,
+        [pageId]: updatedList,
+      },
+      bubbleUndoStack: {
+        ...s.bubbleUndoStack,
+        [pageId]: [...pageUndo, existing],
+      },
+      bubbleRedoStack: {
+        ...s.bubbleRedoStack,
+        [pageId]: [],
+      },
+    }));
+
+    savePageBubbles(pageId, updatedList).catch((err) =>
+      console.error('[WorkbenchStore] Failed to save transferred text to IDB', err)
     );
   },
 

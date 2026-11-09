@@ -265,6 +265,7 @@ export function validateSystem3ScanOutput(rawText: string): ValidationResult<{
   });
 
   // Validate regions
+  const seenRegionIds = new Set<string>();
   const validatedRegions = rawRegionList.map((r: any, idx: number) => {
     const rawBox = Array.isArray(r.box_2d) && r.box_2d.length === 4 ? r.box_2d : [200, 200, 400, 400];
     let [ymin, xmin, ymax, xmax] = rawBox.map((v: any) => Math.max(0, Math.min(1000, Math.round(Number(v) || 0))));
@@ -278,7 +279,16 @@ export function validateSystem3ScanOutput(rawText: string): ValidationResult<{
       : 'unknown';
 
     return {
-      regionId: typeof r.regionId === 'string' ? r.regionId : `r-${Date.now()}-${idx + 1}-${Math.random().toString(36).substring(2, 6)}`,
+      regionId: (() => {
+        let idStr = typeof r.regionId === 'string' && r.regionId.trim().length > 0
+          ? r.regionId.trim()
+          : `r-${Date.now()}-${idx + 1}-${Math.random().toString(36).substring(2, 6)}`;
+        if (seenRegionIds.has(idStr)) {
+          idStr = `${idStr}-${idx + 1}`;
+        }
+        seenRegionIds.add(idStr);
+        return idStr;
+      })(),
       box_2d: [ymin, xmin, ymax, xmax] as [number, number, number, number],
       rawOCR,
       ocrAlternatives: Array.isArray(r.ocrAlternatives) ? r.ocrAlternatives.map(String) : [],

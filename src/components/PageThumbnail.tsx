@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import type { PageMetadata } from '../types';
 import { getPageBlob } from '../services/db';
 import { Trash2, FileText, ImageOff } from 'lucide-react';
+import { useConfirmationSetting } from '../lib/confirmation';
 
 interface PageThumbnailProps {
   page: PageMetadata;
@@ -19,6 +20,23 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
+  const isConfirmationEnabled = useConfirmationSetting();
+  const [isArmedDelete, setIsArmedDelete] = useState(false);
+
+  const handleDeleteClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!isConfirmationEnabled) {
+      setIsArmedDelete(false);
+      onDelete(page.id);
+      return;
+    }
+    if (isArmedDelete) {
+      setIsArmedDelete(false);
+      onDelete(page.id);
+    } else {
+      setIsArmedDelete(true);
+    }
+  };
 
   useEffect(() => {
     let isMounted = true;
@@ -81,18 +99,21 @@ export const PageThumbnail: React.FC<PageThumbnailProps> = ({
         </div>
       ) : null}
 
-      {/* Hover Delete Button (Top Right) */}
+      {/* Delete Button (Top Right) */}
       <button
         type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          onDelete(page.id);
-        }}
-        className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/80 hover:bg-red-600 text-zinc-300 hover:text-white border border-white/10 hover:border-red-500/50 backdrop-blur-md opacity-0 group-hover:opacity-100 transition-all cursor-pointer shadow-xl z-20 active:scale-95"
-        title={`Delete page ${page.index}`}
+        onClick={handleDeleteClick}
+        onMouseLeave={() => setIsArmedDelete(false)}
+        className={`absolute top-2 right-2 p-1.5 rounded-lg border backdrop-blur-md transition-all cursor-pointer shadow-xl z-20 active:scale-95 flex items-center gap-1 ${
+          isArmedDelete
+            ? 'bg-red-600 text-white border-red-400 opacity-100 animate-pulse px-2'
+            : 'bg-black/80 hover:bg-red-600 text-zinc-300 hover:text-white border-white/10 hover:border-red-500/50 opacity-0 group-hover:opacity-100'
+        }`}
+        title={isConfirmationEnabled ? (isArmedDelete ? `Click again to confirm delete page ${page.index}` : `Delete page ${page.index}`) : `Delete page ${page.index}`}
         aria-label={`Delete page ${page.index}`}
       >
-        <Trash2 className="w-3.5 h-3.5" />
+        <Trash2 className="w-3.5 h-3.5 pointer-events-none" />
+        {isArmedDelete && <span className="text-[10px] font-bold pointer-events-none">Delete?</span>}
       </button>
 
       {/* Bottom Info Bar: Page Index & File Name with bigger, visible font inside image */}
