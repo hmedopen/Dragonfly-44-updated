@@ -16,7 +16,7 @@ interface FeedPaneProps {
   onFocusBubble?: (bubble: BubbleItem) => void;
   onUpdateBubble: (bubbleId: string, patch: Partial<BubbleItem>) => void;
   onDeleteBubble: (bubbleId: string) => void;
-  onSplitBubble?: (bubbleId: string, splitIndex: number) => void;
+  onSplitBubble?: (bubbleId: string, splitIndex: number, field?: 'sourceText' | 'translatedText') => void;
   onTransferText?: (params: {
     sourceBubbleId: string;
     sourceField: 'sourceText' | 'translatedText';

@@ -27,7 +27,7 @@ interface DialogueCardProps {
   onFocusBubble?: (bubble: BubbleItem) => void;
   onUpdate: (bubbleId: string, patch: Partial<BubbleItem>) => void;
   onDelete: (bubbleId: string) => void;
-  onSplitBubble?: (bubbleId: string, splitIndex: number) => void;
+  onSplitBubble?: (bubbleId: string, splitIndex: number, field?: 'sourceText' | 'translatedText') => void;
   onTransferText?: (params: {
     sourceBubbleId: string;
     sourceField: 'sourceText' | 'translatedText';
@@ -82,6 +82,7 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
   const [isTypeDropdownOpen, setIsTypeDropdownOpen] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
   const [splitTip, setSplitTip] = useState<string | null>(null);
+  const [lastFocusedField, setLastFocusedField] = useState<'source' | 'translation' | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Phase 1.2: Local draft state for robust Save/Revert controls and automatic cancellation
@@ -100,12 +101,8 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
   const isSourceDirty = draftSourceText !== (bubble.sourceText || '');
   const isTranslationDirty = draftTranslatedText !== (bubble.translatedText || '');
 
-  // System #6 Unified Confirmation Setting & Armed Button States
+  // System #6 Unified Confirmation Setting (Delete action remains confirmable)
   const isConfirmationEnabled = useConfirmationSetting();
-  const [isArmedSourceSave, setIsArmedSourceSave] = useState(false);
-  const [isArmedSourceRevert, setIsArmedSourceRevert] = useState(false);
-  const [isArmedTransSave, setIsArmedTransSave] = useState(false);
-  const [isArmedTransRevert, setIsArmedTransRevert] = useState(false);
   const [isArmedDeleteBubble, setIsArmedDeleteBubble] = useState(false);
 
   // Review flags expansion: OPEN by default when flags appear, only closes on click
@@ -242,112 +239,44 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
     autoResize(e.target);
   }, []);
 
-  // Save / Revert actions with unified confirmation transform support
+  // Save / Revert actions (Single-click execution per Requirement 6)
   const handleSaveSourceClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!isConfirmationEnabled) {
-      setIsArmedSourceSave(false);
-      onUpdate(bubble.id, { sourceText: draftSourceText, isManuallyEdited: true });
-      return;
-    }
-    if (isArmedSourceSave) {
-      setIsArmedSourceSave(false);
-      onUpdate(bubble.id, { sourceText: draftSourceText, isManuallyEdited: true });
-    } else {
-      setIsArmedSourceSave(true);
-    }
-  }, [isConfirmationEnabled, isArmedSourceSave, bubble.id, draftSourceText, onUpdate]);
+    onUpdate(bubble.id, { sourceText: draftSourceText, isManuallyEdited: true });
+  }, [bubble.id, draftSourceText, onUpdate]);
 
   const handleRevertSourceDraftClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!isConfirmationEnabled) {
-      setIsArmedSourceRevert(false);
-      setDraftSourceText(bubble.sourceText || '');
-      if (sourceTextareaRef.current) {
-        sourceTextareaRef.current.value = bubble.sourceText || '';
-        autoResize(sourceTextareaRef.current);
-      }
-      return;
+    setDraftSourceText(bubble.sourceText || '');
+    if (sourceTextareaRef.current) {
+      sourceTextareaRef.current.value = bubble.sourceText || '';
+      autoResize(sourceTextareaRef.current);
     }
-    if (isArmedSourceRevert) {
-      setIsArmedSourceRevert(false);
-      setDraftSourceText(bubble.sourceText || '');
-      if (sourceTextareaRef.current) {
-        sourceTextareaRef.current.value = bubble.sourceText || '';
-        autoResize(sourceTextareaRef.current);
-      }
-    } else {
-      setIsArmedSourceRevert(true);
-    }
-  }, [isConfirmationEnabled, isArmedSourceRevert, bubble.sourceText]);
+  }, [bubble.sourceText]);
 
   const handleRevertSourceHistoryClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!isConfirmationEnabled) {
-      setIsArmedSourceRevert(false);
-      onRevertSource?.();
-      return;
-    }
-    if (isArmedSourceRevert) {
-      setIsArmedSourceRevert(false);
-      onRevertSource?.();
-    } else {
-      setIsArmedSourceRevert(true);
-    }
-  }, [isConfirmationEnabled, isArmedSourceRevert, onRevertSource]);
+    onRevertSource?.();
+  }, [onRevertSource]);
 
   const handleSaveTranslationClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!isConfirmationEnabled) {
-      setIsArmedTransSave(false);
-      onUpdate(bubble.id, { translatedText: draftTranslatedText, isManuallyEdited: true });
-      return;
-    }
-    if (isArmedTransSave) {
-      setIsArmedTransSave(false);
-      onUpdate(bubble.id, { translatedText: draftTranslatedText, isManuallyEdited: true });
-    } else {
-      setIsArmedTransSave(true);
-    }
-  }, [isConfirmationEnabled, isArmedTransSave, bubble.id, draftTranslatedText, onUpdate]);
+    onUpdate(bubble.id, { translatedText: draftTranslatedText, isManuallyEdited: true });
+  }, [bubble.id, draftTranslatedText, onUpdate]);
 
   const handleRevertTranslationDraftClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!isConfirmationEnabled) {
-      setIsArmedTransRevert(false);
-      setDraftTranslatedText(bubble.translatedText || '');
-      if (translationTextareaRef.current) {
-        translationTextareaRef.current.value = bubble.translatedText || '';
-        autoResize(translationTextareaRef.current);
-      }
-      return;
+    setDraftTranslatedText(bubble.translatedText || '');
+    if (translationTextareaRef.current) {
+      translationTextareaRef.current.value = bubble.translatedText || '';
+      autoResize(translationTextareaRef.current);
     }
-    if (isArmedTransRevert) {
-      setIsArmedTransRevert(false);
-      setDraftTranslatedText(bubble.translatedText || '');
-      if (translationTextareaRef.current) {
-        translationTextareaRef.current.value = bubble.translatedText || '';
-        autoResize(translationTextareaRef.current);
-      }
-    } else {
-      setIsArmedTransRevert(true);
-    }
-  }, [isConfirmationEnabled, isArmedTransRevert, bubble.translatedText]);
+  }, [bubble.translatedText]);
 
   const handleRevertTranslationHistoryClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!isConfirmationEnabled) {
-      setIsArmedTransRevert(false);
-      onRevertTranslation?.();
-      return;
-    }
-    if (isArmedTransRevert) {
-      setIsArmedTransRevert(false);
-      onRevertTranslation?.();
-    } else {
-      setIsArmedTransRevert(true);
-    }
-  }, [isConfirmationEnabled, isArmedTransRevert, onRevertTranslation]);
+    onRevertTranslation?.();
+  }, [onRevertTranslation]);
 
   const handleDeleteBubbleClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -364,32 +293,84 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
     }
   }, [isConfirmationEnabled, isArmedDeleteBubble, bubble.id, onDelete]);
 
-  // Phase 1.4: Move Split Bubble into toolbar handler
+  // Phase 1.4: Split Bubble handler supporting both English and Arabic text
   const handleSplitClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     if (!onSplitBubble) return;
 
-    const textarea = sourceTextareaRef.current;
-    const text = draftSourceText;
-    if (!textarea) return;
+    const sourceEl = sourceTextareaRef.current;
+    const transEl = translationTextareaRef.current;
 
-    const selStart = textarea.selectionStart;
+    const sourceSel = sourceEl?.selectionStart ?? null;
+    const transSel = transEl?.selectionStart ?? null;
 
-    if (selStart !== null && selStart > 0 && selStart < text.length) {
-      setSplitTip(null);
-      // If there are unsaved edits, commit them first before splitting
-      if (draftSourceText !== (bubble.sourceText || '')) {
-        onUpdate(bubble.id, { sourceText: draftSourceText, isManuallyEdited: true });
+    const isSourceValid = sourceSel !== null && sourceSel > 0 && sourceSel < draftSourceText.length;
+    const isTransValid = transSel !== null && transSel > 0 && transSel < draftTranslatedText.length;
+
+    // Determine target based on active focus or valid cursor positions
+    let targetField: 'sourceText' | 'translatedText' | null = null;
+    let splitPos: number | null = null;
+
+    if (lastFocusedField === 'translation') {
+      if (isTransValid) {
+        targetField = 'translatedText';
+        splitPos = transSel;
+      } else if (isSourceValid) {
+        targetField = 'sourceText';
+        splitPos = sourceSel;
       }
-      onSplitBubble(bubble.id, selStart);
+    } else if (lastFocusedField === 'source') {
+      if (isSourceValid) {
+        targetField = 'sourceText';
+        splitPos = sourceSel;
+      } else if (isTransValid) {
+        targetField = 'translatedText';
+        splitPos = transSel;
+      }
     } else {
-      setSplitTip('Place cursor in raw dialogue where you want to split.');
-      textarea.focus();
+      if (isTransValid && !isSourceValid) {
+        targetField = 'translatedText';
+        splitPos = transSel;
+      } else if (isSourceValid) {
+        targetField = 'sourceText';
+        splitPos = sourceSel;
+      }
+    }
+
+    if (targetField && splitPos !== null) {
+      setSplitTip(null);
+      if (targetField === 'translatedText') {
+        if (draftTranslatedText !== (bubble.translatedText || '')) {
+          onUpdate(bubble.id, { translatedText: draftTranslatedText, isManuallyEdited: true });
+        }
+        onSplitBubble(bubble.id, splitPos, 'translatedText');
+      } else {
+        if (draftSourceText !== (bubble.sourceText || '')) {
+          onUpdate(bubble.id, { sourceText: draftSourceText, isManuallyEdited: true });
+        }
+        onSplitBubble(bubble.id, splitPos, 'sourceText');
+      }
+    } else {
+      setSplitTip('Place cursor in raw dialogue or translation where you want to split.');
+      if (lastFocusedField === 'translation' && transEl) {
+        transEl.focus();
+      } else if (sourceEl) {
+        sourceEl.focus();
+      }
       setTimeout(() => {
         setSplitTip(null);
       }, 4000);
     }
-  }, [bubble.id, bubble.sourceText, draftSourceText, onSplitBubble, onUpdate]);
+  }, [
+    bubble.id,
+    bubble.sourceText,
+    bubble.translatedText,
+    draftSourceText,
+    draftTranslatedText,
+    lastFocusedField,
+    onSplitBubble,
+    onUpdate,
+  ]);
 
   // Phase 1.1: Internal Text Drag & Drop handlers
   const handleTextareaDragStart = (
@@ -703,46 +684,31 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
                   <button
                     type="button"
                     onClick={handleSaveSourceClick}
-                    onMouseLeave={() => setIsArmedSourceSave(false)}
-                    className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer transition-colors shadow-sm ${
-                      isArmedSourceSave
-                        ? 'bg-amber-400 hover:bg-amber-300 text-black animate-pulse'
-                        : 'bg-emerald-500 hover:bg-emerald-400 text-black'
-                    }`}
-                    title={isConfirmationEnabled ? (isArmedSourceSave ? "Click again to confirm Save" : "Save changes to source dialogue") : "Save changes to source dialogue"}
+                    className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer transition-colors shadow-sm bg-emerald-500 hover:bg-emerald-400 text-black"
+                    title="Save changes to source dialogue"
                   >
                     <Check className="w-2.5 h-2.5 stroke-[2.5] pointer-events-none" />
-                    <span className="pointer-events-none">{isArmedSourceSave ? 'Confirm Save?' : 'Save'}</span>
+                    <span className="pointer-events-none">Save</span>
                   </button>
                   <button
                     type="button"
                     onClick={handleRevertSourceDraftClick}
-                    onMouseLeave={() => setIsArmedSourceRevert(false)}
-                    className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium cursor-pointer transition-colors ${
-                      isArmedSourceRevert
-                        ? 'bg-amber-600 hover:bg-amber-500 text-white font-bold animate-pulse'
-                        : 'bg-zinc-700 hover:bg-zinc-600 text-zinc-200'
-                    }`}
-                    title={isConfirmationEnabled ? (isArmedSourceRevert ? "Click again to confirm Revert" : "Cancel unsaved source edits") : "Cancel unsaved source edits"}
+                    className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium cursor-pointer transition-colors bg-zinc-700 hover:bg-zinc-600 text-zinc-200"
+                    title="Cancel unsaved source edits"
                   >
                     <X className="w-2.5 h-2.5 pointer-events-none" />
-                    <span className="pointer-events-none">{isArmedSourceRevert ? 'Confirm Revert?' : 'Revert'}</span>
+                    <span className="pointer-events-none">Revert</span>
                   </button>
                 </div>
               ) : canRevertSource ? (
                 <button
                   type="button"
                   onClick={handleRevertSourceHistoryClick}
-                  onMouseLeave={() => setIsArmedSourceRevert(false)}
-                  className={`flex items-center gap-1 text-[10px] cursor-pointer transition-colors ${
-                    isArmedSourceRevert
-                      ? 'px-2 py-0.5 rounded bg-amber-500 text-black font-bold animate-pulse'
-                      : 'text-amber-400 hover:text-amber-300'
-                  }`}
-                  title={isConfirmationEnabled ? (isArmedSourceRevert ? "Click again to confirm Revert" : "Restore initial scanned source text") : "Restore initial scanned source text"}
+                  className="flex items-center gap-1 text-[10px] cursor-pointer transition-colors text-amber-400 hover:text-amber-300"
+                  title="Restore initial scanned source text"
                 >
                   <RotateCcw className="w-2.5 h-2.5 pointer-events-none" />
-                  <span className="pointer-events-none">{isArmedSourceRevert ? 'Confirm Revert?' : 'Revert'}</span>
+                  <span className="pointer-events-none">Revert</span>
                 </button>
               ) : null}
             </div>
@@ -758,6 +724,7 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
               dir="auto"
               rows={1}
               value={draftSourceText}
+              onFocus={() => setLastFocusedField('source')}
               onChange={handleSourceInput}
               onDragStart={(e) => handleTextareaDragStart(e, 'sourceText')}
               onDragEnd={handleTextareaDragEnd}
@@ -783,46 +750,31 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
                   <button
                     type="button"
                     onClick={handleSaveTranslationClick}
-                    onMouseLeave={() => setIsArmedTransSave(false)}
-                    className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer transition-colors shadow-sm ${
-                      isArmedTransSave
-                        ? 'bg-amber-400 hover:bg-amber-300 text-black animate-pulse'
-                        : 'bg-emerald-500 hover:bg-emerald-400 text-black'
-                    }`}
-                    title={isConfirmationEnabled ? (isArmedTransSave ? "Click again to confirm Save" : "Save changes to translation") : "Save changes to translation"}
+                    className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer transition-colors shadow-sm bg-emerald-500 hover:bg-emerald-400 text-black"
+                    title="Save changes to translation"
                   >
                     <Check className="w-2.5 h-2.5 stroke-[2.5] pointer-events-none" />
-                    <span className="pointer-events-none">{isArmedTransSave ? 'Confirm Save?' : 'Save'}</span>
+                    <span className="pointer-events-none">Save</span>
                   </button>
                   <button
                     type="button"
                     onClick={handleRevertTranslationDraftClick}
-                    onMouseLeave={() => setIsArmedTransRevert(false)}
-                    className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium cursor-pointer transition-colors ${
-                      isArmedTransRevert
-                        ? 'bg-amber-600 hover:bg-amber-500 text-white font-bold animate-pulse'
-                        : 'bg-zinc-700 hover:bg-zinc-600 text-zinc-200'
-                    }`}
-                    title={isConfirmationEnabled ? (isArmedTransRevert ? "Click again to confirm Revert" : "Cancel unsaved translation edits") : "Cancel unsaved translation edits"}
+                    className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium cursor-pointer transition-colors bg-zinc-700 hover:bg-zinc-600 text-zinc-200"
+                    title="Cancel unsaved translation edits"
                   >
                     <X className="w-2.5 h-2.5 pointer-events-none" />
-                    <span className="pointer-events-none">{isArmedTransRevert ? 'Confirm Revert?' : 'Revert'}</span>
+                    <span className="pointer-events-none">Revert</span>
                   </button>
                 </div>
               ) : canRevertTranslation ? (
                 <button
                   type="button"
                   onClick={handleRevertTranslationHistoryClick}
-                  onMouseLeave={() => setIsArmedTransRevert(false)}
-                  className={`flex items-center gap-1 text-[10px] cursor-pointer transition-colors ${
-                    isArmedTransRevert
-                      ? 'px-2 py-0.5 rounded bg-amber-500 text-black font-bold animate-pulse'
-                      : 'text-amber-400 hover:text-amber-300'
-                  }`}
-                  title={isConfirmationEnabled ? (isArmedTransRevert ? "Click again to confirm Revert" : "Restore prior translation version without losing edit history") : "Restore prior translation version without losing edit history"}
+                  className="flex items-center gap-1 text-[10px] cursor-pointer transition-colors text-amber-400 hover:text-amber-300"
+                  title="Restore prior translation version without losing edit history"
                 >
                   <RotateCcw className="w-2.5 h-2.5 pointer-events-none" />
-                  <span className="pointer-events-none">{isArmedTransRevert ? 'Confirm Revert?' : revertTranslationLabel}</span>
+                  <span className="pointer-events-none">{revertTranslationLabel}</span>
                 </button>
               ) : null}
             </div>
@@ -837,7 +789,10 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
               dir="rtl"
               rows={1}
               value={draftTranslatedText}
-              onFocus={() => focusRegistry.register(translationTextareaRef.current)}
+              onFocus={() => {
+                focusRegistry.register(translationTextareaRef.current);
+                setLastFocusedField('translation');
+              }}
               onChange={handleTranslationInput}
               onDragStart={(e) => handleTextareaDragStart(e, 'translatedText')}
               onDragEnd={handleTextareaDragEnd}

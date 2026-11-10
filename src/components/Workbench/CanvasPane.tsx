@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import type { BubbleItem } from '../../types/workbench';
 import { extractFilesFromDataTransfer, ingestImageFiles } from '../../services/fileIngestion';
 import { FileImage, Activity } from 'lucide-react';
@@ -193,6 +193,8 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
   // Box drawing state (0-1000 normalized coordinates)
   const [drawingStart, setDrawingStart] = useState<{ x: number; y: number } | null>(null);
   const [drawingCurrent, setDrawingCurrent] = useState<{ x: number; y: number } | null>(null);
+  const drawingStartRef = useRef<{ x: number; y: number } | null>(null);
+  const drawingCurrentRef = useRef<{ x: number; y: number } | null>(null);
 
   // Active page generation token (Section 4.7)
   const [generationToken, setGenerationToken] = useState(() =>
@@ -403,7 +405,7 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
   /**
    * Maps pointer event to canonical source space (0-1000) using geometryService inverse transform.
    */
-  const getCanonicalSourceCoords = (e: React.MouseEvent): { x: number; y: number } | null => {
+  const getCanonicalSourceCoords = (e: { clientX: number; clientY: number }): { x: number; y: number } | null => {
     if (!svgRef.current) return null;
     const rect = svgRef.current.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return null;
@@ -416,6 +418,72 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
       y: Math.max(0, Math.min(1000, Math.round(rawY))),
     };
   };
+
+  const commitDrawnBox = useCallback(() => {
+    const start = drawingStartRef.current;
+    const current = drawingCurrentRef.current;
+    if (!start || !current) {
+      drawingStartRef.current = null;
+      drawingCurrentRef.current = null;
+      setDrawingStart(null);
+      setDrawingCurrent(null);
+      return;
+    }
+
+    const rawBox: [number, number, number, number] = [
+      Math.min(start.y, current.y),
+      Math.min(start.x, current.x),
+      Math.max(start.y, current.y),
+      Math.max(start.x, current.x),
+    ];
+
+    // Canonical Geometry Validation (Section 4.6)
+    const validated = validateCanonicalBox(rawBox, 1000, 15);
+    if (validated.valid) {
+      onAddManualBubbleWithCoords?.(validated.box);
+    }
+
+    drawingStartRef.current = null;
+    drawingCurrentRef.current = null;
+    setDrawingStart(null);
+    setDrawingCurrent(null);
+  }, [onAddManualBubbleWithCoords]);
+
+  // Window mousemove & mouseup for drawing across canvas boundaries
+  useEffect(() => {
+    if (!drawingStart || !isDrawBoxActive) return;
+
+    const handleWindowMouseMove = (e: MouseEvent) => {
+      const coords = getCanonicalSourceCoords(e);
+      if (coords) {
+        drawingCurrentRef.current = coords;
+        setDrawingCurrent(coords);
+      }
+    };
+
+    const handleWindowMouseUp = (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      commitDrawnBox();
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        drawingStartRef.current = null;
+        drawingCurrentRef.current = null;
+        setDrawingStart(null);
+        setDrawingCurrent(null);
+      }
+    };
+
+    window.addEventListener('mousemove', handleWindowMouseMove);
+    window.addEventListener('mouseup', handleWindowMouseUp);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('mousemove', handleWindowMouseMove);
+      window.removeEventListener('mouseup', handleWindowMouseUp);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [drawingStart, isDrawBoxActive, commitDrawnBox]);
 
   const handleSvgMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
     if (e.button === 1) {
@@ -437,6 +505,8 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
     if (isDrawBoxActive) {
       const coords = getCanonicalSourceCoords(e);
       if (coords) {
+        drawingStartRef.current = coords;
+        drawingCurrentRef.current = coords;
         setDrawingStart(coords);
         setDrawingCurrent(coords);
       }
@@ -478,34 +548,23 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
       });
     }
 
-    if (!isDrawBoxActive || !drawingStart) return;
+    if (!isDrawBoxActive || !drawingStartRef.current) return;
     if (coords) {
+      drawingCurrentRef.current = coords;
       setDrawingCurrent(coords);
     }
   };
 
   const handleSvgMouseUp = () => {
-    if (!isDrawBoxActive || !drawingStart || !drawingCurrent) {
+    if (!isDrawBoxActive || !drawingStartRef.current) {
+      drawingStartRef.current = null;
+      drawingCurrentRef.current = null;
       setDrawingStart(null);
       setDrawingCurrent(null);
       return;
     }
 
-    const rawBox: [number, number, number, number] = [
-      Math.min(drawingStart.y, drawingCurrent.y),
-      Math.min(drawingStart.x, drawingCurrent.x),
-      Math.max(drawingStart.y, drawingCurrent.y),
-      Math.max(drawingStart.x, drawingCurrent.x),
-    ];
-
-    // Canonical Geometry Validation (Section 4.6)
-    const validated = validateCanonicalBox(rawBox, 1000, 15);
-    if (validated.valid) {
-      onAddManualBubbleWithCoords?.(validated.box);
-    }
-
-    setDrawingStart(null);
-    setDrawingCurrent(null);
+    commitDrawnBox();
   };
 
   // Drag and drop ingestion onto Canvas
@@ -700,7 +759,7 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
               <g
                 style={{
                   opacity: effectiveShowBoxes ? 1 : 0,
-                  pointerEvents: effectiveShowBoxes ? 'auto' : 'none',
+                  pointerEvents: isDrawBoxActive ? 'none' : (effectiveShowBoxes ? 'auto' : 'none'),
                   transition: 'opacity 150ms ease',
                 }}
               >
@@ -796,7 +855,6 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
               className="absolute inset-0 pointer-events-none select-none overflow-visible"
               style={{
                 opacity: effectiveShowBoxes ? 1 : 0,
-                pointerEvents: effectiveShowBoxes ? 'auto' : 'none',
                 transition: 'opacity 150ms ease',
               }}
             >
@@ -855,7 +913,7 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                       backgroundColor: badgeBg,
                       color: badgeTextColor,
                       borderColor,
-                      pointerEvents: effectiveShowBoxes ? 'auto' : 'none',
+                      pointerEvents: isDrawBoxActive ? 'none' : (effectiveShowBoxes ? 'auto' : 'none'),
                     }}
                     className={`cursor-pointer inline-flex items-center justify-center px-1.5 py-0.5 rounded-[3px] border shadow-md font-mono text-[10px] font-bold leading-none select-none tracking-tight transition-transform duration-100 ${
                       isSelected

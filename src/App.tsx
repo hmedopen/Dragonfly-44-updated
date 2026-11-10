@@ -253,10 +253,10 @@ export function App() {
       const files = filesInput && filesInput.length > 0 ? filesInput : await pickImageFiles();
       if (files.length === 0) return;
 
-      const result = await ingestImageFiles(files);
-
       const existingPages = chapter.pageList || [];
       const offset = existingPages.length;
+      const result = await ingestImageFiles(files, offset + 1);
+
       const adjustedNewPages = result.pages.map((p, idx) => ({
         ...p,
         index: offset + idx + 1,
@@ -336,13 +336,14 @@ export function App() {
   };
 
   const handleDeletePageFromChapter = (chapterId: string, pageId: string) => {
-    if (!activeFolder) return;
+    const targetFolder = folders.find((f) => f.chapters.some((c) => c.id === chapterId)) || activeFolder;
+    if (!targetFolder) return;
 
     deletePageBlob(pageId).catch((err) => console.error('Failed to delete blob from db', err));
 
     setFolders((prev) =>
       prev.map((f) => {
-        if (f.id === activeFolder.id) {
+        if (f.id === targetFolder.id) {
           return {
             ...f,
             chapters: f.chapters.map((c) => {
@@ -481,7 +482,13 @@ export function App() {
                   ...f,
                   chapters: f.chapters.map((c) => {
                     if (c.id === effectiveChapterId) {
-                      const combined = [...(c.pageList || []), ...newPages];
+                      const existingPages = c.pageList || [];
+                      const offset = existingPages.length;
+                      const adjustedNewPages = newPages.map((p, idx) => ({
+                        ...p,
+                        index: offset + idx + 1,
+                      }));
+                      const combined = [...existingPages, ...adjustedNewPages];
                       return { ...c, pages: combined.length, pageList: combined };
                     }
                     return c;

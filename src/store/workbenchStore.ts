@@ -42,6 +42,7 @@ interface WorkbenchState {
   isKeyboardOpen: boolean;
   isTypeRModalOpen: boolean;
   isDrawBoxActive: boolean;
+  isUtilityRailExpanded: boolean;
   zoomLevel: number;
   feedFilter: FeedFilterMode;
 
@@ -72,6 +73,8 @@ interface WorkbenchState {
   toggleTypeRModal: () => void;
   setIsDrawBoxActive: (active: boolean) => void;
   toggleDrawBox: () => void;
+  setIsUtilityRailExpanded: (expanded: boolean) => void;
+  toggleUtilityRail: () => void;
   setZoomLevel: (zoom: number) => void;
   resetZoom: () => void;
   setFeedFilter: (filter: FeedFilterMode) => void;
@@ -82,7 +85,12 @@ interface WorkbenchState {
   updateBubble: (pageId: string, bubbleId: string, patch: Partial<BubbleItem>) => void;
   deleteBubble: (pageId: string, bubbleId: string) => void;
   reorderBubbles: (pageId: string, startIndex: number, endIndex: number) => void;
-  splitBubble: (pageId: string, bubbleId: string, splitIndex: number) => void;
+  splitBubble: (
+    pageId: string,
+    bubbleId: string,
+    splitIndex: number,
+    field?: 'sourceText' | 'translatedText'
+  ) => void;
   transferText: (
     pageId: string,
     params: {
@@ -159,6 +167,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   isKeyboardOpen: false,
   isTypeRModalOpen: false,
   isDrawBoxActive: false,
+  isUtilityRailExpanded: false,
   zoomLevel: 100,
   feedFilter: 'all',
 
@@ -220,6 +229,8 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   toggleTypeRModal: () => set((s) => ({ isTypeRModalOpen: !s.isTypeRModalOpen })),
   setIsDrawBoxActive: (active) => set({ isDrawBoxActive: active }),
   toggleDrawBox: () => set((s) => ({ isDrawBoxActive: !s.isDrawBoxActive })),
+  setIsUtilityRailExpanded: (expanded) => set({ isUtilityRailExpanded: expanded }),
+  toggleUtilityRail: () => set((s) => ({ isUtilityRailExpanded: !s.isUtilityRailExpanded })),
   setZoomLevel: (zoom) => set({ zoomLevel: Math.max(25, Math.min(zoom, 1000)) }),
   resetZoom: () => set({ zoomLevel: 100 }),
   setFeedFilter: (filter) => set({ feedFilter: filter }),
@@ -252,7 +263,8 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   addManualBubble: (pageId: string, initialBox?: [number, number, number, number]) => {
     const state = get();
     const existing = state.bubblesByPage[pageId] || [];
-    const nextIndex = existing.length + 1;
+    const maxIndex = existing.reduce((max, b) => Math.max(max, b.index || 0), 0);
+    const nextIndex = maxIndex + 1;
 
     const typerSettings = loadTyperSettings();
     const defaultSpeechTyper = typerSettings.typers.find(
@@ -388,50 +400,97 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     );
   },
 
-  splitBubble: (pageId: string, bubbleId: string, splitIndex: number) => {
+  splitBubble: (
+    pageId: string,
+    bubbleId: string,
+    splitIndex: number,
+    field: 'sourceText' | 'translatedText' = 'sourceText'
+  ) => {
     const state = get();
     const existing = state.bubblesByPage[pageId] || [];
     const targetIdx = existing.findIndex((b) => b.id === bubbleId);
     if (targetIdx === -1) return;
 
     const target = existing[targetIdx];
-    const fullSourceText = target.sourceText || '';
-    if (splitIndex <= 0 || splitIndex >= fullSourceText.length) return;
-
-    const textBefore = fullSourceText.slice(0, splitIndex);
-    const textAfter = fullSourceText.slice(splitIndex);
     const sharedRegionId = target.regionId || target.id;
     const now = Date.now();
 
-    const updatedTarget: BubbleItem = {
-      ...target,
-      regionId: sharedRegionId,
-      sourceText: textBefore,
-      isManuallyEdited: true,
-      updatedAt: now,
-    };
+    let updatedTarget: BubbleItem;
+    let newBubble: BubbleItem;
 
-    const newBubble: BubbleItem = {
-      id: `bubble-${now}-${Math.random().toString(36).substring(2, 7)}`,
-      pageId: target.pageId,
-      chapterId: target.chapterId,
-      index: target.index + 1,
-      regionId: sharedRegionId,
-      box_2d: [...target.box_2d],
-      type: target.type,
-      typerPrefix: target.typerPrefix,
-      sourceLanguage: target.sourceLanguage,
-      sourceText: textAfter,
-      originalSourceText: textAfter,
-      translatedText: '',
-      rawTranslatedText: '',
-      humanizedTranslatedText: '',
-      translationHistory: [],
-      reviewFlags: [],
-      confidence: target.confidence,
-      isManuallyEdited: true,
-      updatedAt: now,
-    };
+    if (field === 'translatedText') {
+      const fullTransText = target.translatedText || '';
+      if (splitIndex <= 0 || splitIndex >= fullTransText.length) return;
+
+      const textBefore = fullTransText.slice(0, splitIndex);
+      const textAfter = fullTransText.slice(splitIndex);
+
+      updatedTarget = {
+        ...target,
+        regionId: sharedRegionId,
+        translatedText: textBefore,
+        isManuallyEdited: true,
+        updatedAt: now,
+      };
+
+      newBubble = {
+        id: `bubble-${now}-${Math.random().toString(36).substring(2, 7)}`,
+        pageId: target.pageId,
+        chapterId: target.chapterId,
+        index: target.index + 1,
+        regionId: sharedRegionId,
+        box_2d: [...target.box_2d],
+        type: target.type,
+        typerPrefix: target.typerPrefix,
+        sourceLanguage: target.sourceLanguage,
+        sourceText: '',
+        originalSourceText: '',
+        translatedText: textAfter,
+        rawTranslatedText: textAfter,
+        humanizedTranslatedText: textAfter,
+        translationHistory: [],
+        reviewFlags: [],
+        confidence: target.confidence,
+        isManuallyEdited: true,
+        updatedAt: now,
+      };
+    } else {
+      const fullSourceText = target.sourceText || '';
+      if (splitIndex <= 0 || splitIndex >= fullSourceText.length) return;
+
+      const textBefore = fullSourceText.slice(0, splitIndex);
+      const textAfter = fullSourceText.slice(splitIndex);
+
+      updatedTarget = {
+        ...target,
+        regionId: sharedRegionId,
+        sourceText: textBefore,
+        isManuallyEdited: true,
+        updatedAt: now,
+      };
+
+      newBubble = {
+        id: `bubble-${now}-${Math.random().toString(36).substring(2, 7)}`,
+        pageId: target.pageId,
+        chapterId: target.chapterId,
+        index: target.index + 1,
+        regionId: sharedRegionId,
+        box_2d: [...target.box_2d],
+        type: target.type,
+        typerPrefix: target.typerPrefix,
+        sourceLanguage: target.sourceLanguage,
+        sourceText: textAfter,
+        originalSourceText: textAfter,
+        translatedText: '',
+        rawTranslatedText: '',
+        humanizedTranslatedText: '',
+        translationHistory: [],
+        reviewFlags: [],
+        confidence: target.confidence,
+        isManuallyEdited: true,
+        updatedAt: now,
+      };
+    }
 
     const updatedList = [
       ...existing.slice(0, targetIdx),

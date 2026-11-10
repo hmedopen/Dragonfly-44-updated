@@ -197,7 +197,7 @@ export async function extractImageDimensions(blob: Blob): Promise<{ width: numbe
  * Natural sorts files, persists each binary Blob to IndexedDB,
  * and generates the PageMetadata list (with 1-based index).
  */
-export async function ingestImageFiles(files: File[]): Promise<IngestionResult> {
+export async function ingestImageFiles(files: File[], startIndex: number = 1): Promise<IngestionResult> {
   if (files.length === 0) {
     return { pages: [], count: 0 };
   }
@@ -210,7 +210,7 @@ export async function ingestImageFiles(files: File[]): Promise<IngestionResult> 
 
   for (let i = 0; i < sortedFiles.length; i++) {
     const file = sortedFiles[i];
-    const index = i + 1; // 1-based index
+    const index = startIndex + i; // 1-based sequential index
     const pageId = `page-${Date.now()}-${index}-${Math.random().toString(36).substring(2, 8)}`;
 
     // Store raw Blob/File directly under key page-blob:${pageId}

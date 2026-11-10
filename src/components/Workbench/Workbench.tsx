@@ -1,10 +1,12 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import type { Folder, Chapter } from '../../types';
 import type { BubbleItem } from '../../types/workbench';
 import { useWorkbenchStore } from '../../store/workbenchStore';
 import { getPageBlob, getPageBubbles } from '../../services/db';
 import { CanvasPane } from './CanvasPane';
 import { FeedPane } from './FeedPane';
+import { UtilityRail, type UtilityRailTool } from './UtilityRail';
+import { settingsService } from '../../services/settings/settingsService';
 import { SettingsModal } from '../Settings/SettingsModal';
 import { BenchmarkScreen } from '../Benchmark/BenchmarkScreen';
 import { VirtualKeyboard } from '../Tools/VirtualKeyboard';
@@ -24,7 +26,6 @@ import {
   Search,
   MessageSquarePlus,
   BoxSelect,
-  SquareDashed,
   BookOpen,
   X,
   Activity
@@ -85,6 +86,9 @@ export const Workbench: React.FC<WorkbenchProps> = ({
     setIsTypeRModalOpen,
     isDrawBoxActive,
     toggleDrawBox,
+    isUtilityRailExpanded,
+    setIsUtilityRailExpanded,
+    toggleUtilityRail,
     zoomLevel,
     setZoomLevel,
     resetZoom,
@@ -142,6 +146,50 @@ export const Workbench: React.FC<WorkbenchProps> = ({
   const pendingTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const isDoubleConfirmEnabled = useConfirmationSetting(folder?.id);
+
+  // General Tweaks: Keep Utility Rail Expanded subscription (Global Preference)
+  const [keepUtilityRailExpanded, setKeepUtilityRailExpanded] = useState<boolean>(() => {
+    try {
+      return settingsService.getEffectiveValue<boolean>('general.keep_utility_rail_expanded').value ?? false;
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    const unsub = settingsService.subscribe((event) => {
+      if (event.setting_id === 'general.keep_utility_rail_expanded' || !event.setting_id) {
+        setKeepUtilityRailExpanded(
+          settingsService.getEffectiveValue<boolean>('general.keep_utility_rail_expanded').value ?? false
+        );
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  // Workspace Utility Rail Tools definition (Virtual Keyboard & Diagnostics)
+  const utilityTools: UtilityRailTool[] = useMemo(
+    () => [
+      {
+        id: 'virtual-keyboard',
+        name: 'Virtual Keyboard',
+        description: 'Toggle the Arabic virtual keyboard.',
+        icon: Keyboard,
+        onClick: toggleKeyboard,
+        isActive: isKeyboardOpen,
+        shortcut: 'Ctrl+K',
+      },
+      {
+        id: 'diagnostics',
+        name: 'Diagnostics',
+        description: 'Open the application diagnostics tools.',
+        icon: Activity,
+        onClick: () => setIsBenchmarkOpen(true),
+        isActive: isBenchmarkOpen,
+      },
+    ],
+    [toggleKeyboard, isKeyboardOpen, isBenchmarkOpen]
+  );
 
   const pages = chapter?.pageList || [];
   const displayPages = pendingPages || pages;
@@ -291,16 +339,45 @@ export const Workbench: React.FC<WorkbenchProps> = ({
     }
   };
 
+  const executeDeletePage = (pageId: string) => {
+    setDeletingPageId(null);
+
+    // If deleting the currently displayed/effective page, calculate next page navigation
+    if (pageId === effectivePageId) {
+      const deletedIdx = pages.findIndex((p) => p.id === pageId);
+      if (deletedIdx >= 0) {
+        let nextId: string | null = null;
+        if (deletedIdx + 1 < pages.length) {
+          nextId = pages[deletedIdx + 1].id;
+        } else if (deletedIdx > 0) {
+          nextId = pages[deletedIdx - 1].id;
+        } else {
+          nextId = null; // was the only page
+        }
+
+        setActivePageId(nextId);
+        if (!nextId) {
+          setLoadedBlobState({ pageId: null, url: null });
+          setSelectedBubbleId(null);
+        }
+      }
+    }
+
+    try {
+      onDeletePage?.(pageId);
+    } catch (err) {
+      console.error('Failed to execute page deletion', err);
+    }
+  };
+
   const handleDeletePageClick = (e: React.MouseEvent, pageId: string) => {
     e.stopPropagation();
     if (!isDoubleConfirmEnabled) {
-      setDeletingPageId(null);
-      onDeletePage?.(pageId);
+      executeDeletePage(pageId);
       return;
     }
     if (deletingPageId === pageId) {
-      setDeletingPageId(null);
-      onDeletePage?.(pageId);
+      executeDeletePage(pageId);
     } else {
       setDeletingPageId(pageId);
     }
@@ -341,12 +418,32 @@ export const Workbench: React.FC<WorkbenchProps> = ({
   // Req #3: Reset armed page delete on outside click
   useEffect(() => {
     if (!deletingPageId) return;
-    const handleOutsideClick = () => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && target.closest('[data-page-delete-pill]')) {
+        return;
+      }
       setDeletingPageId(null);
     };
     window.addEventListener('mousedown', handleOutsideClick);
     return () => window.removeEventListener('mousedown', handleOutsideClick);
   }, [deletingPageId]);
+
+  // Sync activePageId with current chapter pages collection
+  useEffect(() => {
+    if (!pages || pages.length === 0) {
+      if (activePageId !== null) {
+        setActivePageId(null);
+      }
+      if (loadedBlobState.pageId !== null) {
+        setLoadedBlobState({ pageId: null, url: null });
+      }
+      return;
+    }
+    if (activePageId && !pages.some((p) => p.id === activePageId)) {
+      setActivePageId(pages[0]?.id || null);
+    }
+  }, [pages, activePageId, setActivePageId, loadedBlobState.pageId]);
 
   // Req #8: Reset canvas zoom & view when switching pages
   useEffect(() => {
@@ -357,9 +454,10 @@ export const Workbench: React.FC<WorkbenchProps> = ({
       savedViewBeforeEyeRef.current = null;
       setFocusTarget(null);
       setCenterTarget(null);
+      setSelectedBubbleId(null);
     }
     prevPageIdRef.current = effectivePageId;
-  }, [effectivePageId, resetZoom]);
+  }, [effectivePageId, resetZoom, setSelectedBubbleId]);
 
   // Global Keyboard shortcuts: Escape, Ctrl+, Ctrl+K, J, K (focus-guarded)
   useEffect(() => {
@@ -661,7 +759,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
     try {
       const files = await pickImageFiles();
       if (files.length > 0) {
-        const res = await ingestImageFiles(files);
+        const res = await ingestImageFiles(files, displayPages.length + 1);
         if (res.pages.length > 0) {
           onAppendPages?.(res.pages);
           if (!activePageId) {
@@ -676,7 +774,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
 
   const handleIngestDroppedOnCanvas = async (droppedFiles: File[]) => {
     try {
-      const res = await ingestImageFiles(droppedFiles);
+      const res = await ingestImageFiles(droppedFiles, displayPages.length + 1);
       if (res.pages.length > 0) {
         onAppendPages?.(res.pages);
         if (!activePageId) {
@@ -763,7 +861,8 @@ export const Workbench: React.FC<WorkbenchProps> = ({
                   return (
                     <div
                       key={p.id}
-                      draggable
+                      data-page-delete-pill={p.id}
+                      draggable={!isArmingDelete}
                       onDragStart={(e) => handleTabDragStart(e, idx)}
                       onDragOver={(e) => handleTabDragOver(e, idx)}
                       onDrop={(e) => handleTabDrop(e, idx)}
@@ -791,12 +890,13 @@ export const Workbench: React.FC<WorkbenchProps> = ({
                         onClick={(e) => {
                           if (isArmingDelete) {
                             e.stopPropagation();
-                            onDeletePage?.(p.id);
-                            setDeletingPageId(null);
+                            executeDeletePage(p.id);
                           }
                         }}
-                        className={`flex-1 h-full px-3 inline-flex items-center justify-center text-xs font-bold rounded-full text-center whitespace-nowrap relative cursor-grab active:cursor-grabbing ${
-                          isArmingDelete ? 'text-white' : 'text-zinc-950'
+                        className={`flex-1 h-full px-3 inline-flex items-center justify-center text-xs font-bold rounded-full text-center whitespace-nowrap relative ${
+                          isArmingDelete
+                            ? 'text-white cursor-pointer'
+                            : 'text-zinc-950 cursor-grab active:cursor-grabbing'
                         }`}
                       >
                         {isPageScanning && (
@@ -871,8 +971,6 @@ export const Workbench: React.FC<WorkbenchProps> = ({
             <Plus className="w-4 h-4" />
           </button>
 
-          <div className="h-4 w-px bg-white/10" />
-
           {isTrainingStudioEnabled() && onOpenTrainingStudio && (
             <button
               type="button"
@@ -884,26 +982,8 @@ export const Workbench: React.FC<WorkbenchProps> = ({
             </button>
           )}
 
-          <button
-            type="button"
-            onClick={() => setIsBenchmarkOpen(true)}
-            className={`p-1.5 rounded-full text-xs transition-colors cursor-pointer ${
-              isBenchmarkOpen ? 'bg-amber-500/20 text-amber-300' : 'text-zinc-500 hover:text-white'
-            }`}
-            title="Quality Benchmark Engine (System #6)"
-          >
-            <Activity className="w-4 h-4" />
-          </button>
-          <button
-            type="button"
-            onClick={toggleKeyboard}
-            className={`p-1.5 rounded-full text-xs transition-colors cursor-pointer ${
-              isKeyboardOpen ? 'bg-sky-500/20 text-sky-300' : 'text-zinc-500 hover:text-white'
-            }`}
-            title="Toggle Arabic Virtual Keyboard (Ctrl+K)"
-          >
-            <Keyboard className="w-4 h-4" />
-          </button>
+          <div className="h-4 w-px bg-white/10" />
+
           <button
             type="button"
             onClick={toggleSettings}
@@ -917,13 +997,26 @@ export const Workbench: React.FC<WorkbenchProps> = ({
         </div>
       </header>
 
-      {/* 2. Subheader Action Row: Canvas Controls (Left) & Action Pills (Right) */}
+      {/* Workspace Area Beneath Header Divider */}
+      <div className="flex-1 min-h-0 w-full flex flex-row overflow-hidden relative">
+        {/* Far Left: Dedicated Workspace Utility Rail (aligned under header divider) */}
+        <UtilityRail
+          isExpanded={isUtilityRailExpanded}
+          onToggleExpand={toggleUtilityRail}
+          onCollapse={() => setIsUtilityRailExpanded(false)}
+          keepExpanded={keepUtilityRailExpanded}
+          tools={utilityTools}
+        />
+
+        {/* Main Workspace Column */}
+        <div className="flex-1 min-w-0 h-full flex flex-col overflow-hidden relative">
+          {/* 2. Subheader Action Row: Canvas Controls (Left) & Action Pills (Right) */}
       <div className="relative z-30 px-4 py-2 flex items-center justify-between shrink-0 gap-4">
         {/* Left (aligned above Canvas): Zoom Pill + 3 Separated Action Buttons */}
-        <div className="w-[32%] max-w-[34%] min-w-[28%] flex items-center gap-2 overflow-visible relative">
-          {/* Zoom Percentage & Reset Capsule */}
-          <div className="flex items-center gap-1 bg-[#121317] border border-white/[0.08] rounded-xl px-2 py-1 shadow-sm shrink-0">
-            {/* Zoom Percentage Dropdown */}
+        <div className="w-[32%] max-w-[34%] min-w-[28%] flex items-center gap-2 overflow-visible relative shrink-0">
+          {/* Zoom Percentage & Reset Capsule (Fixed width prevents any shift across 2, 3, or 4 digit zoom values) */}
+          <div className="w-[118px] h-8 flex items-center justify-between bg-[#121317] border border-white/[0.08] rounded-xl px-1.5 shadow-sm shrink-0 select-none">
+            {/* Zoom Percentage Dropdown (Fixed 68px width accommodates 4-digit '1000%' with zero layout shift) */}
             <ToolbarTooltip
               title="Zoom Level"
               description="Select canvas zoom scale (up to 1000%) or reset to fit"
@@ -934,10 +1027,11 @@ export const Workbench: React.FC<WorkbenchProps> = ({
                 <button
                   type="button"
                   onClick={() => setIsZoomDropdownOpen(!isZoomDropdownOpen)}
-                  className="flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium text-zinc-300 hover:text-white transition-colors cursor-pointer"
+                  className="w-[68px] h-6 flex items-center justify-between px-1 text-xs font-medium text-zinc-300 hover:text-white hover:bg-white/5 rounded-lg transition-colors cursor-pointer shrink-0 select-none"
+                  aria-label={`Zoom level: ${zoomLevel}%`}
                 >
-                  <span>{zoomLevel}%</span>
-                  <ChevronDown className="w-3 h-3 text-zinc-400" />
+                  <span className="w-[46px] text-left tabular-nums font-medium tracking-tight whitespace-nowrap">{zoomLevel}%</span>
+                  <ChevronDown className="w-3 h-3 text-zinc-400 shrink-0" />
                 </button>
 
                 {isZoomDropdownOpen && (
@@ -956,7 +1050,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
                             : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'
                         }`}
                       >
-                        <span>{opt}%</span>
+                        <span className="tabular-nums">{opt}%</span>
                         {opt === 100 && <span className="text-[10px] text-zinc-500">Fit</span>}
                       </button>
                     ))}
@@ -965,7 +1059,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
               </div>
             </ToolbarTooltip>
 
-            <div className="h-4 w-px bg-white/10 mx-0.5" />
+            <div className="h-3.5 w-px bg-white/10 shrink-0" />
 
             {/* Reset Zoom */}
             <ToolbarTooltip
@@ -976,14 +1070,15 @@ export const Workbench: React.FC<WorkbenchProps> = ({
               <button
                 type="button"
                 onClick={handleResetZoom}
-                className="p-1.5 text-zinc-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+                className="w-6 h-6 flex items-center justify-center text-zinc-400 hover:text-white hover:bg-white/5 rounded-lg transition-colors cursor-pointer shrink-0"
+                aria-label="Reset zoom scale to 100%"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
               </button>
             </ToolbarTooltip>
           </div>
 
-          {/* 1. Add Bubble Button (Its own separated button) */}
+          {/* 1. Add Bubble Button (Direct on black workspace, refined icon) */}
           <ToolbarTooltip
             title="Add Bubble"
             description="Draw a custom dialogue bounding box on the image canvas (Left-click & drag)"
@@ -992,17 +1087,18 @@ export const Workbench: React.FC<WorkbenchProps> = ({
             <button
               type="button"
               onClick={toggleDrawBox}
-              className={`p-2 rounded-xl border transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
-                isDrawBoxActive 
-                  ? 'text-sky-400 bg-sky-500/15 border-sky-500/40' 
-                  : 'bg-[#121317] border-white/[0.08] text-zinc-400 hover:text-white hover:bg-[#181920] hover:border-white/[0.16]'
-              }`}
+              className="w-8 h-8 flex items-center justify-center rounded-lg bg-transparent border-0 outline-none hover:bg-white/10 active:scale-95 focus-visible:ring-1 focus-visible:ring-sky-400 transition-colors cursor-pointer group select-none shrink-0"
+              aria-label="Add Bubble"
             >
-              <MessageSquarePlus className="w-3.5 h-3.5" />
+              <MessageSquarePlus
+                className={`w-4 h-4 transition-colors pointer-events-none stroke-[1.75] ${
+                  isDrawBoxActive ? 'text-sky-400' : 'text-zinc-400 group-hover:text-white'
+                }`}
+              />
             </button>
           </ToolbarTooltip>
 
-          {/* 2. Toggle Box View Button (Its own separated button with BoxSelect icon) */}
+          {/* 2. Toggle Box View Button (Direct on black workspace, refined icon) */}
           <ToolbarTooltip
             title="Toggle Box View"
             description="Show or hide dialogue bounding boxes without removing them"
@@ -1011,17 +1107,18 @@ export const Workbench: React.FC<WorkbenchProps> = ({
             <button
               type="button"
               onClick={() => setShowBoxes(!showBoxes)}
-              className={`p-2 rounded-xl border transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
-                showBoxes 
-                  ? 'text-sky-400 bg-sky-500/15 border-sky-500/40' 
-                  : 'bg-[#121317] border-white/[0.08] text-zinc-500 hover:text-zinc-300 hover:bg-[#181920] hover:border-white/[0.16]'
-              }`}
+              className="w-8 h-8 flex items-center justify-center rounded-lg bg-transparent border-0 outline-none hover:bg-white/10 active:scale-95 focus-visible:ring-1 focus-visible:ring-sky-400 transition-colors cursor-pointer group select-none shrink-0"
+              aria-label="Toggle Box View"
             >
-              {showBoxes ? <BoxSelect className="w-3.5 h-3.5" /> : <SquareDashed className="w-3.5 h-3.5 opacity-50" />}
+              <BoxSelect
+                className={`w-4 h-4 transition-colors pointer-events-none stroke-[1.75] ${
+                  showBoxes ? 'text-sky-400' : 'text-zinc-400 group-hover:text-white'
+                }`}
+              />
             </button>
           </ToolbarTooltip>
 
-          {/* 3. Click for Next Page Button (Its own separated button with BookOpen icon) */}
+          {/* 3. Click for Next Page Button (Direct on black workspace, refined icon) */}
           <ToolbarTooltip
             title="Click for Next Page"
             description="Click outer edges of canvas to flip pages"
@@ -1030,13 +1127,14 @@ export const Workbench: React.FC<WorkbenchProps> = ({
             <button
               type="button"
               onClick={() => setIsFlipPageActive(!isFlipPageActive)}
-              className={`p-2 rounded-xl border transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
-                isFlipPageActive 
-                  ? 'text-sky-400 bg-sky-500/15 border-sky-500/40' 
-                  : 'bg-[#121317] border-white/[0.08] text-zinc-400 hover:text-white hover:bg-[#181920] hover:border-white/[0.16]'
-              }`}
+              className="w-8 h-8 flex items-center justify-center rounded-lg bg-transparent border-0 outline-none hover:bg-white/10 active:scale-95 focus-visible:ring-1 focus-visible:ring-sky-400 transition-colors cursor-pointer group select-none shrink-0"
+              aria-label="Click for Next Page"
             >
-              <BookOpen className="w-3.5 h-3.5" />
+              <BookOpen
+                className={`w-4 h-4 transition-colors pointer-events-none stroke-[1.75] ${
+                  isFlipPageActive ? 'text-sky-400' : 'text-zinc-400 group-hover:text-white'
+                }`}
+              />
             </button>
           </ToolbarTooltip>
         </div>
@@ -1160,8 +1258,8 @@ export const Workbench: React.FC<WorkbenchProps> = ({
 
       {/* 3. Main Split View: Left Canvas Pane & Right Dialogue Feed */}
       <div className="flex-1 min-h-0 w-full flex flex-row overflow-hidden px-4 pb-4 gap-4">
-        {/* Left Column: Canvas Card Container */}
-        <div className="w-[32%] max-w-[34%] min-w-[28%] h-full flex flex-col min-h-0">
+        {/* Left Column: Canvas Card Container (Preview: 30-32% width preserved strictly) */}
+        <div className="w-[32%] max-w-[34%] min-w-[28%] shrink-0 h-full flex flex-col min-h-0">
           <CanvasPane
             imageUrl={imageUrl}
             isLoading={isLoadingBlob}
@@ -1213,9 +1311,9 @@ export const Workbench: React.FC<WorkbenchProps> = ({
                 deleteBubble(effectivePageId, bubbleId);
               }
             }}
-            onSplitBubble={(bubbleId, splitIndex) => {
+            onSplitBubble={(bubbleId, splitIndex, field) => {
               if (effectivePageId) {
-                splitBubble(effectivePageId, bubbleId, splitIndex);
+                splitBubble(effectivePageId, bubbleId, splitIndex, field);
               }
             }}
             onTranslateBubble={handleTranslateBubble}
@@ -1247,6 +1345,8 @@ export const Workbench: React.FC<WorkbenchProps> = ({
             }}
             onSetFeedFilter={setFeedFilter}
           />
+        </div>
+      </div>
         </div>
       </div>
 

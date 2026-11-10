@@ -59,7 +59,7 @@ export interface SettingDefinition<T = any> {
   label: string;
   description: string;
   unit?: string;
-  category: 'general' | 'translation' | 'scanning' | 'review' | 'memory' | 'workspace' | 'quality';
+  category: 'general' | 'translation' | 'scanning' | 'review' | 'memory' | 'workspace' | 'quality' | 'general_tweaks';
 }
 
 export interface SettingMetadata {
