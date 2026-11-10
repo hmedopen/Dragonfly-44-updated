@@ -99,12 +99,31 @@ export interface RegionOrder {
   rationale?: string;
 }
 
+export interface OcrLineSegment {
+  lineId: string;
+  geometry: RegionGeometry;
+  text: string;
+  recognitionConfidence: number;
+  detectionConfidence?: number;
+  isVertical?: boolean;
+}
+
+export interface BubbleRegion {
+  bubbleId: string;
+  geometry: RegionGeometry;
+  detectionConfidence: number;
+  tileOriginIds?: string[];
+  boundaryUncertain?: boolean;
+  flags?: ScanIssueFlag[];
+}
+
 export interface TextRegion {
   regionId: string;
   geometry: RegionGeometry;
   rawOCR: string;
   normalizedText?: string;
   ocrAlternatives?: string[];
+  lineSegments?: OcrLineSegment[];
   confidence: ScanConfidence;
   classification: TextClassification;
   associations: RegionAssociations;
@@ -125,6 +144,7 @@ export interface PageScanResult {
   readingConvention: ReadingConvention;
   status: 'complete' | 'partial' | 'failed';
   panels: PanelRegion[];
+  bubbleRegions?: BubbleRegion[];
   regions: TextRegion[];
   issues: ScanIssue[];
   transformLedger: TransformRecord;

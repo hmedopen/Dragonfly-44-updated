@@ -10,11 +10,27 @@ const trainingStudioBridge = isDev
     }
   : undefined;
 
+const localModelsBridge = {
+  getManifest: () => ipcRenderer.invoke('localModels:getManifest'),
+  getStatus: (modelId) => ipcRenderer.invoke('localModels:getStatus', modelId),
+  downloadModel: (modelId) => ipcRenderer.invoke('localModels:downloadModel', modelId),
+  cancelDownload: (modelId) => ipcRenderer.invoke('localModels:cancelDownload', modelId),
+  removeModel: (modelId) => ipcRenderer.invoke('localModels:removeModel', modelId),
+  readModelAssets: (modelId) => ipcRenderer.invoke('localModels:readModelAssets', modelId),
+  onDownloadProgress: (listener) => {
+    if (typeof listener !== 'function') return () => {};
+    const handler = (_event, payload) => listener(payload);
+    ipcRenderer.on('localModels:progress', handler);
+    return () => ipcRenderer.removeListener('localModels:progress', handler);
+  },
+};
+
 const appBridge = {
   platform: process.platform,
   version: '1.0.0',
   isDev,
   trainingStudio: trainingStudioBridge,
+  localModels: localModelsBridge,
 };
 
 contextBridge.exposeInMainWorld('folioScript', appBridge);

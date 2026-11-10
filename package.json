@@ -12,12 +12,16 @@
     "build": "tsc -b && vite build",
     "package:exe": "npm run build && electron-packager . \"Folio Script\" --platform=win32 --arch=x64 --icon=public/icon.ico --out=dist-app --overwrite --prune=true",
     "lint": "oxlint",
+    "test:local-ocr": "node --import ./src/test/localOcr/tsResolveHook.mjs --test src/test/localOcr/*.test.ts",
+    "smoke:local-ocr": "node --import ./src/test/localOcr/tsResolveHook.mjs src/test/localOcr/smokeTest.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@paddleocr/paddleocr-js": "0.4.2",
     "clsx": "^2.1.1",
     "framer-motion": "^14.9.0",
     "lucide-react": "^1.65.0",
+    "onnxruntime-web": "1.31.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "tailwind-merge": "^3.7.0",
