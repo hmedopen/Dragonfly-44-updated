@@ -1,0 +1,587 @@
+{
+  "corpusVersion": 1,
+  "license": "CC-BY-4.0",
+  "sourceProject": "Pepper&Carrot by David Revoy (https://www.peppercarrot.com/)",
+  "fixtures": [
+    {
+      "fixtureId": "peppercarrot_E03P01_en",
+      "language": "en",
+      "routeId": "en_ppocrv6_small",
+      "readingConvention": "ltr",
+      "localFileName": "E03P01_en.jpg",
+      "pngFileName": "E03P01_en.png",
+      "sourceUrl": "https://www.peppercarrot.com/0_sources/ep03_The-secret-ingredients/low-res/en_Pepper-and-Carrot_by-David-Revoy_E03P01.jpg",
+      "svgSourceUrl": "https://framagit.org/peppercarrot/webcomics/-/raw/master/ep03_The-secret-ingredients/lang/en/E03P01.svg",
+      "sha256": "9e75470c8065b95ef65f4b4431f21b4db9ffeebb0c1836280bd59c1b32bffbed",
+      "width": 1200,
+      "height": 1660,
+      "license": "CC-BY-4.0",
+      "attribution": "David Revoy (art/story/EN), Pepper&Carrot Episode 3 Page 1",
+      "regions": [
+        {
+          "id": "e03p01_en_r1",
+          "readingOrder": 1,
+          "box_2d": [26, 83, 57, 248],
+          "text": "Komona City; Market day",
+          "lines": ["Komona City;", "Market day"],
+          "hasBubble": false
+        },
+        {
+          "id": "e03p01_en_r2",
+          "readingOrder": 2,
+          "box_2d": [616, 107, 690, 278],
+          "text": "Good morning Sir, I would like eight pumpkinstars, please.",
+          "lines": ["Good morning Sir,", "I would like eight", "pumpkinstars,", "please."],
+          "hasBubble": true
+        },
+        {
+          "id": "e03p01_en_r3",
+          "readingOrder": 3,
+          "box_2d": [622, 447, 651, 596],
+          "text": "Here you are, that's 60Ko.*",
+          "lines": ["Here you are,", "that's 60Ko.*"],
+          "hasBubble": true,
+          "mixedScript": true
+        },
+        {
+          "id": "e03p01_en_r4",
+          "readingOrder": 4,
+          "box_2d": [707, 849, 720, 941],
+          "text": "...Oh dear.",
+          "lines": ["...Oh dear."],
+          "hasBubble": true
+        },
+        {
+          "id": "e03p01_en_r5",
+          "readingOrder": 5,
+          "box_2d": [971, 769, 981, 957],
+          "text": "* Ko = the Komona currency unit",
+          "lines": ["* Ko = the Komona currency unit"],
+          "hasBubble": false
+        }
+      ]
+    },
+    {
+      "fixtureId": "peppercarrot_E04P01_en",
+      "language": "en",
+      "routeId": "en_ppocrv6_small",
+      "readingConvention": "ltr",
+      "localFileName": "E04P01_en.jpg",
+      "pngFileName": "E04P01_en.png",
+      "sourceUrl": "https://www.peppercarrot.com/0_sources/ep04_Stroke-of-genius/low-res/en_Pepper-and-Carrot_by-David-Revoy_E04P01.jpg",
+      "svgSourceUrl": "https://framagit.org/peppercarrot/webcomics/-/raw/master/ep04_Stroke-of-genius/lang/en/E04P01.svg",
+      "sha256": "d033675b2117fc02e03ffc115c74481a8c4b55a3ef210e6a4b0c1f85f7581930",
+      "width": 1200,
+      "height": 1660,
+      "license": "CC-BY-4.0",
+      "attribution": "David Revoy (art/story/EN), Pepper&Carrot Episode 4 Page 1",
+      "regions": [
+        {
+          "id": "e04p01_en_r1",
+          "readingOrder": 1,
+          "box_2d": [21, 70, 50, 388],
+          "text": "The night before the Potion challenge 2:00 AM",
+          "lines": ["The night before the Potion challenge", "2:00 AM"],
+          "hasBubble": false,
+          "mixedScript": true
+        },
+        {
+          "id": "e04p01_en_r2",
+          "readingOrder": 2,
+          "box_2d": [626, 201, 693, 412],
+          "text": "Finally... With this potion, No one, not even Saffron, can match my skill!",
+          "lines": ["Finally...", "With this potion, No one,", "not even Saffron, can", "match my skill!"],
+          "hasBubble": true
+        },
+        {
+          "id": "e04p01_en_r3",
+          "readingOrder": 3,
+          "box_2d": [714, 291, 772, 388],
+          "text": "I do need to test it on someone ...",
+          "lines": ["I do need", "to test it", "on someone", "..."],
+          "hasBubble": true
+        },
+        {
+          "id": "e04p01_en_r4",
+          "readingOrder": 4,
+          "box_2d": [625, 754, 675, 959],
+          "text": "CAAAAAAAA~ ~AAARROT!!!",
+          "lines": ["CAAAAAAAA~", "~AAARROT!!!"],
+          "hasBubble": true
+        }
+      ]
+    },
+    {
+      "fixtureId": "peppercarrot_E03P01_kr",
+      "language": "ko",
+      "routeId": "ko_ppocrv5_mobile",
+      "readingConvention": "ltr",
+      "localFileName": "E03P01_kr.jpg",
+      "pngFileName": "E03P01_kr.png",
+      "sourceUrl": "https://www.peppercarrot.com/0_sources/ep03_The-secret-ingredients/low-res/kr_Pepper-and-Carrot_by-David-Revoy_E03P01.jpg",
+      "svgSourceUrl": "https://framagit.org/peppercarrot/webcomics/-/raw/master/ep03_The-secret-ingredients/lang/kr/E03P01.svg",
+      "sha256": "7b179f647b173da4dcae8eefecf396cf1fecde412bed3c0abafcc243d363809a",
+      "width": 1200,
+      "height": 1660,
+      "license": "CC-BY-4.0",
+      "attribution": "David Revoy (art), Pepper&Carrot KR translators, Episode 3 Page 1",
+      "regions": [
+        {
+          "id": "e03p01_kr_r1",
+          "readingOrder": 1,
+          "box_2d": [20, 95, 58, 250],
+          "text": "코모나 시 장날",
+          "lines": ["코모나 시", "장날"],
+          "hasBubble": false
+        },
+        {
+          "id": "e03p01_kr_r2",
+          "readingOrder": 2,
+          "box_2d": [616, 128, 675, 227],
+          "text": "안녕하세요, 호박별 8개 좀 주실래요?",
+          "lines": ["안녕하세요,", "호박별 8개", "좀 주실래요?"],
+          "hasBubble": true,
+          "mixedScript": true
+        },
+        {
+          "id": "e03p01_kr_r3",
+          "readingOrder": 3,
+          "box_2d": [614, 479, 650, 565],
+          "text": "여기 있어요, 60콤*입니다.",
+          "lines": ["여기 있어요,", "60콤*입니다."],
+          "hasBubble": true,
+          "mixedScript": true
+        },
+        {
+          "id": "e03p01_kr_r4",
+          "readingOrder": 4,
+          "box_2d": [699, 870, 720, 924],
+          "text": "...이런",
+          "lines": ["...이런"],
+          "hasBubble": true
+        },
+        {
+          "id": "e03p01_kr_r5",
+          "readingOrder": 5,
+          "box_2d": [969, 371, 986, 528],
+          "text": "* 콤 = 코모나의 화폐 단위",
+          "lines": ["* 콤 = 코모나의 화폐 단위"],
+          "hasBubble": false
+        }
+      ]
+    },
+    {
+      "fixtureId": "peppercarrot_E04P01_kr",
+      "language": "ko",
+      "routeId": "ko_ppocrv5_mobile",
+      "readingConvention": "ltr",
+      "localFileName": "E04P01_kr.jpg",
+      "pngFileName": "E04P01_kr.png",
+      "sourceUrl": "https://www.peppercarrot.com/0_sources/ep04_Stroke-of-genius/low-res/kr_Pepper-and-Carrot_by-David-Revoy_E04P01.jpg",
+      "svgSourceUrl": "https://framagit.org/peppercarrot/webcomics/-/raw/master/ep04_Stroke-of-genius/lang/kr/E04P01.svg",
+      "sha256": "ab493bbaace01e961ff59f16e0868f8866b08554c2921c1e2a42ca6ec375f8f8",
+      "width": 1200,
+      "height": 1660,
+      "license": "CC-BY-4.0",
+      "attribution": "David Revoy (art), Pepper&Carrot KR translators, Episode 4 Page 1",
+      "regions": [
+        {
+          "id": "e04p01_kr_r1",
+          "readingOrder": 1,
+          "box_2d": [17, 65, 66, 248],
+          "text": "포션 대회 전날 밤 오전 2월",
+          "lines": ["포션 대회 전날 밤", "오전 2월"],
+          "hasBubble": false,
+          "mixedScript": true
+        },
+        {
+          "id": "e04p01_kr_r2",
+          "readingOrder": 2,
+          "box_2d": [632, 203, 689, 413],
+          "text": "드디어 ... 이 포션이면, 사프란도, 아니 아무도 나를 이길 수 없어!",
+          "lines": ["드디어 ...", "이 포션이면, 사프란도, 아니", "아무도 나를 이길 수 없어!"],
+          "hasBubble": true
+        },
+        {
+          "id": "e04p01_kr_r3",
+          "readingOrder": 3,
+          "box_2d": [713, 288, 765, 398],
+          "text": "이제 누구한테 실험을 해봐야 하는데 ...",
+          "lines": ["이제 누구한테", "실험을 해봐야", "하는데 ..."],
+          "hasBubble": true
+        },
+        {
+          "id": "e04p01_kr_r4",
+          "readingOrder": 4,
+          "box_2d": [616, 753, 661, 950],
+          "text": "다아아앙~ ~그으으은아아아아!!!",
+          "lines": ["다아아앙~", "~그으으은아아아아!!!"],
+          "hasBubble": true
+        }
+      ]
+    },
+    {
+      "fixtureId": "peppercarrot_E01XXL_kr",
+      "language": "ko",
+      "routeId": "ko_ppocrv5_mobile",
+      "readingConvention": "webtoon_v",
+      "localFileName": "E01XXL_kr.jpg",
+      "pngFileName": "E01XXL_kr.png",
+      "sourceUrl": "https://www.peppercarrot.com/0_sources/ep01_Potion-of-Flight/low-res/single-page/kr_Pepper-and-Carrot_by-David-Revoy_E01XXL.jpg",
+      "svgSourceUrl": "https://framagit.org/peppercarrot/webcomics/-/tree/master/ep01_Potion-of-Flight/lang/kr",
+      "sha256": "80fe4da3478b549bc301575dd54766e46059eead9d30500979680d1100913c3d",
+      "width": 1200,
+      "height": 5291,
+      "license": "CC-BY-4.0",
+      "attribution": "David Revoy (art), Pepper&Carrot KR translators, Episode 1 Vertical Webtoon Strip",
+      "isLongWebtoon": true,
+      "regions": [
+        {
+          "id": "e01xxl_kr_r1",
+          "readingOrder": 1,
+          "box_2d": [8, 180, 41, 820],
+          "text": "후추와 당근",
+          "lines": ["후추와 당근"],
+          "hasBubble": false,
+          "notes": "Stylized brush header logo"
+        },
+        {
+          "id": "e01xxl_kr_r2",
+          "readingOrder": 2,
+          "box_2d": [40, 380, 51, 618],
+          "text": "제1 화: 비행의 물약",
+          "lines": ["제1 화: 비행의 물약"],
+          "hasBubble": false,
+          "mixedScript": true
+        },
+        {
+          "id": "e01xxl_kr_r3",
+          "readingOrder": 3,
+          "box_2d": [67, 466, 79, 555],
+          "text": "... 그리고 마지막으로!",
+          "lines": ["... 그리고", "마지막으로!"],
+          "hasBubble": true
+        },
+        {
+          "id": "e01xxl_kr_r4",
+          "readingOrder": 4,
+          "box_2d": [175, 488, 189, 580],
+          "text": "음... 아무래도 좀 약한가 보네.",
+          "lines": ["음...", "아무래도 좀", "약한가 보네."],
+          "hasBubble": true
+        },
+        {
+          "id": "e01xxl_kr_r5",
+          "readingOrder": 5,
+          "box_2d": [387, 712, 403, 786],
+          "text": "하... 완벽해",
+          "lines": ["하...", "완벽해"],
+          "hasBubble": true
+        },
+        {
+          "id": "e01xxl_kr_r6",
+          "readingOrder": 6,
+          "box_2d": [480, 511, 497, 622],
+          "text": "안 돼! 꿈도 꾸지 마!",
+          "lines": ["안 돼!", "꿈도 꾸지 마!"],
+          "hasBubble": true
+        },
+        {
+          "id": "e01xxl_kr_r7",
+          "readingOrder": 7,
+          "box_2d": [803, 305, 814, 412],
+          "text": "이제 됐어?",
+          "lines": ["이제", "됐어?"],
+          "hasBubble": true
+        },
+        {
+          "id": "e01xxl_kr_r8",
+          "readingOrder": 8,
+          "box_2d": [928, 658, 938, 788],
+          "text": "WWW.PEPPERCARROT.COM 2014년 5월",
+          "lines": ["WWW.PEPPERCARROT.COM", "2014년 5월"],
+          "hasBubble": false,
+          "mixedScript": true
+        }
+      ]
+    },
+    {
+      "fixtureId": "peppercarrot_E03P01_ja",
+      "language": "ja",
+      "routeId": "ja_zh_ppocrv6_manga",
+      "readingConvention": "ltr",
+      "localFileName": "E03P01_ja.jpg",
+      "pngFileName": "E03P01_ja.png",
+      "sourceUrl": "https://www.peppercarrot.com/0_sources/ep03_The-secret-ingredients/low-res/ja_Pepper-and-Carrot_by-David-Revoy_E03P01.jpg",
+      "svgSourceUrl": "https://framagit.org/peppercarrot/webcomics/-/raw/master/ep03_The-secret-ingredients/lang/ja/E03P01.svg",
+      "sha256": "f538aeb90f39c787b16fe08d2278dfd39fdfeffa4683bfe5c6e90eed88e015ef",
+      "width": 1200,
+      "height": 1660,
+      "license": "CC-BY-4.0",
+      "attribution": "David Revoy (art), Pepper&Carrot JA translators, Episode 3 Page 1",
+      "regions": [
+        {
+          "id": "e03p01_ja_r1",
+          "readingOrder": 1,
+          "box_2d": [24, 89, 58, 247],
+          "text": "コモナの街市場の日",
+          "lines": ["コモナの街", "市場の日"],
+          "hasBubble": false
+        },
+        {
+          "id": "e03p01_ja_r2",
+          "readingOrder": 2,
+          "box_2d": [614, 107, 681, 275],
+          "text": "店主さん、おはようございます星かぼちゃを8個お願いできますか？",
+          "lines": ["店主さん、", "おはようございます", "星かぼちゃを8個", "お願いできますか？"],
+          "hasBubble": true,
+          "mixedScript": true
+        },
+        {
+          "id": "e03p01_ja_r3",
+          "readingOrder": 3,
+          "box_2d": [620, 447, 653, 597],
+          "text": "はいどうぞ、60Ko*になります",
+          "lines": ["はいどうぞ、", "60Ko*になります"],
+          "hasBubble": true,
+          "mixedScript": true
+        },
+        {
+          "id": "e03p01_ja_r4",
+          "readingOrder": 4,
+          "box_2d": [703, 845, 726, 948],
+          "text": "...しまった",
+          "lines": ["...しまった"],
+          "hasBubble": true
+        },
+        {
+          "id": "e03p01_ja_r5",
+          "readingOrder": 5,
+          "box_2d": [971, 369, 982, 527],
+          "text": "* Ko = コモナでの貨幣単位",
+          "lines": ["* Ko = コモナでの貨幣単位"],
+          "hasBubble": false,
+          "mixedScript": true
+        }
+      ]
+    },
+    {
+      "fixtureId": "peppercarrot_E04P01_ja",
+      "language": "ja",
+      "routeId": "ja_zh_ppocrv6_manga",
+      "readingConvention": "ltr",
+      "localFileName": "E04P01_ja.jpg",
+      "pngFileName": "E04P01_ja.png",
+      "sourceUrl": "https://www.peppercarrot.com/0_sources/ep04_Stroke-of-genius/low-res/ja_Pepper-and-Carrot_by-David-Revoy_E04P01.jpg",
+      "svgSourceUrl": "https://framagit.org/peppercarrot/webcomics/-/raw/master/ep04_Stroke-of-genius/lang/ja/E04P01.svg",
+      "sha256": "2ba94c233d18fc9aaa738da29f725328082174fdcda59d982df39a849f4aacdb",
+      "width": 1200,
+      "height": 1660,
+      "license": "CC-BY-4.0",
+      "attribution": "David Revoy (art), Pepper&Carrot JA translators, Episode 4 Page 1",
+      "regions": [
+        {
+          "id": "e04p01_ja_r1",
+          "readingOrder": 1,
+          "box_2d": [20, 70, 52, 320],
+          "text": "魔法薬コンテストの前日の夜2:00 AM",
+          "lines": ["魔法薬コンテストの前日の夜", "2:00 AM"],
+          "hasBubble": false,
+          "mixedScript": true
+        },
+        {
+          "id": "e04p01_ja_r2",
+          "readingOrder": 2,
+          "box_2d": [624, 206, 691, 412],
+          "text": "ついに出来た ...この魔法薬なら、誰にもサフランが相手でも負けないはず !",
+          "lines": ["ついに出来た ...", "この魔法薬なら、誰にも", "サフランが相手でも", "負けないはず !"],
+          "hasBubble": true
+        },
+        {
+          "id": "e04p01_ja_r3",
+          "readingOrder": 3,
+          "box_2d": [713, 292, 770, 386],
+          "text": "誰かでテストは必要だけど...",
+          "lines": ["誰かで", "テストは", "必要だけど", "..."],
+          "hasBubble": true
+        },
+        {
+          "id": "e04p01_ja_r4",
+          "readingOrder": 4,
+          "box_2d": [620, 775, 669, 937],
+          "text": "キャァァァァロット !!!",
+          "lines": ["キャァァァァ", "ロット !!!"],
+          "hasBubble": true
+        }
+      ]
+    },
+    {
+      "fixtureId": "peppercarrot_E01P01_ja",
+      "language": "ja",
+      "routeId": "ja_zh_ppocrv6_manga",
+      "readingConvention": "ltr",
+      "localFileName": "E01P01_ja.jpg",
+      "pngFileName": "E01P01_ja.png",
+      "sourceUrl": "https://www.peppercarrot.com/0_sources/ep01_Potion-of-Flight/low-res/ja_Pepper-and-Carrot_by-David-Revoy_E01P01.jpg",
+      "svgSourceUrl": "https://framagit.org/peppercarrot/webcomics/-/raw/master/ep01_Potion-of-Flight/lang/ja/E01P01.svg",
+      "sha256": "3bef9922e09cea66ab12271da0070025768ae9bc5d286f41ced617468131267e",
+      "width": 1200,
+      "height": 1660,
+      "license": "CC-BY-4.0",
+      "attribution": "David Revoy (art), Pepper&Carrot JA translators, Episode 1 Page 1",
+      "regions": [
+        {
+          "id": "e01p01_ja_r1",
+          "readingOrder": 1,
+          "box_2d": [42, 468, 76, 555],
+          "text": "...これで出来上がり",
+          "lines": ["...これで", "出来上がり"],
+          "hasBubble": true
+        },
+        {
+          "id": "e01p01_ja_r2",
+          "readingOrder": 2,
+          "box_2d": [145, 430, 180, 478],
+          "text": "ぱらぱら",
+          "lines": ["ぱら", "ぱら"],
+          "hasBubble": false,
+          "notes": "Handwritten SFX over cauldron"
+        },
+        {
+          "id": "e01p01_ja_r3",
+          "readingOrder": 3,
+          "box_2d": [378, 504, 428, 604],
+          "text": "...うーん足りなかったかも",
+          "lines": ["...うーん", "足りなかった", "かも"],
+          "hasBubble": true
+        },
+        {
+          "id": "e01p01_ja_r4",
+          "readingOrder": 4,
+          "box_2d": [847, 369, 869, 422],
+          "text": "ざぶん",
+          "lines": ["ざぶん"],
+          "hasBubble": false,
+          "notes": "Painted SFX"
+        },
+        {
+          "id": "e01p01_ja_r5",
+          "readingOrder": 5,
+          "box_2d": [845, 560, 864, 619],
+          "text": "どばどば",
+          "lines": ["どばどば"],
+          "hasBubble": false,
+          "notes": "Painted SFX"
+        }
+      ]
+    },
+    {
+      "fixtureId": "peppercarrot_E03P01_cn",
+      "language": "zh",
+      "routeId": "ja_zh_ppocrv6_manga",
+      "readingConvention": "ltr",
+      "localFileName": "E03P01_cn.jpg",
+      "pngFileName": "E03P01_cn.png",
+      "sourceUrl": "https://www.peppercarrot.com/0_sources/ep03_The-secret-ingredients/low-res/cn_Pepper-and-Carrot_by-David-Revoy_E03P01.jpg",
+      "svgSourceUrl": "https://framagit.org/peppercarrot/webcomics/-/raw/master/ep03_The-secret-ingredients/lang/cn/E03P01.svg",
+      "sha256": "9754fc0c9c5f5350b6213a46ea50dc50cfb02f7e424dea5f3a4f51b2da12cf54",
+      "width": 1200,
+      "height": 1660,
+      "license": "CC-BY-4.0",
+      "attribution": "David Revoy (art), Pepper&Carrot ZH translators, Episode 3 Page 1",
+      "regions": [
+        {
+          "id": "e03p01_cn_r1",
+          "readingOrder": 1,
+          "box_2d": [25, 79, 56, 256],
+          "text": "科魔那市中心集市上",
+          "lines": ["科魔那市中心", "集市上"],
+          "hasBubble": false
+        },
+        {
+          "id": "e03p01_cn_r2",
+          "readingOrder": 2,
+          "box_2d": [628, 135, 677, 248],
+          "text": "老板您好，请帮我拿八个星葫芦！",
+          "lines": ["老板您好，", "请帮我拿八个", "星葫芦！"],
+          "hasBubble": true
+        },
+        {
+          "id": "e03p01_cn_r3",
+          "readingOrder": 3,
+          "box_2d": [617, 488, 651, 568],
+          "text": "好嘞，一共60珂*。",
+          "lines": ["好嘞，", "一共60珂*。"],
+          "hasBubble": true,
+          "mixedScript": true
+        },
+        {
+          "id": "e03p01_cn_r4",
+          "readingOrder": 4,
+          "box_2d": [704, 848, 722, 934],
+          "text": "糟糕……",
+          "lines": ["糟糕……"],
+          "hasBubble": true
+        },
+        {
+          "id": "e03p01_cn_r5",
+          "readingOrder": 5,
+          "box_2d": [972, 371, 981, 521],
+          "text": "*珂 = 科魔那城市货币单位",
+          "lines": ["*珂 = 科魔那城市货币单位"],
+          "hasBubble": false
+        }
+      ]
+    },
+    {
+      "fixtureId": "peppercarrot_E04P01_cn",
+      "language": "zh",
+      "routeId": "ja_zh_ppocrv6_manga",
+      "readingConvention": "ltr",
+      "localFileName": "E04P01_cn.jpg",
+      "pngFileName": "E04P01_cn.png",
+      "sourceUrl": "https://www.peppercarrot.com/0_sources/ep04_Stroke-of-genius/low-res/cn_Pepper-and-Carrot_by-David-Revoy_E04P01.jpg",
+      "svgSourceUrl": "https://framagit.org/peppercarrot/webcomics/-/raw/master/ep04_Stroke-of-genius/lang/cn/E04P01.svg",
+      "sha256": "43c23244b160f0e4cfdb21c502a61dc4dc05c2e037c02c48212b3c5121817cc1",
+      "width": 1200,
+      "height": 1660,
+      "license": "CC-BY-4.0",
+      "attribution": "David Revoy (art), Pepper&Carrot ZH translators, Episode 4 Page 1",
+      "regions": [
+        {
+          "id": "e04p01_cn_r1",
+          "readingOrder": 1,
+          "box_2d": [21, 72, 54, 223],
+          "text": "魔药大赛前夜凌晨2点……",
+          "lines": ["魔药大赛前夜", "凌晨2点……"],
+          "hasBubble": false,
+          "mixedScript": true
+        },
+        {
+          "id": "e04p01_cn_r2",
+          "readingOrder": 2,
+          "box_2d": [633, 223, 701, 393],
+          "text": "总算做完了……有了这瓶魔药，就算是藏红花也无法与我一比高下！",
+          "lines": ["总算做完了……", "有了这瓶魔药，", "就算是藏红花也无法", "与我一比高下！"],
+          "hasBubble": true
+        },
+        {
+          "id": "e04p01_cn_r3",
+          "readingOrder": 3,
+          "box_2d": [737, 299, 786, 373],
+          "text": "接下来只要小试一下",
+          "lines": ["接下来", "只要", "小试一下"],
+          "hasBubble": true
+        },
+        {
+          "id": "e04p01_cn_r4",
+          "readingOrder": 4,
+          "box_2d": [601, 773, 625, 957],
+          "text": "萝卜头～～～！",
+          "lines": ["萝卜头～～～！"],
+          "hasBubble": true
+        }
+      ]
+    }
+  ]
+}

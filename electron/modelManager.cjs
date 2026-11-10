@@ -4,6 +4,17 @@ const crypto = require('crypto');
 
 const DEFAULT_MANIFEST_PATH = path.join(__dirname, '../src/lib/localOcr/modelManifest.json');
 
+const MODEL_ID_RE = /^[a-zA-Z0-9._-]+$/;
+const ALLOWED_REDISTRIBUTION_STATUSES = new Set([
+  'dev_only_unverified_provenance',
+  'dev_only_noncommercial_dataset',
+  'approved_for_redistribution',
+]);
+
+function isValidModelId(modelId) {
+  return typeof modelId === 'string' && MODEL_ID_RE.test(modelId) && !modelId.includes('..');
+}
+
 function loadDefaultManifest() {
   const raw = fs.readFileSync(DEFAULT_MANIFEST_PATH, 'utf8');
   return JSON.parse(raw);
@@ -17,27 +28,125 @@ function getRevisionKey(entry) {
   return revs.map((r) => String(r).slice(0, 12)).join('_');
 }
 
+function evaluateModelPolicy(entry, options = {}) {
+  const isProduction = options.isProduction !== undefined ? Boolean(options.isProduction) : true;
+  const status = entry && entry.redistributionStatus;
+  const validStatus = ALLOWED_REDISTRIBUTION_STATUSES.has(status);
+
+  // Keep all five distribution/provenance statuses explicitly distinct and fail-closed
+  const provenanceUnresolved =
+    !validStatus ||
+    status === 'dev_only_unverified_provenance' ||
+    entry.provenanceUnresolved === true;
+  const developmentOnly =
+    !validStatus ||
+    status !== 'approved_for_redistribution' ||
+    entry.developmentOnly === true;
+  const redistributionApproved =
+    validStatus &&
+    status === 'approved_for_redistribution' &&
+    entry.redistributionApproved !== false &&
+    !developmentOnly;
+  const commercialDistributionCleared =
+    redistributionApproved &&
+    !provenanceUnresolved &&
+    entry.commercialDistributionCleared === true;
+
+  const productionEligible =
+    validStatus &&
+    !developmentOnly &&
+    redistributionApproved &&
+    !provenanceUnresolved &&
+    entry.downloadPermitted !== false;
+
+  const downloadPermitted = isProduction
+    ? productionEligible
+    : validStatus && entry.downloadPermitted !== false;
+  const activationPermitted = isProduction ? productionEligible : validStatus;
+
+  let rejectionReason = null;
+  if (!validStatus) {
+    rejectionReason = `Model "${entry?.modelId || 'unknown'}" has invalid or missing redistributionStatus "${String(status)}".`;
+  } else if (isProduction && !productionEligible) {
+    rejectionReason = `Model "${entry.modelId}" is not eligible in production builds (redistributionStatus="${status}", developmentOnly=${developmentOnly}, provenanceUnresolved=${provenanceUnresolved}).`;
+  }
+
+  return {
+    developmentOnly,
+    downloadPermitted,
+    activationPermitted,
+    redistributionApproved,
+    commercialDistributionCleared,
+    provenanceUnresolved,
+    rejectionReason,
+  };
+}
+
 function validateManifestEntry(entry) {
-  if (!entry || typeof entry.modelId !== 'string' || !entry.modelId) {
-    throw new Error('Manifest entry is missing modelId.');
+  if (!entry || !isValidModelId(entry.modelId)) {
+    throw new Error('Manifest entry is missing a valid modelId.');
+  }
+  if (typeof entry.declaredLicense !== 'string' || !entry.declaredLicense.trim()) {
+    throw new Error(`Model "${entry.modelId}" is missing declaredLicense.`);
+  }
+  if (typeof entry.modelCardUrl !== 'string' || !entry.modelCardUrl.startsWith('https://')) {
+    throw new Error(`Model "${entry.modelId}" must define an HTTPS modelCardUrl.`);
+  }
+  if (!ALLOWED_REDISTRIBUTION_STATUSES.has(entry.redistributionStatus)) {
+    throw new Error(
+      `Model "${entry.modelId}" has invalid redistributionStatus "${String(entry.redistributionStatus)}".`
+    );
   }
   if (!Array.isArray(entry.files) || entry.files.length === 0) {
     throw new Error(`Model "${entry.modelId}" defines no files.`);
   }
-  for (const [repo, rev] of Object.entries(entry.pinnedRevisions || {})) {
+  const pinnedEntries = Object.entries(entry.pinnedRevisions || {});
+  if (pinnedEntries.length === 0) {
+    throw new Error(`Model "${entry.modelId}" has no pinnedRevisions.`);
+  }
+  for (const [repo, rev] of pinnedEntries) {
     if (!/^[0-9a-f]{40}$/i.test(String(rev))) {
       throw new Error(`Model "${entry.modelId}" revision for "${repo}" is not a pinned 40-char commit SHA.`);
     }
   }
   for (const file of entry.files) {
+    if (
+      typeof file.relativePath !== 'string' ||
+      !file.relativePath ||
+      file.relativePath.includes('..') ||
+      file.relativePath.includes('\0') ||
+      path.isAbsolute(file.relativePath) ||
+      file.relativePath.startsWith('/') ||
+      file.relativePath.startsWith('\\')
+    ) {
+      throw new Error(`Model "${entry.modelId}" defines an unsafe relativePath "${String(file.relativePath)}".`);
+    }
+    const pinnedRepoRev = entry.pinnedRevisions && entry.pinnedRevisions[file.upstreamRepo];
+    if (!pinnedRepoRev || pinnedRepoRev !== file.revision) {
+      throw new Error(
+        `File "${file.relativePath}" in "${entry.modelId}" revision does not match pinnedRevisions["${String(file.upstreamRepo)}"].`
+      );
+    }
     if (!/^[0-9a-f]{40}$/i.test(String(file.revision || ''))) {
       throw new Error(`File "${file.relativePath}" in "${entry.modelId}" is missing a pinned 40-char commit SHA.`);
+    }
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(String(file.url || ''));
+    } catch {
+      throw new Error(`File "${file.relativePath}" in "${entry.modelId}" has an invalid URL.`);
+    }
+    if (parsedUrl.protocol !== 'https:' || parsedUrl.username || parsedUrl.password) {
+      throw new Error(`File "${file.relativePath}" in "${entry.modelId}" must use clean HTTPS.`);
     }
     if (/\/(main|master|latest)\//i.test(String(file.url || ''))) {
       throw new Error(`File "${file.relativePath}" in "${entry.modelId}" uses a moving branch or latest URL.`);
     }
-    if (!String(file.url || '').startsWith('https://')) {
-      throw new Error(`File "${file.relativePath}" in "${entry.modelId}" must use HTTPS.`);
+    if (!String(file.url || '').includes(String(file.revision))) {
+      throw new Error(`File "${file.relativePath}" in "${entry.modelId}" URL does not reference its pinned revision.`);
+    }
+    if (!Number.isInteger(file.sizeBytes) || file.sizeBytes <= 0) {
+      throw new Error(`File "${file.relativePath}" in "${entry.modelId}" has invalid sizeBytes.`);
     }
     if (!/^[0-9a-f]{64}$/i.test(String(file.sha256 || ''))) {
       throw new Error(`File "${file.relativePath}" in "${entry.modelId}" is missing a valid SHA-256 checksum.`);
@@ -68,22 +177,31 @@ function createModelManager(options) {
     userDataDir,
     manifest = loadDefaultManifest(),
     fetchImpl = globalThis.fetch,
+    isProduction = true,
   } = options || {};
 
   if (!userDataDir || typeof userDataDir !== 'string') {
     throw new Error('createModelManager requires a valid userDataDir.');
   }
 
+  const productionMode = Boolean(isProduction);
   const modelsRoot = path.join(userDataDir, 'folio-models');
   const activeDownloads = new Map(); // modelId -> { controller: AbortController, promise: Promise }
 
   function resolveEntry(modelId) {
+    if (!isValidModelId(modelId)) {
+      throw new Error(`Invalid model ID: "${String(modelId)}".`);
+    }
     const entry = (manifest.models || []).find((m) => m.modelId === modelId);
     if (!entry) {
       throw new Error(`Unknown model ID: "${modelId}".`);
     }
     validateManifestEntry(entry);
     return entry;
+  }
+
+  function getPolicyForEntry(entry) {
+    return evaluateModelPolicy(entry, { isProduction: productionMode });
   }
 
   function getModelDir(entry) {
@@ -117,8 +235,23 @@ function createModelManager(options) {
     }
 
     const entry = resolveEntry(modelId);
+    const policy = getPolicyForEntry(entry);
     const modelDir = getModelDir(entry);
     const expectedBytes = entry.files.reduce((sum, f) => sum + Number(f.sizeBytes || 0), 0);
+
+    if (!policy.activationPermitted) {
+      return {
+        modelId,
+        state: 'unsupported',
+        installedRevision: null,
+        verifiedBytes: 0,
+        expectedBytes,
+        missingFiles: [],
+        corruptFiles: [],
+        error: policy.rejectionReason,
+        policy,
+      };
+    }
 
     if (activeDownloads.has(modelId)) {
       return {
@@ -129,6 +262,7 @@ function createModelManager(options) {
         expectedBytes,
         missingFiles: [],
         corruptFiles: [],
+        policy,
       };
     }
 
@@ -180,6 +314,7 @@ function createModelManager(options) {
       expectedBytes,
       missingFiles,
       corruptFiles,
+      policy,
     };
   }
 
@@ -283,6 +418,12 @@ function createModelManager(options) {
 
   async function downloadModel(modelId, onProgress) {
     const entry = resolveEntry(modelId);
+    const policy = getPolicyForEntry(entry);
+    if (!policy.downloadPermitted) {
+      throw new Error(
+        policy.rejectionReason || `Download of model "${modelId}" is prohibited by distribution policy.`
+      );
+    }
     if (activeDownloads.has(modelId)) {
       return activeDownloads.get(modelId).promise;
     }
@@ -418,6 +559,7 @@ function createModelManager(options) {
   }
 
   function cancelDownload(modelId) {
+    resolveEntry(modelId);
     const active = activeDownloads.get(modelId);
     if (!active) return false;
     active.controller.abort();
@@ -441,6 +583,12 @@ function createModelManager(options) {
 
   async function readModelAssets(modelId) {
     const entry = resolveEntry(modelId);
+    const policy = getPolicyForEntry(entry);
+    if (!policy.activationPermitted) {
+      throw new Error(
+        policy.rejectionReason || `Activation of model "${modelId}" is prohibited in production builds.`
+      );
+    }
     const status = await getModelStatus(modelId);
     if (status.state !== 'installed') {
       throw new Error(
@@ -453,7 +601,8 @@ function createModelManager(options) {
     for (const fileSpec of entry.files) {
       const targetPath = resolveSafeFilePath(modelDir, fileSpec.relativePath);
       const buf = await fs.promises.readFile(targetPath);
-      files[fileSpec.relativePath] = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+      // Copy out of Node Buffer slab pool so small files never share a backing ArrayBuffer
+      files[fileSpec.relativePath] = new Uint8Array(buf);
     }
 
     return {
@@ -464,6 +613,7 @@ function createModelManager(options) {
   }
 
   return {
+    isProduction: productionMode,
     modelsRoot,
     getManifest,
     getModelStatus,
@@ -476,6 +626,8 @@ function createModelManager(options) {
 
 module.exports = {
   createModelManager,
+  evaluateModelPolicy,
+  isValidModelId,
   loadDefaultManifest,
   validateManifestEntry,
 };

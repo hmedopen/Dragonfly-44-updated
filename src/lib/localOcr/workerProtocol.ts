@@ -7,6 +7,11 @@ import type {
   OcrRouteId,
 } from '../../types/localOcr.ts';
 
+export interface WorkerLoadedModelKeys {
+  detectorKey: string | null;
+  ocrKey: string | null;
+}
+
 export type WorkerOcrRequest =
   | {
       type: 'run_page_ocr';
@@ -16,9 +21,12 @@ export type WorkerOcrRequest =
       mimeType: string;
       languageHint: OcrLanguageHint;
       resolvedRoute: OcrRouteId;
+      effectiveLanguage?: 'en' | 'ko' | 'ja' | 'zh';
       readingConvention: ReadingConvention;
-      detectorAssets: ModelAssetPayload;
-      ocrAssets: ModelAssetPayload;
+      detectorModelKey?: string;
+      ocrModelKey?: string;
+      detectorAssets?: ModelAssetPayload;
+      ocrAssets?: ModelAssetPayload;
       wasmPaths: string;
       diagnostics?: LocalOcrDiagnosticOptions;
     }
@@ -37,15 +45,18 @@ export type WorkerOcrResponse =
       type: 'job_result';
       jobId: string;
       result: SerializableLocalOcrResult;
+      loadedModelKeys?: WorkerLoadedModelKeys;
     }
   | {
       type: 'job_cancelled';
       jobId: string;
+      loadedModelKeys?: WorkerLoadedModelKeys;
     }
   | {
       type: 'job_error';
       jobId: string;
       error: string;
+      loadedModelKeys?: WorkerLoadedModelKeys;
     }
   | {
       type: 'disposed';

@@ -59,6 +59,16 @@ export type ModelInstallState =
   | 'corrupt'
   | 'unsupported';
 
+export interface ModelDistributionPolicy {
+  developmentOnly: boolean;
+  downloadPermitted: boolean;
+  activationPermitted: boolean;
+  redistributionApproved: boolean;
+  commercialDistributionCleared: boolean;
+  provenanceUnresolved: boolean;
+  rejectionReason: string | null;
+}
+
 export interface ModelStatusInfo {
   modelId: string;
   state: ModelInstallState;
@@ -68,6 +78,7 @@ export interface ModelStatusInfo {
   missingFiles: string[];
   corruptFiles: string[];
   error?: string;
+  policy?: ModelDistributionPolicy;
 }
 
 export interface ModelDownloadProgress {
@@ -154,9 +165,18 @@ export interface RawOcrLineDetection {
   lineId: string;
   candidateId: string;
   text: string;
-  /** Raw recognizer output score (average CTC token score), not calibrated probability */
+  /**
+   * Uncalibrated aggregated line confidence (mean of selected CTC timestep probabilities in [0, 1]).
+   * Not a statistically calibrated probability of correctness.
+   */
   rawRecognitionScore: number;
-  /** Raw text detector score when available */
+  /** Mean of raw model output argmax scores prior to probability validation/softmax (when distinct). */
+  rawModelScoreMean?: number;
+  /** Per-character CTC timestep probabilities in [0, 1] before line-level aggregation. */
+  tokenProbabilities?: number[];
+  /** Indicates whether recognition confidence has undergone statistical calibration (always false in Phase 1.1). */
+  confidenceCalibrated?: boolean;
+  /** Raw text detector polygon score when available */
   rawDetectionScore?: number;
   /** Polygon in original page pixel coordinates [[x, y], ...] */
   pixelPolygon: Array<[number, number]>;
@@ -215,6 +235,8 @@ export interface LocalOcrEngineOptions {
   image: Blob | LocalOcrImageInput;
   pageId: string;
   languageHint: OcrLanguageHint;
+  /** Optional text/script evidence available prior to OCR for automatic language routing. */
+  sampleText?: string;
   readingConvention?: ReadingConvention;
   signal?: AbortSignal;
   diagnostics?: LocalOcrDiagnosticOptions;

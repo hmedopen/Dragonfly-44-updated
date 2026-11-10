@@ -4,8 +4,12 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { createModelManager } = require('./modelManager.cjs');
+const { registerLocalModelIpcHandlers } = require('./localModelIpc.cjs');
 
 app.name = 'Folio Script';
+
+const isProduction = Boolean(app.isPackaged) || process.env.NODE_ENV === 'production';
+const isDev = !isProduction;
 
 let mainWindow;
 let modelManager;
@@ -14,6 +18,7 @@ function getModelManager() {
   if (!modelManager) {
     modelManager = createModelManager({
       userDataDir: app.getPath('userData'),
+      isProduction,
     });
   }
   return modelManager;
@@ -36,7 +41,6 @@ function createWindow() {
   });
 
   const devUrl = 'http://localhost:5173';
-  const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
   if (isDev) {
     mainWindow.loadURL(devUrl);
@@ -46,7 +50,6 @@ function createWindow() {
 }
 
 // Development Feature: Training Studio IPC Handlers
-const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
 if (isDev) {
   // 1. Select Folder via Native Dialog
@@ -142,48 +145,7 @@ if (isDev) {
 }
 
 // Allowlisted Local OCR Model Management IPC Handlers
-ipcMain.handle('localModels:getManifest', async () => {
-  return getModelManager().getManifest();
-});
-
-ipcMain.handle('localModels:getStatus', async (_event, modelId) => {
-  if (modelId !== undefined && typeof modelId !== 'string') {
-    throw new Error('Invalid modelId parameter.');
-  }
-  return getModelManager().getModelStatus(modelId);
-});
-
-ipcMain.handle('localModels:downloadModel', async (event, modelId) => {
-  if (typeof modelId !== 'string' || !modelId) {
-    throw new Error('Invalid modelId parameter.');
-  }
-  return getModelManager().downloadModel(modelId, (progress) => {
-    if (!event.sender.isDestroyed()) {
-      event.sender.send('localModels:progress', progress);
-    }
-  });
-});
-
-ipcMain.handle('localModels:cancelDownload', async (_event, modelId) => {
-  if (typeof modelId !== 'string' || !modelId) {
-    throw new Error('Invalid modelId parameter.');
-  }
-  return getModelManager().cancelDownload(modelId);
-});
-
-ipcMain.handle('localModels:removeModel', async (_event, modelId) => {
-  if (typeof modelId !== 'string' || !modelId) {
-    throw new Error('Invalid modelId parameter.');
-  }
-  return getModelManager().removeModel(modelId);
-});
-
-ipcMain.handle('localModels:readModelAssets', async (_event, modelId) => {
-  if (typeof modelId !== 'string' || !modelId) {
-    throw new Error('Invalid modelId parameter.');
-  }
-  return getModelManager().readModelAssets(modelId);
-});
+registerLocalModelIpcHandlers(ipcMain, getModelManager);
 
 app.whenReady().then(() => {
   createWindow();

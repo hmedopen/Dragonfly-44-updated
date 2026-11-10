@@ -170,7 +170,7 @@
         "requiresCustomUstarArchive": true,
         "requiresOrtAdapterFallback": true,
         "executionProviders": ["wasm"],
-        "notes": "Requires synthesized inference.yml (DB thresh=0.15, box_thresh=0.25, unclip_ratio=1.4, dict from ppocrv6_dict.txt); optional experimental manga_lm.npz is intentionally excluded. ORT adapter applies softmax normalization when recognizer outputs raw logits."
+        "notes": "Requires synthesized inference.yml (DB thresh=0.15, box_thresh=0.25, unclip_ratio=1.4, dict from ppocrv6_dict.txt); optional experimental manga_lm.npz is intentionally excluded. Verified manga_rec.onnx outputs Softmax probabilities directly; ORT adapter validates probability outputs and applies softmax only for logit-outputting models."
       }
     },
     {

@@ -14,6 +14,7 @@ import {
   originalPixelsToNormalized1000,
   pixelPolygonToPixelBox,
 } from './coordinateMapping.ts';
+import { disposeOrtTensors } from './ortTensorUtils.ts';
 import { buildUstarArchive } from './ustarBuilder.ts';
 
 interface OpenCvRuntime {
@@ -84,7 +85,11 @@ export async function getOpenCvRuntime(): Promise<{ cv: OpenCvRuntime }> {
 export interface OcrLineRawOutput {
   poly: Array<[number, number]>;
   text: string;
+  /** Uncalibrated aggregated line confidence (mean of CTC character timestep probabilities). */
   score: number;
+  rawModelScoreMean?: number;
+  tokenProbabilities?: number[];
+  confidenceCalibrated?: boolean;
   detScore?: number;
 }
 
@@ -258,27 +263,164 @@ function orderQuadPoints(pts: Array<[number, number]>): Array<[number, number]> 
   return [left[0], right[0], right[1], left[1]];
 }
 
-function boxScoreFast(predMap: Float32Array, w: number, h: number, poly: Array<[number, number]>): number {
-  let xmin = w - 1;
-  let xmax = 0;
-  let ymin = h - 1;
-  let ymax = 0;
-  for (const [px, py] of poly) {
-    xmin = Math.min(xmin, Math.max(0, Math.floor(px)));
-    xmax = Math.max(xmax, Math.min(w - 1, Math.ceil(px)));
-    ymin = Math.min(ymin, Math.max(0, Math.floor(py)));
-    ymax = Math.max(ymax, Math.min(h - 1, Math.ceil(py)));
+function clipSegmentToBounds(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  minX: number,
+  maxX: number,
+  minY: number,
+  maxY: number
+): [number, number] | null {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  let t0 = 0;
+  let t1 = 1;
+
+  const clipTest = (p: number, q: number): boolean => {
+    if (p === 0) return q >= 0;
+    const r = q / p;
+    if (p < 0) {
+      if (r > t1) return false;
+      if (r > t0) t0 = r;
+    } else {
+      if (r < t0) return false;
+      if (r < t1) t1 = r;
+    }
+    return true;
+  };
+
+  if (
+    clipTest(-dx, x1 - minX) &&
+    clipTest(dx, maxX - x1) &&
+    clipTest(-dy, y1 - minY) &&
+    clipTest(dy, maxY - y1)
+  ) {
+    return [t0, t1];
   }
-  if (xmax <= xmin || ymax <= ymin) return 0;
+  return null;
+}
+
+/**
+ * Polygon-mask detector scoring consistent with DBPostProcess (`cv.fillPoly` + `cv.mean`).
+ * Rasterizes the exact polygon interior and boundary inside the clipped map bounds [0..w-1, 0..h-1]
+ * rather than averaging over the enclosing axis-aligned bounding box.
+ */
+export function scorePolygonMask(
+  predMap: ArrayLike<number>,
+  w: number,
+  h: number,
+  poly: Array<[number, number]>
+): number {
+  if (
+    !predMap ||
+    !Number.isFinite(w) ||
+    !Number.isFinite(h) ||
+    w <= 0 ||
+    h <= 0 ||
+    predMap.length < w * h ||
+    !Array.isArray(poly) ||
+    poly.length < 3
+  ) {
+    return 0;
+  }
+
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  let area2 = 0;
+
+  for (let i = 0; i < poly.length; i++) {
+    const pt = poly[i];
+    if (!Array.isArray(pt) || pt.length < 2) return 0;
+    const [px, py] = pt;
+    if (!Number.isFinite(px) || !Number.isFinite(py)) return 0;
+    if (px < minX) minX = px;
+    if (px > maxX) maxX = px;
+    if (py < minY) minY = py;
+    if (py > maxY) maxY = py;
+    const next = poly[(i + 1) % poly.length];
+    if (!Array.isArray(next) || next.length < 2) return 0;
+    if (!Number.isFinite(next[0]) || !Number.isFinite(next[1])) return 0;
+    area2 += px * next[1] - next[0] * py;
+  }
+
+  if (Math.abs(area2) < 1e-6) {
+    return 0;
+  }
+
+  const xmin = Math.max(0, Math.floor(minX));
+  const xmax = Math.min(w - 1, Math.ceil(maxX));
+  const ymin = Math.max(0, Math.floor(minY));
+  const ymax = Math.min(h - 1, Math.ceil(maxY));
+  if (xmax < xmin || ymax < ymin) {
+    return 0;
+  }
+
+  const rw = xmax - xmin + 1;
+  const rh = ymax - ymin + 1;
+  const mask = new Uint8Array(rw * rh);
+
+  // 1. Scanline fill interior at integer rows
+  const xs: number[] = [];
+  for (let y = ymin; y <= ymax; y++) {
+    xs.length = 0;
+    for (let i = 0; i < poly.length; i++) {
+      const [x1, y1] = poly[i];
+      const [x2, y2] = poly[(i + 1) % poly.length];
+      if ((y1 <= y && y2 > y) || (y2 <= y && y1 > y)) {
+        xs.push(x1 + ((y - y1) * (x2 - x1)) / (y2 - y1));
+      }
+    }
+    if (xs.length < 2) continue;
+    xs.sort((a, b) => a - b);
+    const rowMaskOff = (y - ymin) * rw;
+    for (let k = 0; k + 1 < xs.length; k += 2) {
+      const xStart = Math.max(xmin, Math.ceil(xs[k]));
+      const xEnd = Math.min(xmax, Math.floor(xs[k + 1]));
+      for (let x = xStart; x <= xEnd; x++) {
+        mask[rowMaskOff + (x - xmin)] = 1;
+      }
+    }
+  }
+
+  // 2. Rasterize clipped boundary edges cleanly (matching cv.fillPoly edge coverage)
+  for (let i = 0; i < poly.length; i++) {
+    const [x1, y1] = poly[i];
+    const [x2, y2] = poly[(i + 1) % poly.length];
+    const tRange = clipSegmentToBounds(x1, y1, x2, y2, xmin - 1, xmax + 1, ymin - 1, ymax + 1);
+    if (!tRange) continue;
+    const [t0, t1] = tRange;
+    const sx = x1 + (x2 - x1) * t0;
+    const sy = y1 + (y2 - y1) * t0;
+    const ex = x1 + (x2 - x1) * t1;
+    const ey = y1 + (y2 - y1) * t1;
+    const steps = Math.max(1, Math.ceil(Math.max(Math.abs(ex - sx), Math.abs(ey - sy))));
+    for (let s = 0; s <= steps; s++) {
+      const u = s / steps;
+      const gx = Math.round(sx + (ex - sx) * u);
+      const gy = Math.round(sy + (ey - sy) * u);
+      if (gx >= xmin && gx <= xmax && gy >= ymin && gy <= ymax) {
+        mask[(gy - ymin) * rw + (gx - xmin)] = 1;
+      }
+    }
+  }
 
   let sum = 0;
   let count = 0;
-  for (let y = ymin; y <= ymax; y++) {
-    const rowOff = y * w;
-    for (let x = xmin; x <= xmax; x++) {
-      // Bounding-box mean score over probability map inside contour bbox
-      sum += predMap[rowOff + x];
-      count++;
+  for (let my = 0; my < rh; my++) {
+    const rowOff = (ymin + my) * w;
+    const maskOff = my * rw;
+    for (let mx = 0; mx < rw; mx++) {
+      if (mask[maskOff + mx]) {
+        const val = predMap[rowOff + xmin + mx];
+        if (Number.isFinite(val)) {
+          sum += val;
+          count++;
+        }
+      }
     }
   }
   return count > 0 ? sum / count : 0;
@@ -304,65 +446,317 @@ function unclipPolygon(poly: Array<[number, number]>, unclipRatio: number): Arra
   const solution: Array<Array<{ X: number; Y: number }>> = [];
   co.Execute(solution, distance * 10);
   if (!solution || solution.length === 0) return null;
-  return solution[0].map((p) => [p.X / 10, p.Y / 10]);
+
+  let bestPath = solution[0];
+  let bestArea = -1;
+  for (const candidate of solution) {
+    if (candidate.length < 3) continue;
+    let candidateArea = 0;
+    for (let i = 0; i < candidate.length; i++) {
+      const p1 = candidate[i];
+      const p2 = candidate[(i + 1) % candidate.length];
+      candidateArea += p1.X * p2.Y - p2.X * p1.Y;
+    }
+    candidateArea = Math.abs(candidateArea) * 0.5;
+    if (candidateArea > bestArea) {
+      bestArea = candidateArea;
+      bestPath = candidate;
+    }
+  }
+  return bestPath.map((p) => [p.X / 10, p.Y / 10]);
 }
 
-function decodeCtcSoftmax(
-  data: Float32Array,
+export type RecognizerOutputFormat = 'probabilities' | 'logits' | 'auto';
+
+/**
+ * Verified ONNX recognizer output representations for Folio Script's pinned models.
+ * Inspected directly against cached ONNX files:
+ * - ppocr-v6-small-en (rec/inference.onnx): trailing Softmax -> probabilities in [0, 1]
+ * - ppocr-v6-manga-v0.3 (rec/manga_rec.onnx): trailing Softmax -> probabilities in [0, 1]
+ * - ppocr-v5-mobile-ko (rec/inference.onnx): trailing Softmax -> probabilities in [0, 1]
+ */
+export const RECOGNIZER_OUTPUT_FORMAT_BY_ROUTE: Record<OcrRouteId, 'probabilities' | 'logits'> = {
+  en_ppocrv6_small: 'probabilities',
+  ja_zh_ppocrv6_manga: 'probabilities',
+  ko_ppocrv5_mobile: 'probabilities',
+};
+
+export interface CtcDecodeOptions {
+  outputFormat?: RecognizerOutputFormat;
+}
+
+export interface CtcDecodeResult {
+  text: string;
+  /** Uncalibrated aggregated line confidence (arithmetic mean of selected timestep probabilities in [0, 1]). */
+  score: number;
+  /** Mean of raw model output values at selected character timesteps (distinct from probability when logits). */
+  rawScoreMean: number;
+  /** Per-selected-character timestep probabilities in [0, 1]. */
+  tokenProbabilities: number[];
+  outputFormatUsed: 'probabilities' | 'logits';
+  /** Explicitly false: Phase 1.1 does not apply statistical accuracy calibration. */
+  confidenceCalibrated: false;
+}
+
+/**
+ * Checks whether a single timestep row forms a valid probability distribution
+ * (all entries finite in [0, 1] within float32 tolerance, summing to ~1.0).
+ */
+export function isProbabilityDistributionRow(
+  data: ArrayLike<number>,
+  offset: number,
+  classes: number
+): boolean {
+  if (classes <= 0 || offset < 0 || offset + classes > data.length) {
+    return false;
+  }
+  let sum = 0;
+  for (let c = 0; c < classes; c++) {
+    const v = data[offset + c];
+    if (!Number.isFinite(v) || v < -1e-4 || v > 1 + 1e-4) {
+      return false;
+    }
+    sum += v;
+  }
+  return Math.abs(sum - 1.0) <= 0.05;
+}
+
+/**
+ * Numerically stable softmax probability for the argmax class of a logit row.
+ * Returns null if the row contains NaN, +Infinity, or only -Infinity entries.
+ */
+export function computeStableSoftmaxArgmax(
+  data: ArrayLike<number>,
+  offset: number,
+  classes: number
+): { maxIdx: number; maxLogit: number; prob: number } | null {
+  let maxIdx = -1;
+  let maxVal = -Infinity;
+
+  for (let c = 0; c < classes; c++) {
+    const v = data[offset + c];
+    if (Number.isNaN(v) || v === Infinity) {
+      return null;
+    }
+    if (v > maxVal) {
+      maxVal = v;
+      maxIdx = c;
+    }
+  }
+
+  if (maxIdx < 0 || !Number.isFinite(maxVal)) {
+    return null;
+  }
+
+  let sumExp = 0;
+  for (let c = 0; c < classes; c++) {
+    const v = data[offset + c];
+    if (v === -Infinity) continue;
+    sumExp += Math.exp(v - maxVal);
+  }
+
+  if (!Number.isFinite(sumExp) || sumExp <= 0) {
+    return null;
+  }
+
+  const prob = Math.max(0, Math.min(1, 1 / sumExp));
+  return { maxIdx, maxLogit: maxVal, prob };
+}
+
+function resolveDetectedOutputFormat(
+  data: ArrayLike<number>,
   timeSteps: number,
   classes: number,
-  charDict: string[]
-): { text: string; score: number } {
+  requested: RecognizerOutputFormat
+): 'probabilities' | 'logits' {
+  if (requested === 'probabilities' || requested === 'logits') {
+    return requested;
+  }
+  for (let t = 0; t < timeSteps; t++) {
+    const rowOff = t * classes;
+    let allFinite = true;
+    for (let c = 0; c < classes; c++) {
+      if (!Number.isFinite(data[rowOff + c])) {
+        allFinite = false;
+        break;
+      }
+    }
+    if (!allFinite) continue;
+    return isProbabilityDistributionRow(data, rowOff, classes) ? 'probabilities' : 'logits';
+  }
+  return 'probabilities';
+}
+
+/**
+ * Decodes greedy CTC output matrices [timeSteps, classes] while strictly respecting
+ * whether the recognizer outputs raw logits or already-softmaxed probabilities.
+ */
+export function decodeCtcOutput(
+  data: ArrayLike<number>,
+  timeSteps: number,
+  classes: number,
+  charDict: string[],
+  options: CtcDecodeOptions = {}
+): CtcDecodeResult {
+  const requestedFormat = options.outputFormat ?? 'auto';
+  if (
+    !data ||
+    !Number.isFinite(timeSteps) ||
+    !Number.isFinite(classes) ||
+    timeSteps <= 0 ||
+    classes <= 0 ||
+    data.length < timeSteps * classes
+  ) {
+    return {
+      text: '',
+      score: 0,
+      rawScoreMean: 0,
+      tokenProbabilities: [],
+      outputFormatUsed: requestedFormat === 'logits' ? 'logits' : 'probabilities',
+      confidenceCalibrated: false,
+    };
+  }
+
+  const formatUsed = resolveDetectedOutputFormat(data, timeSteps, classes, requestedFormat);
+
   let prevIdx = -1;
   let text = '';
-  const probs: number[] = [];
+  const tokenProbabilities: number[] = [];
+  const rawScores: number[] = [];
 
   for (let t = 0; t < timeSteps; t++) {
     const rowOff = t * classes;
     let maxIdx = 0;
-    let maxVal = -Infinity;
-    for (let c = 0; c < classes; c++) {
-      const v = data[rowOff + c];
-      if (v > maxVal) {
-        maxVal = v;
-        maxIdx = c;
+    let prob = 0;
+    let rawVal = 0;
+
+    if (formatUsed === 'logits') {
+      const sm = computeStableSoftmaxArgmax(data, rowOff, classes);
+      if (!sm) {
+        prevIdx = -1;
+        continue;
       }
+      maxIdx = sm.maxIdx;
+      prob = sm.prob;
+      rawVal = sm.maxLogit;
+    } else {
+      let maxVal = -Infinity;
+      let sum = 0;
+      let rowValid = true;
+      for (let c = 0; c < classes; c++) {
+        const v = data[rowOff + c];
+        if (!Number.isFinite(v) || v < -1e-4 || v > 1 + 1e-4) {
+          rowValid = false;
+          break;
+        }
+        sum += Math.max(0, v);
+        if (v > maxVal) {
+          maxVal = v;
+          maxIdx = c;
+        }
+      }
+      if (!rowValid || sum <= 0 || !Number.isFinite(maxVal)) {
+        prevIdx = -1;
+        continue;
+      }
+      prob = Math.max(0, Math.min(1, maxVal));
+      rawVal = maxVal;
     }
+
     if (maxIdx > 0 && maxIdx !== prevIdx) {
       const dictIdx = maxIdx - 1;
       if (dictIdx >= 0 && dictIdx < charDict.length) {
         text += charDict[dictIdx];
-        probs.push(maxVal);
+        tokenProbabilities.push(prob);
+        rawScores.push(rawVal);
       }
     }
     prevIdx = maxIdx;
   }
 
-  const score = probs.length > 0 ? probs.reduce((a, b) => a + b, 0) / probs.length : 0;
-  return { text, score };
+  const score =
+    tokenProbabilities.length > 0
+      ? tokenProbabilities.reduce((a, b) => a + b, 0) / tokenProbabilities.length
+      : 0;
+  const rawScoreMean =
+    rawScores.length > 0 ? rawScores.reduce((a, b) => a + b, 0) / rawScores.length : 0;
+
+  return {
+    text,
+    score,
+    rawScoreMean,
+    tokenProbabilities,
+    outputFormatUsed: formatUsed,
+    confidenceCalibrated: false,
+  };
+}
+
+export interface OrtSessionLike {
+  inputNames: readonly string[];
+  outputNames: readonly string[];
+  run: (feeds: Record<string, any>) => Promise<Record<string, any>>;
+  release: () => Promise<void>;
+}
+
+export interface OrtWebAdapterDeps {
+  cv?: OpenCvRuntime;
+  createSession?: (bytes: Uint8Array) => Promise<OrtSessionLike>;
+  createTensor?: (type: 'float32', data: Float32Array, dims: number[]) => any;
+  recognizerOutputFormat?: RecognizerOutputFormat;
 }
 
 /**
  * Narrowly scoped ONNX Runtime Web adapter used when @paddleocr/paddleocr-js
  * cannot run (e.g. packaged Electron file:// origins blocked by ensureServedFromHttp()).
  */
-async function createOrtWebOcrAdapter(
+export async function createOrtWebOcrAdapter(
   routeId: OcrRouteId,
-  assets: ModelAssetPayload
+  assets: ModelAssetPayload,
+  deps: OrtWebAdapterDeps = {}
 ): Promise<OcrPipelineAdapter> {
-  const { cv } = await getOpenCvRuntime();
+  const cv = deps.cv ?? (await getOpenCvRuntime()).cv;
   const resolved = resolveModelTarInputs(routeId, assets);
   const detCfg = parseDetConfig(resolved.detYml);
   const recCfg = parseRecConfig(resolved.recYml);
+  const recOutputFormat =
+    deps.recognizerOutputFormat ?? RECOGNIZER_OUTPUT_FORMAT_BY_ROUTE[routeId];
 
-  const [detSession, recSession] = await Promise.all([
-    ort.InferenceSession.create(resolved.detOnnx, { executionProviders: ['wasm'] }),
-    ort.InferenceSession.create(resolved.recOnnx, { executionProviders: ['wasm'] }),
+  const createSession =
+    deps.createSession ??
+    ((bytes: Uint8Array) =>
+      ort.InferenceSession.create(bytes, { executionProviders: ['wasm'] }));
+  const makeTensor =
+    deps.createTensor ??
+    ((type: 'float32', data: Float32Array, dims: number[]) => new ort.Tensor(type, data, dims));
+
+  const [detSettled, recSettled] = await Promise.allSettled([
+    createSession(resolved.detOnnx),
+    createSession(resolved.recOnnx),
   ]);
+
+  if (detSettled.status === 'rejected' || recSettled.status === 'rejected') {
+    if (detSettled.status === 'fulfilled') {
+      await detSettled.value.release().catch(() => {});
+    }
+    if (recSettled.status === 'fulfilled') {
+      await recSettled.value.release().catch(() => {});
+    }
+    const err =
+      detSettled.status === 'rejected'
+        ? detSettled.reason
+        : (recSettled as PromiseRejectedResult).reason;
+    throw err instanceof Error ? err : new Error(String(err));
+  }
+
+  const detSession = detSettled.value;
+  const recSession = recSettled.value;
 
   return {
     runtimeUsed: 'ort_web_adapter',
     async predictCrop(cropRgba: RgbaImageBuffer): Promise<OcrLineRawOutput[]> {
+      if (cropRgba.width <= 0 || cropRgba.height <= 0) {
+        return [];
+      }
       const srcMat = cv.matFromArray(cropRgba.height, cropRgba.width, cv.CV_8UC4, cropRgba.data);
       try {
         const srcW = cropRgba.width;
@@ -372,77 +766,112 @@ async function createOrtWebOcrAdapter(
         const resizeW = Math.max(32, Math.round((srcW * ratio) / 32) * 32);
         const resizeH = Math.max(32, Math.round((srcH * ratio) / 32) * 32);
 
-        const resized = new cv.Mat();
-        const bgr = new cv.Mat();
-        cv.resize(srcMat, resized, new cv.Size(resizeW, resizeH), 0, 0, cv.INTER_LINEAR);
-        cv.cvtColor(resized, bgr, cv.COLOR_RGBA2BGR);
-
         const plane = resizeW * resizeH;
         const detInput = new Float32Array(3 * plane);
-        const bgrData: Uint8Array = bgr.data;
-        for (let i = 0; i < plane; i++) {
-          const bi = i * 3;
-          detInput[i] = (bgrData[bi] * detCfg.scale - detCfg.mean[0]) / detCfg.std[0];
-          detInput[plane + i] = (bgrData[bi + 1] * detCfg.scale - detCfg.mean[1]) / detCfg.std[1];
-          detInput[2 * plane + i] = (bgrData[bi + 2] * detCfg.scale - detCfg.mean[2]) / detCfg.std[2];
-        }
-        resized.delete();
-        bgr.delete();
-
-        const detTensor = new ort.Tensor('float32', detInput, [1, 3, resizeH, resizeW]);
-        let predMap: Float32Array;
+        const resized = new cv.Mat();
+        const bgr = new cv.Mat();
         try {
-          const detOut = await detSession.run({ [detSession.inputNames[0]]: detTensor });
-          predMap = detOut[detSession.outputNames[0]].data as Float32Array;
+          cv.resize(srcMat, resized, new cv.Size(resizeW, resizeH), 0, 0, cv.INTER_LINEAR);
+          cv.cvtColor(resized, bgr, cv.COLOR_RGBA2BGR);
+          const bgrData: Uint8Array = bgr.data;
+          for (let i = 0; i < plane; i++) {
+            const bi = i * 3;
+            detInput[i] = (bgrData[bi] * detCfg.scale - detCfg.mean[0]) / detCfg.std[0];
+            detInput[plane + i] = (bgrData[bi + 1] * detCfg.scale - detCfg.mean[1]) / detCfg.std[1];
+            detInput[2 * plane + i] = (bgrData[bi + 2] * detCfg.scale - detCfg.mean[2]) / detCfg.std[2];
+          }
         } finally {
-          detTensor.dispose();
+          resized.delete();
+          bgr.delete();
         }
 
-        const maskData = new Uint8Array(plane);
-        for (let i = 0; i < plane; i++) {
+        const detTensor = makeTensor('float32', detInput, [1, 3, resizeH, resizeW]);
+        let detOut: Record<string, any> | null = null;
+        let predMap: Float32Array;
+        let mapW = resizeW;
+        let mapH = resizeH;
+        try {
+          detOut = await detSession.run({ [detSession.inputNames[0]]: detTensor });
+          const detOutTensor = detOut?.[detSession.outputNames[0]];
+          if (!detOutTensor || !detOutTensor.data) {
+            throw new Error(
+              `OCR detector output missing expected tensor "${detSession.outputNames[0]}".`
+            );
+          }
+          const dims = detOutTensor.dims;
+          if (Array.isArray(dims) && dims.length === 4) {
+            mapH = Number(dims[2]);
+            mapW = Number(dims[3]);
+          } else if (Array.isArray(dims) && dims.length === 3) {
+            mapH = Number(dims[1]);
+            mapW = Number(dims[2]);
+          }
+          const rawData = detOutTensor.data as Float32Array;
+          if (rawData.length < mapW * mapH) {
+            throw new Error(
+              `OCR detector output size ${rawData.length} smaller than expected ${mapW}x${mapH}.`
+            );
+          }
+          // Copy probability map out before disposing ORT-owned output tensors
+          predMap = new Float32Array(rawData.length);
+          predMap.set(rawData);
+        } finally {
+          disposeOrtTensors(detOut, [detTensor]);
+        }
+
+        const mapPlane = mapW * mapH;
+        const maskData = new Uint8Array(mapPlane);
+        for (let i = 0; i < mapPlane; i++) {
           maskData[i] = predMap[i] > detCfg.thresh ? 255 : 0;
         }
-        const maskMat = cv.matFromArray(resizeH, resizeW, cv.CV_8UC1, maskData);
-        const contours = new cv.MatVector();
-        const hierarchy = new cv.Mat();
-        cv.findContours(maskMat, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
-        maskMat.delete();
-        hierarchy.delete();
 
         const detectedPolys: Array<{ poly: Array<[number, number]>; detScore: number }> = [];
-        const limit = Math.min(contours.size(), detCfg.maxCandidates);
-        for (let c = 0; c < limit; c++) {
-          const cnt = contours.get(c);
-          try {
-            if (cnt.rows < 4) continue;
-            const pts: Array<[number, number]> = [];
-            for (let p = 0; p < cnt.rows; p++) {
-              pts.push([cnt.data32S[p * 2], cnt.data32S[p * 2 + 1]]);
+        const maskMat = cv.matFromArray(mapH, mapW, cv.CV_8UC1, maskData);
+        const contours = new cv.MatVector();
+        const hierarchy = new cv.Mat();
+        try {
+          cv.findContours(maskMat, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+          const limit = Math.min(contours.size(), detCfg.maxCandidates);
+          for (let c = 0; c < limit; c++) {
+            const cnt = contours.get(c);
+            try {
+              if (cnt.rows < 4) continue;
+              const pts: Array<[number, number]> = [];
+              for (let p = 0; p < cnt.rows; p++) {
+                pts.push([cnt.data32S[p * 2], cnt.data32S[p * 2 + 1]]);
+              }
+              const detScore = scorePolygonMask(predMap, mapW, mapH, pts);
+              if (detScore < detCfg.boxThresh) continue;
+              const expanded = unclipPolygon(pts, detCfg.unclipRatio);
+              if (!expanded || expanded.length < 3) continue;
+
+              const flatExp: number[] = [];
+              for (const [ex, ey] of expanded) flatExp.push(ex, ey);
+              const expMat = cv.matFromArray(expanded.length, 1, cv.CV_32FC2, flatExp);
+              let rect: { center: any; size: { width: number; height: number }; angle: number };
+              try {
+                rect = cv.minAreaRect(expMat);
+              } finally {
+                expMat.delete();
+              }
+
+              if (Math.min(rect.size.width, rect.size.height) < 3) continue;
+              const rectPts = cv.RotatedRect.points(rect).map(
+                (pt: { x: number; y: number }): [number, number] => [
+                  Math.max(0, Math.min(srcW, Math.round((pt.x / mapW) * srcW))),
+                  Math.max(0, Math.min(srcH, Math.round((pt.y / mapH) * srcH))),
+                ]
+              );
+              detectedPolys.push({ poly: orderQuadPoints(rectPts), detScore });
+            } finally {
+              cnt.delete();
             }
-            const detScore = boxScoreFast(predMap, resizeW, resizeH, pts);
-            if (detScore < detCfg.boxThresh) continue;
-            const expanded = unclipPolygon(pts, detCfg.unclipRatio);
-            if (!expanded || expanded.length < 3) continue;
-
-            const flatExp: number[] = [];
-            for (const [ex, ey] of expanded) flatExp.push(ex, ey);
-            const expMat = cv.matFromArray(expanded.length, 1, cv.CV_32FC2, flatExp);
-            const rect = cv.minAreaRect(expMat);
-            expMat.delete();
-
-            if (Math.min(rect.size.width, rect.size.height) < 3) continue;
-            const rectPts = cv.RotatedRect.points(rect).map(
-              (pt: { x: number; y: number }): [number, number] => [
-                Math.max(0, Math.min(srcW, Math.round((pt.x / resizeW) * srcW))),
-                Math.max(0, Math.min(srcH, Math.round((pt.y / resizeH) * srcH))),
-              ]
-            );
-            detectedPolys.push({ poly: orderQuadPoints(rectPts), detScore });
-          } finally {
-            cnt.delete();
           }
+        } finally {
+          maskMat.delete();
+          contours.delete();
+          hierarchy.delete();
         }
-        contours.delete();
 
         const lineOutputs: OcrLineRawOutput[] = [];
         const [, targetH, baseW] = recCfg.imageShape;
@@ -456,84 +885,105 @@ async function createOrtWebOcrAdapter(
           const cropW = Math.max(1, Math.floor(Math.max(wTop, wBot)));
           const cropH = Math.max(1, Math.floor(Math.max(hLeft, hRight)));
 
-          const srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
-            ordered[0][0], ordered[0][1],
-            ordered[1][0], ordered[1][1],
-            ordered[2][0], ordered[2][1],
-            ordered[3][0], ordered[3][1],
-          ]);
-          const dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
-            0, 0, cropW, 0, cropW, cropH, 0, cropH,
-          ]);
-          const transform = cv.getPerspectiveTransform(srcTri, dstTri);
-          let warped = new cv.Mat();
-          cv.warpPerspective(
-            srcMat,
-            warped,
-            transform,
-            new cv.Size(cropW, cropH),
-            cv.INTER_CUBIC,
-            cv.BORDER_REPLICATE,
-            new cv.Scalar()
-          );
-          srcTri.delete();
-          dstTri.delete();
-          transform.delete();
-
-          if (warped.rows / Math.max(1, warped.cols) >= 1.5) {
-            const rotated = new cv.Mat();
-            cv.rotate(warped, rotated, cv.ROTATE_90_COUNTERCLOCKWISE);
-            warped.delete();
-            warped = rotated;
-          }
-
-          const rw = warped.cols;
-          const rh = warped.rows;
-          const ratioWh = rw / Math.max(1, rh);
-          const maxWhRatio = Math.max(baseW / Math.max(1, targetH), ratioWh);
-          const recW = Math.max(1, Math.min(3200, Math.trunc(targetH * maxWhRatio)));
-          const resizedW = Math.min(recW, Math.ceil(targetH * ratioWh));
-
-          const recResized = new cv.Mat();
-          const recBgr = new cv.Mat();
-          cv.resize(warped, recResized, new cv.Size(resizedW, targetH), 0, 0, cv.INTER_LINEAR);
-          cv.cvtColor(recResized, recBgr, cv.COLOR_RGBA2BGR);
-          warped.delete();
-          recResized.delete();
-
-          const recChw = new Float32Array(3 * targetH * recW);
-          const recPlane = targetH * recW;
-          const bgrBytes: Uint8Array = recBgr.data;
-          for (let y = 0; y < targetH; y++) {
-            for (let x = 0; x < resizedW; x++) {
-              const si = (y * resizedW + x) * 3;
-              const di = y * recW + x;
-              recChw[di] = (bgrBytes[si] / 255.0 - 0.5) / 0.5;
-              recChw[recPlane + di] = (bgrBytes[si + 1] / 255.0 - 0.5) / 0.5;
-              recChw[2 * recPlane + di] = (bgrBytes[si + 2] / 255.0 - 0.5) / 0.5;
-            }
-          }
-          recBgr.delete();
-
-          const recTensor = new ort.Tensor('float32', recChw, [1, 3, targetH, recW]);
+          let warped: any = null;
+          let recW = 1;
+          let recChw: Float32Array;
           try {
-            const recOut = await recSession.run({ [recSession.inputNames[0]]: recTensor });
-            const outTensor = recOut[recSession.outputNames[0]];
+            const srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+              ordered[0][0], ordered[0][1],
+              ordered[1][0], ordered[1][1],
+              ordered[2][0], ordered[2][1],
+              ordered[3][0], ordered[3][1],
+            ]);
+            const dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+              0, 0, cropW, 0, cropW, cropH, 0, cropH,
+            ]);
+            const transform = cv.getPerspectiveTransform(srcTri, dstTri);
+            warped = new cv.Mat();
+            try {
+              cv.warpPerspective(
+                srcMat,
+                warped,
+                transform,
+                new cv.Size(cropW, cropH),
+                cv.INTER_CUBIC,
+                cv.BORDER_REPLICATE,
+                new cv.Scalar()
+              );
+            } finally {
+              srcTri.delete();
+              dstTri.delete();
+              transform.delete();
+            }
+
+            if (warped.rows / Math.max(1, warped.cols) >= 1.5) {
+              const rotated = new cv.Mat();
+              cv.rotate(warped, rotated, cv.ROTATE_90_COUNTERCLOCKWISE);
+              warped.delete();
+              warped = rotated;
+            }
+
+            const rw = warped.cols;
+            const rh = warped.rows;
+            const ratioWh = rw / Math.max(1, rh);
+            const maxWhRatio = Math.max(baseW / Math.max(1, targetH), ratioWh);
+            recW = Math.max(1, Math.min(3200, Math.trunc(targetH * maxWhRatio)));
+            const resizedW = Math.min(recW, Math.ceil(targetH * ratioWh));
+
+            const recResized = new cv.Mat();
+            const recBgr = new cv.Mat();
+            try {
+              cv.resize(warped, recResized, new cv.Size(resizedW, targetH), 0, 0, cv.INTER_LINEAR);
+              cv.cvtColor(recResized, recBgr, cv.COLOR_RGBA2BGR);
+              recChw = new Float32Array(3 * targetH * recW);
+              const recPlane = targetH * recW;
+              const bgrBytes: Uint8Array = recBgr.data;
+              for (let y = 0; y < targetH; y++) {
+                for (let x = 0; x < resizedW; x++) {
+                  const si = (y * resizedW + x) * 3;
+                  const di = y * recW + x;
+                  recChw[di] = (bgrBytes[si] / 255.0 - 0.5) / 0.5;
+                  recChw[recPlane + di] = (bgrBytes[si + 1] / 255.0 - 0.5) / 0.5;
+                  recChw[2 * recPlane + di] = (bgrBytes[si + 2] / 255.0 - 0.5) / 0.5;
+                }
+              }
+            } finally {
+              recResized.delete();
+              recBgr.delete();
+            }
+          } finally {
+            if (warped) warped.delete();
+          }
+
+          const recTensor = makeTensor('float32', recChw, [1, 3, targetH, recW]);
+          let recOut: Record<string, any> | null = null;
+          try {
+            recOut = await recSession.run({ [recSession.inputNames[0]]: recTensor });
+            const outTensor = recOut?.[recSession.outputNames[0]];
+            if (!outTensor || !outTensor.data || !Array.isArray(outTensor.dims) || outTensor.dims.length < 3) {
+              throw new Error(
+                `OCR recognizer output missing expected 3D tensor "${recSession.outputNames[0]}".`
+              );
+            }
             const dims = outTensor.dims;
-            const decoded = decodeCtcSoftmax(
+            const decoded = decodeCtcOutput(
               outTensor.data as Float32Array,
               Number(dims[1]),
               Number(dims[2]),
-              recCfg.charDict
+              recCfg.charDict,
+              { outputFormat: recOutputFormat }
             );
             lineOutputs.push({
               poly: ordered,
               text: decoded.text,
               score: decoded.score,
+              rawModelScoreMean: decoded.rawScoreMean,
+              tokenProbabilities: decoded.tokenProbabilities,
+              confidenceCalibrated: decoded.confidenceCalibrated,
               detScore: item.detScore,
             });
           } finally {
-            recTensor.dispose();
+            disposeOrtTensors(recOut, [recTensor]);
           }
         }
 
@@ -680,6 +1130,9 @@ export async function recognizeTextCandidateFromOriginal(options: {
       candidateId: candidate.candidateId,
       text: line.text,
       rawRecognitionScore: line.score,
+      rawModelScoreMean: line.rawModelScoreMean,
+      tokenProbabilities: line.tokenProbabilities,
+      confidenceCalibrated: line.confidenceCalibrated ?? false,
       rawDetectionScore: line.detScore,
       pixelPolygon,
       pixelBox,

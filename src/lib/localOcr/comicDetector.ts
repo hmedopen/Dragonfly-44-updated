@@ -8,6 +8,7 @@ import {
   originalPixelsToNormalized1000,
   tileInputBoxToOriginalPixels,
 } from './coordinateMapping.ts';
+import { disposeOrtTensors } from './ortTensorUtils.ts';
 
 export const COMIC_DETECTOR_CLASS_MAP: Record<0 | 1 | 2, ComicDetectorClass> = {
   0: 'bubble',
@@ -152,12 +153,27 @@ export function parseComicDetectorTileOutputs(options: {
   return detections;
 }
 
+export interface ComicDetectorSessionLike {
+  inputNames: readonly string[];
+  run: (feeds: Record<string, any>) => Promise<Record<string, any>>;
+  release: () => Promise<void>;
+}
+
+export interface CreateComicDetectorDeps {
+  createSession?: (onnxBytes: Uint8Array) => Promise<ComicDetectorSessionLike>;
+  createTensor?: (type: 'float32' | 'int64', data: Float32Array | BigInt64Array, dims: number[]) => any;
+  parseOutputs?: typeof parseComicDetectorTileOutputs;
+}
+
 export async function createComicDetectorSession(
-  onnxBytes: Uint8Array
+  onnxBytes: Uint8Array,
+  deps: CreateComicDetectorDeps = {}
 ): Promise<ComicDetectorSession> {
-  const session = await ort.InferenceSession.create(onnxBytes, {
-    executionProviders: ['wasm'],
-  });
+  const session: ComicDetectorSessionLike = deps.createSession
+    ? await deps.createSession(onnxBytes)
+    : await ort.InferenceSession.create(onnxBytes, {
+        executionProviders: ['wasm'],
+      });
 
   if (
     !session.inputNames.includes('images') ||
@@ -169,23 +185,30 @@ export async function createComicDetectorSession(
     );
   }
 
+  const makeTensor =
+    deps.createTensor ??
+    ((type: 'float32' | 'int64', data: Float32Array | BigInt64Array, dims: number[]) =>
+      new ort.Tensor(type, data, dims));
+  const parseTileOutputs = deps.parseOutputs ?? parseComicDetectorTileOutputs;
+
   return {
     async runTile(pageRgba, tile, scoreThreshold = 0.35) {
       const chw = buildTileDetectorTensorData(pageRgba, tile);
-      const imageTensor = new ort.Tensor('float32', chw, [
+      const imageTensor = makeTensor('float32', chw, [
         1,
         3,
         tile.inputHeight,
         tile.inputWidth,
       ]);
-      const sizeTensor = new ort.Tensor(
+      const sizeTensor = makeTensor(
         'int64',
         BigInt64Array.from([BigInt(tile.inputWidth), BigInt(tile.inputHeight)]),
         [1, 2]
       );
 
+      let outputs: Record<string, any> | null = null;
       try {
-        const outputs = await session.run({
+        outputs = await session.run({
           images: imageTensor,
           orig_target_sizes: sizeTensor,
         });
@@ -200,7 +223,7 @@ export async function createComicDetectorSession(
           );
         }
 
-        return parseComicDetectorTileOutputs({
+        return parseTileOutputs({
           labels: labelsTensor.data as BigInt64Array,
           boxes: boxesTensor.data as Float32Array,
           scores: scoresTensor.data as Float32Array,
@@ -210,8 +233,7 @@ export async function createComicDetectorSession(
           scoreThreshold,
         });
       } finally {
-        imageTensor.dispose();
-        sizeTensor.dispose();
+        disposeOrtTensors(outputs, [imageTensor, sizeTensor]);
       }
     },
     async dispose() {

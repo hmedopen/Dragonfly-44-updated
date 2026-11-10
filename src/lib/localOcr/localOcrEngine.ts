@@ -3,7 +3,7 @@ import type {
   LocalOcrImageInput,
   LocalOcrScanResult,
 } from '../../types/localOcr.ts';
-import { resolveOcrLanguageRoute } from './languageRouter.ts';
+import { LanguageRouteError, resolveOcrLanguageRoute } from './languageRouter.ts';
 import {
   createDefaultModelAssetProvider,
   type LocalModelAssetProvider,
@@ -36,7 +36,11 @@ export interface LocalOcrEngineDeps {
   modelProvider?: LocalModelAssetProvider | null;
   createWorker?: () => WorkerLike;
   wasmPaths?: string;
+  cancellationTimeoutMs?: number;
+  restoreWorkerRuntime?: (worker: WorkerLike) => Promise<void> | void;
 }
+
+const DEFAULT_CANCELLATION_TIMEOUT_MS = 5000;
 
 function defaultCreateWorker(): WorkerLike {
   if (typeof Worker !== 'function') {
@@ -62,15 +66,55 @@ function createAbortError(message = 'Local OCR job was cancelled.'): Error {
   return err;
 }
 
+async function raceWithAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (signal?.aborted) {
+    void promise.catch(() => {});
+    throw createAbortError();
+  }
+  if (!signal) {
+    return promise;
+  }
+  return await new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      void promise.catch(() => {});
+      reject(createAbortError());
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (val) => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener('abort', onAbort);
+        resolve(val);
+      },
+      (err) => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener('abort', onAbort);
+        reject(err);
+      }
+    );
+  });
+}
+
 async function inputImageToBuffer(
   image: LocalOcrEngineOptions['image']
 ): Promise<{ buffer: ArrayBuffer; mimeType: string }> {
   if (typeof Blob !== 'undefined' && image instanceof Blob) {
     const buffer = await image.arrayBuffer();
+    if (buffer.byteLength === 0) {
+      throw new Error('Empty image Blob passed to local OCR engine.');
+    }
     return { buffer, mimeType: image.type || 'image/png' };
   }
   if (image && typeof image === 'object' && 'bytes' in image && image.bytes instanceof Uint8Array) {
     const imgInput = image as LocalOcrImageInput;
+    if (imgInput.bytes.byteLength === 0) {
+      throw new Error('Empty image bytes passed to local OCR engine.');
+    }
     const copy = new Uint8Array(imgInput.bytes.byteLength);
     copy.set(imgInput.bytes);
     return { buffer: copy.buffer, mimeType: imgInput.mimeType || 'image/png' };
@@ -117,7 +161,8 @@ function attachCanonicalProjection(serializable: SerializableLocalOcrResult): Lo
 
 /**
  * Worker-backed local OCR service.
- * Enforces 1 active page job at a time (sequential queue), strict cancellation,
+ * Enforces 1 active page job at a time (sequential queue), strict cancellation
+ * with worker acknowledgement or terminate-and-recreate recovery,
  * stale result immunity, and zero UI-thread ONNX execution.
  */
 export class LocalOcrEngineService {
@@ -125,17 +170,117 @@ export class LocalOcrEngineService {
   private worker: WorkerLike | null = null;
   private queueTail: Promise<void> = Promise.resolve();
   private activeJobId: string | null = null;
+  private activeForceCancel: ((err: Error) => void) | null = null;
+  private workerDetectorKey: string | null = null;
+  private workerOcrKey: string | null = null;
 
   constructor(deps: LocalOcrEngineDeps = {}) {
     this.deps = deps;
+  }
+
+  private getCancellationTimeoutMs(): number {
+    const raw = this.deps.cancellationTimeoutMs;
+    if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) {
+      return raw;
+    }
+    return DEFAULT_CANCELLATION_TIMEOUT_MS;
   }
 
   private getOrCreateWorker(): WorkerLike {
     if (!this.worker) {
       const factory = this.deps.createWorker || defaultCreateWorker;
       this.worker = factory();
+      this.workerDetectorKey = null;
+      this.workerOcrKey = null;
     }
     return this.worker;
+  }
+
+  private clearWorkerSessionState(targetWorker?: WorkerLike): void {
+    if (!targetWorker || this.worker === targetWorker) {
+      this.worker = null;
+      this.workerDetectorKey = null;
+      this.workerOcrKey = null;
+    }
+  }
+
+  private async terminateAndRecreateWorker(unresponsiveWorker: WorkerLike): Promise<void> {
+    try {
+      unresponsiveWorker.terminate();
+    } catch {
+      // Ignore termination error
+    }
+    this.clearWorkerSessionState(unresponsiveWorker);
+
+    const factory = this.deps.createWorker || defaultCreateWorker;
+    let replacement: WorkerLike | null = null;
+    try {
+      replacement = factory();
+      this.worker = replacement;
+      if (this.deps.restoreWorkerRuntime) {
+        await this.deps.restoreWorkerRuntime(replacement);
+      }
+    } catch {
+      if (replacement) {
+        try {
+          replacement.terminate();
+        } catch {
+          // Ignore cleanup error
+        }
+      }
+      this.clearWorkerSessionState(replacement ?? undefined);
+    }
+  }
+
+  public getActiveJobId(): string | null {
+    return this.activeJobId;
+  }
+
+  public getWorkerCachedModelKeys(): { detectorKey: string | null; ocrKey: string | null } {
+    return {
+      detectorKey: this.workerDetectorKey,
+      ocrKey: this.workerOcrKey,
+    };
+  }
+
+  private async resolveExpectedModelKey(
+    provider: LocalModelAssetProvider,
+    modelId: string,
+    currentlyLoadedKey: string | null
+  ): Promise<string | null> {
+    try {
+      const manifest = await provider.getManifest();
+      const entry = manifest?.models?.find((m) => m.modelId === modelId);
+      if (entry && entry.pinnedRevisions) {
+        const revs = Object.values(entry.pinnedRevisions);
+        if (revs.length > 0) {
+          const revKey = revs.map((r) => String(r).slice(0, 12)).join('_');
+          return `${modelId}@${revKey}`;
+        }
+      }
+    } catch {
+      // Fall through to status check
+    }
+
+    try {
+      const status = await provider.getStatus(modelId);
+      if (
+        status &&
+        !Array.isArray(status) &&
+        status.modelId === modelId &&
+        typeof status.installedRevision === 'string' &&
+        status.installedRevision
+      ) {
+        return `${modelId}@${status.installedRevision}`;
+      }
+    } catch {
+      // Fall through to active worker key check
+    }
+
+    if (this.worker && currentlyLoadedKey && currentlyLoadedKey.startsWith(`${modelId}@`)) {
+      return currentlyLoadedKey;
+    }
+    return null;
   }
 
   public async runPageOcr(options: LocalOcrEngineOptions): Promise<LocalOcrScanResult> {
@@ -143,14 +288,33 @@ export class LocalOcrEngineService {
       throw createAbortError();
     }
 
-    // Serialize page jobs conservatively: 1 active page at a time on CPU-only hardware
-    const runTask = async (): Promise<LocalOcrScanResult> => {
-      if (options.signal?.aborted) {
-        throw createAbortError();
-      }
+    let started = false;
+    let cancelledBeforeStart = false;
+    let callerSettled = false;
+    let resolveCaller!: (res: LocalOcrScanResult) => void;
+    let rejectCaller!: (err: Error) => void;
 
-      const route = resolveOcrLanguageRoute(options.languageHint);
-      const [detectorModelId, ocrModelId] = getRequiredModelIdsForRoute(route.routeId);
+    const callerPromise = new Promise<LocalOcrScanResult>((resolve, reject) => {
+      resolveCaller = resolve;
+      rejectCaller = reject;
+    });
+
+    const onPreStartAbort = () => {
+      if (started || cancelledBeforeStart || callerSettled) return;
+      cancelledBeforeStart = true;
+      callerSettled = true;
+      rejectCaller(createAbortError());
+    };
+    options.signal?.addEventListener('abort', onPreStartAbort, { once: true });
+
+    const executeActiveTask = async (): Promise<LocalOcrScanResult> => {
+      const route = resolveOcrLanguageRoute(options.languageHint, options.sampleText);
+      if (route.routeId === null || route.effectiveLanguage === null) {
+        throw new LanguageRouteError(route);
+      }
+      const resolvedRoute = route.routeId;
+      const effectiveLanguage = route.effectiveLanguage;
+      const [detectorModelId, ocrModelId] = getRequiredModelIdsForRoute(resolvedRoute);
 
       const provider =
         this.deps.modelProvider !== undefined
@@ -163,17 +327,41 @@ export class LocalOcrEngineService {
         );
       }
 
-      // Load required models explicitly — never silently substitute another language model
-      const [detectorAssets, ocrAssets] = await Promise.all([
-        provider.readModelAssets(detectorModelId),
-        provider.readModelAssets(ocrModelId),
-      ]);
+      // Check whether active worker already caches exact model+revision before reading from disk/IPC
+      const [expectedDetKey, expectedOcrKey] = await raceWithAbort(
+        Promise.all([
+          this.resolveExpectedModelKey(provider, detectorModelId, this.workerDetectorKey),
+          this.resolveExpectedModelKey(provider, ocrModelId, this.workerOcrKey),
+        ]),
+        options.signal
+      );
+
+      const detCacheHit =
+        this.worker !== null &&
+        expectedDetKey !== null &&
+        this.workerDetectorKey === expectedDetKey;
+      const ocrCacheHit =
+        this.worker !== null &&
+        expectedOcrKey !== null &&
+        this.workerOcrKey === expectedOcrKey;
+
+      // Load only uncached models explicitly — never silently substitute another language model
+      const [detectorAssets, ocrAssets] = await raceWithAbort(
+        Promise.all([
+          detCacheHit ? Promise.resolve(undefined) : provider.readModelAssets(detectorModelId),
+          ocrCacheHit ? Promise.resolve(undefined) : provider.readModelAssets(ocrModelId),
+        ]),
+        options.signal
+      );
 
       if (options.signal?.aborted) {
         throw createAbortError();
       }
 
-      const { buffer: imageBytes, mimeType } = await inputImageToBuffer(options.image);
+      const { buffer: imageBytes, mimeType } = await raceWithAbort(
+        inputImageToBuffer(options.image),
+        options.signal
+      );
       if (options.signal?.aborted) {
         throw createAbortError();
       }
@@ -184,26 +372,82 @@ export class LocalOcrEngineService {
 
       return await new Promise<LocalOcrScanResult>((resolve, reject) => {
         let settled = false;
+        let abortRequested = false;
+        let cancelTimer: ReturnType<typeof setTimeout> | null = null;
 
-        const cleanup = () => {
-          worker.removeEventListener('message', onMessage);
-          worker.removeEventListener('error', onError);
-          options.signal?.removeEventListener('abort', onAbort);
-          if (this.activeJobId === jobId) {
-            this.activeJobId = null;
+        const clearCancelTimer = () => {
+          if (cancelTimer !== null) {
+            clearTimeout(cancelTimer);
+            cancelTimer = null;
           }
         };
 
-        const onAbort = () => {
+        const cleanup = () => {
+          clearCancelTimer();
+          worker.removeEventListener('message', onMessage);
+          worker.removeEventListener('error', onError);
+          options.signal?.removeEventListener('abort', onActiveAbort);
+          if (this.activeJobId === jobId) {
+            this.activeJobId = null;
+          }
+          if (this.activeForceCancel === forceCancelOnDispose) {
+            this.activeForceCancel = null;
+          }
+        };
+
+        const detKey = detectorAssets
+          ? `${detectorAssets.modelId}@${detectorAssets.revisionLabel}`
+          : (expectedDetKey ?? `${detectorModelId}@cached`);
+        const ocrKey = ocrAssets
+          ? `${ocrAssets.modelId}@${ocrAssets.revisionLabel}`
+          : (expectedOcrKey ?? `${ocrModelId}@cached`);
+
+        const syncWorkerKeys = (msg: WorkerOcrResponse) => {
+          if ('loadedModelKeys' in msg && msg.loadedModelKeys) {
+            this.workerDetectorKey = msg.loadedModelKeys.detectorKey;
+            this.workerOcrKey = msg.loadedModelKeys.ocrKey;
+          } else if (msg.type === 'job_result') {
+            this.workerDetectorKey = detKey;
+            this.workerOcrKey = ocrKey;
+          } else {
+            this.workerDetectorKey = null;
+            this.workerOcrKey = null;
+          }
+        };
+
+        const forceCancelOnDispose = (err: Error) => {
           if (settled) return;
           settled = true;
+          cleanup();
+          reject(err);
+        };
+        this.activeForceCancel = forceCancelOnDispose;
+
+        const handleCancelTimeout = async () => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          await this.terminateAndRecreateWorker(worker);
+          reject(
+            createAbortError(
+              'Local OCR job was cancelled; unresponsive worker was terminated and recreated.'
+            )
+          );
+        };
+
+        const onActiveAbort = () => {
+          if (settled || abortRequested) return;
+          abortRequested = true;
           try {
             worker.postMessage({ type: 'cancel_job', jobId });
           } catch {
-            // Ignore postMessage failure if worker already terminated
+            // Worker cannot accept messages -> terminate & recreate before releasing queue
+            void handleCancelTimeout();
+            return;
           }
-          cleanup();
-          reject(createAbortError());
+          cancelTimer = setTimeout(() => {
+            void handleCancelTimeout();
+          }, this.getCancellationTimeoutMs());
         };
 
         const onMessage = (ev: MessageEvent<WorkerOcrResponse> | { data: WorkerOcrResponse }) => {
@@ -213,13 +457,14 @@ export class LocalOcrEngineService {
             return;
           }
           if (settled) {
-            // Already cancelled/settled -> never publish stale results
+            // Already settled -> never publish stale results
             return;
           }
           settled = true;
           cleanup();
+          syncWorkerKeys(msg);
 
-          if (msg.type === 'job_cancelled') {
+          if (abortRequested || msg.type === 'job_cancelled') {
             reject(createAbortError());
             return;
           }
@@ -236,13 +481,27 @@ export class LocalOcrEngineService {
           if (settled) return;
           settled = true;
           cleanup();
-          this.dispose().catch(() => {});
+          try {
+            worker.terminate();
+          } catch {
+            // Ignore termination error
+          }
+          this.clearWorkerSessionState(worker);
+          if (abortRequested) {
+            reject(createAbortError());
+            return;
+          }
           reject(new Error(errEvent?.message || 'Local OCR worker crashed or failed to initialize.'));
         };
 
         worker.addEventListener('message', onMessage);
         worker.addEventListener('error', onError);
-        options.signal?.addEventListener('abort', onAbort, { once: true });
+        options.signal?.addEventListener('abort', onActiveAbort, { once: true });
+
+        if (options.signal?.aborted) {
+          onActiveAbort();
+          return;
+        }
 
         const request: WorkerOcrRequest = {
           type: 'run_page_ocr',
@@ -251,37 +510,86 @@ export class LocalOcrEngineService {
           imageBytes,
           mimeType,
           languageHint: options.languageHint,
-          resolvedRoute: route.routeId,
+          resolvedRoute: resolvedRoute,
+          effectiveLanguage: effectiveLanguage,
           readingConvention: options.readingConvention ?? 'auto',
-          detectorAssets,
-          ocrAssets,
+          detectorModelKey: detKey,
+          ocrModelKey: ocrKey,
+          ...(detectorAssets ? { detectorAssets } : {}),
+          ...(ocrAssets ? { ocrAssets } : {}),
           wasmPaths: this.deps.wasmPaths ?? defaultWasmPaths(),
           diagnostics: options.diagnostics,
         };
 
-        // Transfer only the image ArrayBuffer; keep model Uint8Arrays reusable across pages
-        worker.postMessage(request, [imageBytes]);
+        try {
+          // Transfer only the per-page image ArrayBuffer
+          worker.postMessage(request, [imageBytes]);
+        } catch (err) {
+          if (!settled) {
+            settled = true;
+            cleanup();
+            reject(err instanceof Error ? err : new Error(String(err)));
+          }
+        }
       });
     };
 
-    const resultPromise = this.queueTail.then(runTask, runTask);
-    this.queueTail = resultPromise.then(
+    const queueStep = async (): Promise<void> => {
+      options.signal?.removeEventListener('abort', onPreStartAbort);
+      if (cancelledBeforeStart || options.signal?.aborted) {
+        if (!callerSettled) {
+          callerSettled = true;
+          rejectCaller(createAbortError());
+        }
+        return;
+      }
+
+      started = true;
+      try {
+        const res = await executeActiveTask();
+        if (!callerSettled) {
+          callerSettled = true;
+          resolveCaller(res);
+        }
+      } catch (err) {
+        if (!callerSettled) {
+          callerSettled = true;
+          rejectCaller(err instanceof Error ? err : new Error(String(err)));
+        }
+      }
+    };
+
+    const queueEntry = this.queueTail.then(queueStep, queueStep);
+    this.queueTail = queueEntry.then(
       () => undefined,
       () => undefined
     );
-    return resultPromise;
+
+    return callerPromise;
   }
 
   public async dispose(): Promise<void> {
-    if (!this.worker) return;
     const worker = this.worker;
-    this.worker = null;
+    const forceCancel = this.activeForceCancel;
+    this.clearWorkerSessionState();
+    this.activeForceCancel = null;
+    this.activeJobId = null;
+
+    if (forceCancel) {
+      forceCancel(createAbortError('Local OCR engine was disposed.'));
+    }
+
+    if (!worker) return;
     try {
       worker.postMessage({ type: 'dispose' });
     } catch {
       // Ignore if already dead
     }
-    worker.terminate();
+    try {
+      worker.terminate();
+    } catch {
+      // Ignore if already dead
+    }
   }
 }
 

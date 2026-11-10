@@ -103,7 +103,8 @@ function decodePngRgba(buf) {
 
 async function main() {
   const userDataDir = process.env.FOLIO_OCR_CACHE_DIR || path.join(os.tmpdir(), 'folio-script-ocr-cache');
-  const manager = createModelManager({ userDataDir });
+  // Smoke test runs in development mode to exercise pinned local models
+  const manager = createModelManager({ userDataDir, isProduction: false });
   const requiredModels = [
     'comic-detector-v4-s-int8',
     'ppocr-v6-small-en',
