@@ -238,6 +238,7 @@ export interface LocalOcrEngineOptions {
   /** Optional text/script evidence available prior to OCR for automatic language routing. */
   sampleText?: string;
   readingConvention?: ReadingConvention;
+  correlationId?: string;
   signal?: AbortSignal;
   diagnostics?: LocalOcrDiagnosticOptions;
 }

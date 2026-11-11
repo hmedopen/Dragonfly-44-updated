@@ -1,5 +1,6 @@
 import { savePageBlob } from './db';
 import type { PageMetadata } from '../types';
+import { createDiagnosticCorrelationId, emitDiagnosticBoundary } from '../lib/diagnosticTap';
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'bmp', 'avif']);
 
@@ -202,6 +203,20 @@ export async function ingestImageFiles(files: File[], startIndex: number = 1): P
     return { pages: [], count: 0 };
   }
 
+  const correlationId = createDiagnosticCorrelationId('ingest');
+  const start = Date.now();
+  emitDiagnosticBoundary({
+    subsystem: 'electron-fs',
+    component: 'FileIngestionService',
+    operation: 'ingestImageFiles',
+    eventType: 'io',
+    severity: 'info',
+    status: 'running',
+    correlationId,
+    payload: { fileCount: files.length, startIndex },
+    explanation: `Importing ${files.length} image file(s) into IndexedDB.`,
+  });
+
   // 1. Natural sort files: page_2.png strictly precedes page_10.png
   const sortedFiles = sortFilesNaturally(files);
 
@@ -227,6 +242,19 @@ export async function ingestImageFiles(files: File[], startIndex: number = 1): P
       height: dims.height,
     });
   }
+
+  emitDiagnosticBoundary({
+    subsystem: 'electron-fs',
+    component: 'FileIngestionService',
+    operation: 'ingestImageFiles',
+    eventType: 'io',
+    severity: 'healthy',
+    status: 'succeeded',
+    durationMs: Date.now() - start,
+    correlationId,
+    payload: { importedCount: pages.length },
+    explanation: `Imported and stored ${pages.length} image page(s) in ${Date.now() - start}ms.`,
+  });
 
   return {
     pages,

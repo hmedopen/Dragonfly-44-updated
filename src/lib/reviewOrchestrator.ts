@@ -26,6 +26,7 @@ import { evaluateVisualAndScan } from './reviewScanEvaluator';
 import { evaluateTranslationAndLinguistics } from './reviewTranslationEvaluator';
 import { normalizeAndDeduplicateFindings } from './reviewNormalizer';
 import { evaluateChapterContinuity } from './reviewChapterContinuity';
+import { emitDiagnosticBoundary } from './diagnosticTap';
 
 export interface PageTarget {
   pageId: string;
@@ -216,6 +217,20 @@ export async function runReviewEngine(
 ): Promise<ReviewJobResult> {
   const { scope, pages, strictness = 'balanced', apiKey, onPageProgress } = options;
   const jobId = `job-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const reviewStart = Date.now();
+
+  emitDiagnosticBoundary({
+    subsystem: 'ai-services',
+    component: 'ReviewOrchestrator',
+    operation: `review:${scope}`,
+    eventType: 'lifecycle',
+    severity: 'info',
+    status: 'running',
+    correlationId: jobId,
+    identifiers: { chapterId: options.chapterId, jobId },
+    payload: { scope, pageCount: pages.length, strictness },
+    explanation: `Started ${scope} QC review across ${pages.length} page(s) (${strictness} strictness).`,
+  });
 
   const pageSummaries: Record<string, string> = {};
   const allFindings: ReviewFinding[] = [];
@@ -304,6 +319,25 @@ export async function runReviewEngine(
       : failedCount > 0 || hadPartial
       ? 'partial'
       : 'completed';
+
+  emitDiagnosticBoundary({
+    subsystem: 'ai-services',
+    component: 'ReviewOrchestrator',
+    operation: `review:${scope}`,
+    eventType: 'lifecycle',
+    severity: overallStatus === 'failed' ? 'error' : overallStatus === 'partial' ? 'warning' : 'healthy',
+    status: overallStatus === 'failed' ? 'failed' : overallStatus === 'partial' ? 'degraded' : 'succeeded',
+    durationMs: Date.now() - reviewStart,
+    correlationId: jobId,
+    identifiers: { chapterId: options.chapterId, jobId },
+    payload: {
+      overallStatus,
+      findingsCount: allFindings.length,
+      failedCount,
+      passedCount,
+    },
+    explanation: `QC review (${scope}) finished with status "${overallStatus}", ${allFindings.length} finding(s), and ${failedCount} failed page(s).`,
+  });
 
   return {
     jobId,

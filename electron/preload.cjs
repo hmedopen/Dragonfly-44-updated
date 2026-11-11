@@ -10,6 +10,14 @@ const trainingStudioBridge = isDev
     }
   : undefined;
 
+const diagnosticsBridge = isDev
+  ? {
+      getRuntimeInfo: () => ipcRenderer.invoke('diagnostics:getRuntimeInfo'),
+      inspectModelCache: () => ipcRenderer.invoke('diagnostics:inspectModelCache'),
+      exportReportFile: (payload) => ipcRenderer.invoke('diagnostics:exportReportFile', payload),
+    }
+  : undefined;
+
 const localModelsBridge = {
   getManifest: () => ipcRenderer.invoke('localModels:getManifest'),
   getStatus: (modelId) => ipcRenderer.invoke('localModels:getStatus', modelId),
@@ -30,6 +38,7 @@ const appBridge = {
   version: '1.0.0',
   isDev,
   trainingStudio: trainingStudioBridge,
+  diagnostics: diagnosticsBridge,
   localModels: localModelsBridge,
 };
 

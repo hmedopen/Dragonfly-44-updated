@@ -3,6 +3,7 @@ import { savePageBubbles, getPageBubbles } from '../services/db';
 import { getRollingContextForPage } from '../services/intelligence';
 import type { PageScanStatus, GeminiModelKey } from '../types/workbench';
 import { GEMINI_MODEL_PROFILES } from '../types/workbench';
+import { emitDiagnosticBoundary } from './diagnosticTap';
 
 export interface QueueItem {
   pageId: string;
@@ -148,6 +149,30 @@ export class ScanQueueManager {
 
     this.notify();
 
+    emitDiagnosticBoundary({
+      subsystem: 'scanning-ocr',
+      component: 'ScanQueueManager',
+      operation: items.length > 1 ? 'scanAllEnqueue' : 'scanPageEnqueue',
+      eventType: 'lifecycle',
+      severity: 'info',
+      status: items.length > 0 ? 'running' : 'skipped',
+      correlationId: operationId,
+      identifiers: {
+        chapterId: items[0]?.chapterId,
+        pageId: items.length === 1 ? items[0]?.pageId : undefined,
+      },
+      payload: {
+        totalPages: items.length,
+        pageIds: sortedItems.map((i) => i.pageId),
+      },
+      explanation:
+        items.length > 1
+          ? `Enqueued batch scan across ${items.length} page(s).`
+          : items.length === 1
+          ? `Enqueued single-page scan for page ${items[0].pageIndex} (${items[0].pageId}).`
+          : 'Enqueued empty scan list.',
+    });
+
     if (items.length > 0) {
       void this.processQueueSequentially(operationId, onPageSuccess);
     }
@@ -158,6 +183,7 @@ export class ScanQueueManager {
    * Propagates signal cancellation to active HTTP requests and local OCR worker (F-07).
    */
   public cancel() {
+    const cancelledOpId = this.activeOperationId || undefined;
     this.isCancelled = true;
     this.operationSequence += 1;
     this.activeOperationId = null;
@@ -172,6 +198,16 @@ export class ScanQueueManager {
         this.pageStatuses[pageId] = 'unscanned';
       }
     }
+    emitDiagnosticBoundary({
+      subsystem: 'scanning-ocr',
+      component: 'ScanQueueManager',
+      operation: 'scanQueueCancel',
+      eventType: 'lifecycle',
+      severity: 'warning',
+      status: 'cancelled',
+      correlationId: cancelledOpId,
+      explanation: 'Scan queue operation was cancelled by user or superseded.',
+    });
     this.notify();
   }
 
@@ -236,10 +272,33 @@ export class ScanQueueManager {
         if (this.isCancelled || currentSignal.aborted || err?.name === 'AbortError') {
           console.log(`[ScanQueue] Page ${currentItem.pageId} cancelled.`);
           this.pageStatuses[currentItem.pageId] = 'unscanned';
+          emitDiagnosticBoundary({
+            subsystem: 'scanning-ocr',
+            component: 'ScanQueueManager',
+            operation: 'scanQueuePage',
+            eventType: 'lifecycle',
+            severity: 'warning',
+            status: 'cancelled',
+            correlationId: operationId,
+            identifiers: { pageId: currentItem.pageId, pageIndex: currentItem.pageIndex },
+            explanation: `Page ${currentItem.pageIndex} scan was cancelled.`,
+          });
         } else {
           console.error(`[ScanQueue] Unrecoverable failure for page ${currentItem.pageId}:`, err);
           this.pageStatuses[currentItem.pageId] = 'error';
           this.pageErrors[currentItem.pageId] = err?.message || 'Scan failed';
+          emitDiagnosticBoundary({
+            subsystem: 'scanning-ocr',
+            component: 'ScanQueueManager',
+            operation: 'scanQueuePage',
+            eventType: 'error',
+            severity: 'error',
+            status: 'failed',
+            correlationId: operationId,
+            identifiers: { pageId: currentItem.pageId, pageIndex: currentItem.pageIndex },
+            explanation: `Page ${currentItem.pageIndex} failed in scan queue: ${err?.message || 'Scan failed'}.`,
+            error: err,
+          });
         }
         this.notify(currentItem.pageIndex);
       }
@@ -260,6 +319,29 @@ export class ScanQueueManager {
 
     this.isProcessing = false;
     this.abortController = null;
+    const errCount = Object.keys(this.pageErrors).length;
+    const partialCount = this.partialPageIds.size;
+    emitDiagnosticBoundary({
+      subsystem: 'scanning-ocr',
+      component: 'ScanQueueManager',
+      operation: 'scanQueueComplete',
+      eventType: 'lifecycle',
+      severity: errCount > 0 ? 'error' : partialCount > 0 ? 'warning' : 'healthy',
+      status: errCount > 0 ? 'failed' : partialCount > 0 ? 'degraded' : 'succeeded',
+      correlationId: operationId,
+      payload: {
+        completedCount: this.completedCount,
+        totalCount: this.totalCount,
+        errorCount: errCount,
+        partialCount,
+      },
+      explanation:
+        errCount > 0
+          ? `Scan queue finished with ${errCount} failed page(s) out of ${this.totalCount}.`
+          : partialCount > 0
+          ? `Scan queue completed ${this.completedCount}/${this.totalCount} pages with ${partialCount} partial result(s).`
+          : `Scan queue completed all ${this.completedCount}/${this.totalCount} page(s) successfully.`,
+    });
     this.notify();
   }
 
@@ -327,6 +409,7 @@ export class ScanQueueManager {
         pageIndex: item.pageIndex,
         ...item.options,
         precedingDialogueSnippet: precedingSnippet,
+        correlationId: operationId,
         signal,
       });
 
@@ -382,6 +465,19 @@ export class ScanQueueManager {
         // Exponential backoff: delay = 2000 * 2^attempt + random(1000)
         const delay = 2000 * Math.pow(2, attempt) + Math.random() * 1000;
         console.log(`[ScanQueue] Rate limit reached. Backing off for ${(delay / 1000).toFixed(1)}s...`);
+        emitDiagnosticBoundary({
+          subsystem: 'ai-services',
+          component: 'ScanQueueManager',
+          operation: 'rateLimitRetry',
+          eventType: 'decision',
+          severity: 'warning',
+          status: 'running',
+          correlationId: operationId,
+          identifiers: { pageId: item.pageId, pageIndex: item.pageIndex },
+          payload: { attempt: attempt + 1, delayMs: Math.round(delay) },
+          explanation: `Rate limit or overload detected on page ${item.pageIndex}; backing off ${Math.round(delay)}ms before retry #${attempt + 1}.`,
+          error: err,
+        });
         await this.waitInterruptibly(delay, operationId, signal);
         if (this.isCancelled || signal.aborted || this.activeOperationId !== operationId) {
           return;

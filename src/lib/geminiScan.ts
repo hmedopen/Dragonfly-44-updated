@@ -13,10 +13,15 @@ import { loadTyperSettings } from '../types/typers';
 import { compileInstructions } from './instructionCompiler';
 import { humanizeArabicText } from './arabicHumanizer';
 import { validateSingleBubbleOutput } from './translationValidator';
-import { scanMangaPageHybridWithMeta, type HybridScanDependencies } from './hybridScan';
+import {
+  scanMangaPageHybridWithMeta,
+  type HybridScanDependencies,
+  type HybridScanMetadata,
+} from './hybridScan';
 import { mergeScanWithExistingState } from './rescanMerge';
 import { batchTranslateBubbles } from './batchTranslation';
 import { isMeaningfulLinguisticContent } from './mangaScanner';
+import { createDiagnosticCorrelationId, emitDiagnosticBoundary } from './diagnosticTap';
 
 export interface ScanPageDeps {
   getPageBubbles?: typeof getPageBubbles;
@@ -51,6 +56,7 @@ export interface ScanPageOptions {
   enableCropRetries?: boolean;
   cropRetryLimit?: number;
   ocrConfidenceThreshold?: number;
+  correlationId?: string;
   signal?: AbortSignal;
   hybridDeps?: HybridScanDependencies;
   scanDeps?: ScanPageDeps;
@@ -79,6 +85,89 @@ export async function blobToBase64(blob: Blob): Promise<string> {
     reader.onerror = reject;
     reader.readAsDataURL(blob);
   });
+}
+
+export const HYBRID_OCR_DIAGNOSTIC_PREFIX = '[Folio Hybrid OCR Diagnostic]';
+
+export interface HybridOcrDiagnosticEntry {
+  pageId: string;
+  pageIndex: number;
+  ocrSource: HybridScanMetadata['ocrSource'];
+  fallbackReason?: HybridScanMetadata['fallbackReason'];
+  resolvedRoute: HybridScanMetadata['resolvedRoute'];
+  effectiveLanguage: HybridScanMetadata['effectiveLanguage'];
+  localCandidateCount: number;
+  keptCandidateCount: number;
+  verifiedCandidateCount: number;
+  addedRegionCount: number;
+  droppedCandidateCount: number;
+  geminiContextFailed: boolean;
+  warnings: string[];
+}
+
+function sanitizeDiagnosticWarning(warning: string): string {
+  return warning
+    .replace(/([?&]key=)[^&\s"']+/gi, '$1[REDACTED]')
+    .replace(/\bAIza[0-9A-Za-z_-]{10,}\b/g, '[REDACTED_API_KEY]')
+    .replace(/(Bearer\s+)[A-Za-z0-9._-]+/gi, '$1[REDACTED]');
+}
+
+/**
+ * Formats a safe diagnostic payload from HybridScanMetadata without exposing sensitive fields.
+ */
+export function buildHybridOcrDiagnosticEntry(
+  pageId: string,
+  pageIndex: number,
+  meta: HybridScanMetadata
+): HybridOcrDiagnosticEntry {
+  return {
+    pageId,
+    pageIndex,
+    ocrSource: meta.ocrSource,
+    ...(meta.fallbackReason !== undefined ? { fallbackReason: meta.fallbackReason } : {}),
+    resolvedRoute: meta.resolvedRoute,
+    effectiveLanguage: meta.effectiveLanguage,
+    localCandidateCount: meta.localCandidateCount,
+    keptCandidateCount: meta.keptCandidateCount,
+    verifiedCandidateCount: meta.verifiedCandidateCount,
+    addedRegionCount: meta.addedRegionCount,
+    droppedCandidateCount: meta.droppedCandidateCount,
+    geminiContextFailed: meta.geminiContextFailed,
+    warnings: (Array.isArray(meta.warnings) ? meta.warnings : []).map((warning) =>
+      sanitizeDiagnosticWarning(String(warning))
+    ),
+  };
+}
+
+function logHybridOcrDiagnosticIfDev(
+  pageId: string,
+  pageIndex: number,
+  meta: HybridScanMetadata
+): void {
+  if (!(typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.DEV)) {
+    return;
+  }
+
+  try {
+    const entry = buildHybridOcrDiagnosticEntry(pageId, pageIndex, meta);
+    const summaryParts = [
+      HYBRID_OCR_DIAGNOSTIC_PREFIX,
+      `pageIndex=${entry.pageIndex}`,
+      `pageId=${entry.pageId}`,
+      `ocrSource=${entry.ocrSource}`,
+    ];
+    if (entry.fallbackReason !== undefined) {
+      summaryParts.push(`fallbackReason=${entry.fallbackReason}`);
+    }
+    summaryParts.push(
+      `resolvedRoute=${entry.resolvedRoute ?? 'null'}`,
+      `effectiveLanguage=${entry.effectiveLanguage ?? 'null'}`,
+      `warnings=${entry.warnings.length}`
+    );
+    console.log(summaryParts.join(' | '), entry);
+  } catch {
+    // Diagnostic logging must never alter or interrupt scanning behavior.
+  }
 }
 
 /**
@@ -110,10 +199,32 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
     enableCropRetries,
     cropRetryLimit = 3,
     ocrConfidenceThreshold = 0.65,
+    correlationId: providedCorrelationId,
     signal,
     hybridDeps,
     scanDeps,
   } = options;
+
+  const correlationId = providedCorrelationId || createDiagnosticCorrelationId(`page-${pageIndex}`);
+  const scanStart = Date.now();
+
+  emitDiagnosticBoundary({
+    subsystem: 'scanning-ocr',
+    component: 'GeminiScanOrchestrator',
+    operation: 'scanPageWithGemini',
+    eventType: 'lifecycle',
+    severity: 'info',
+    status: 'running',
+    correlationId,
+    identifiers: { projectId: projectId || undefined, chapterId, pageId, pageIndex },
+    payload: {
+      selectedModel: String(selectedModel),
+      sourceLanguageHint,
+      readingConvention,
+      includeSFX,
+    },
+    explanation: `Started scan and translation pipeline for page ${pageIndex} (${pageId}).`,
+  });
 
   const loadBubbles = scanDeps?.getPageBubbles ?? getPageBubbles;
   const persistBubbles = scanDeps?.savePageBubbles ?? savePageBubbles;
@@ -151,9 +262,12 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
     enableTargetedRetries: shouldRetryCrops,
     maxRetries: cropRetryLimit,
     ocrConfidenceThreshold,
+    correlationId,
     signal,
     hybridDeps,
   });
+
+  logHybridOcrDiagnosticIfDev(pageId, pageIndex, hybridOutcome.meta);
 
   const scanResult = hybridOutcome.scanResult;
   const warnings = [...hybridOutcome.meta.warnings];
@@ -206,6 +320,7 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
           chapterIntelligence,
           includeSFX,
           rollingContextSnippet: precedingDialogueSnippet,
+          correlationId,
           signal,
         });
 
@@ -222,6 +337,18 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
         }
         translationSuccess = false;
         translationFailureReason = `Translation failed (${err?.message || 'unknown error'}); extracted source text was preserved.`;
+        emitDiagnosticBoundary({
+          subsystem: 'translation',
+          component: 'GeminiScanOrchestrator',
+          operation: 'batchTranslation',
+          eventType: 'error',
+          severity: 'warning',
+          status: 'degraded',
+          correlationId,
+          identifiers: { pageId, pageIndex },
+          explanation: `Translation failed on page ${pageIndex}; extracted source text was preserved.`,
+          error: err,
+        });
       }
     }
   }
@@ -278,6 +405,19 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
   await persistScan(pageId, finalScanRecord);
   await persistBubbles(pageId, finalBubbles);
 
+  emitDiagnosticBoundary({
+    subsystem: 'data-storage',
+    component: 'GeminiScanOrchestrator',
+    operation: 'persistPageResults',
+    eventType: 'io',
+    severity: 'info',
+    status: 'succeeded',
+    correlationId,
+    identifiers: { pageId, pageIndex },
+    payload: { bubbleCount: finalBubbles.length, scanStatus: finalScanRecord.status },
+    explanation: `Database accepted ${finalBubbles.length} bubble(s) and canonical scan record (${finalScanRecord.status}) for page ${pageIndex}.`,
+  });
+
   // 7. Ingest newly detected entities into Chapter Intelligence (System #5)
   if (
     chapterId &&
@@ -309,6 +449,28 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
       console.warn('[GeminiScan] Could not ingest page intelligence:', e);
     }
   }
+
+  emitDiagnosticBoundary({
+    subsystem: 'scanning-ocr',
+    component: 'GeminiScanOrchestrator',
+    operation: 'scanPageWithGemini',
+    eventType: 'lifecycle',
+    severity: translationSuccess && hybridOutcome.meta.ocrSource !== 'local_partial' ? 'healthy' : 'warning',
+    status: translationSuccess && hybridOutcome.meta.ocrSource !== 'local_partial' ? 'succeeded' : 'degraded',
+    durationMs: Date.now() - scanStart,
+    correlationId,
+    identifiers: { projectId: projectId || undefined, chapterId, pageId, pageIndex },
+    payload: {
+      ocrSource: hybridOutcome.meta.ocrSource,
+      fallbackReason: hybridOutcome.meta.fallbackReason,
+      bubbleCount: finalBubbles.length,
+      translationSuccess,
+      warningsCount: warnings.length,
+    },
+    explanation: translationSuccess
+      ? `Page ${pageIndex} scan completed via ${hybridOutcome.meta.ocrSource} with ${finalBubbles.length} dialogue bubble(s).`
+      : `Page ${pageIndex} scan completed partially (${hybridOutcome.meta.ocrSource}): translation did not succeed, source text preserved.`,
+  });
 
   return {
     bubbles: finalBubbles,
@@ -433,6 +595,21 @@ export async function translateSingleBubbleWithGemini(
 
   const effectiveModel = selectedModel || 'gemini-3.8-flash';
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${effectiveModel}:generateContent?key=${apiKey}`;
+  const correlationId = createDiagnosticCorrelationId('single-bubble');
+  const tStart = Date.now();
+
+  emitDiagnosticBoundary({
+    subsystem: 'translation',
+    component: 'SingleBubbleTranslator',
+    operation: 'translateSingleBubble',
+    eventType: 'lifecycle',
+    severity: 'info',
+    status: 'running',
+    correlationId,
+    identifiers: { projectId: projectId || undefined, chapterId, pageId, bubbleId: bubble.id, modelId: String(effectiveModel) },
+    payload: { hasSource: Boolean(bubble.sourceText?.trim()), eloquenceLevel, translationFidelity },
+    explanation: `Requested single-bubble translation for bubble #${bubble.index} using ${effectiveModel}.`,
+  });
 
   const hasSource = Boolean(bubble.sourceText && bubble.sourceText.trim().length > 0);
   let userParts: any[] = [];
@@ -490,6 +667,20 @@ export async function translateSingleBubbleWithGemini(
   if (!response.ok) {
     const errorBody = await response.json().catch(() => null);
     const errorMsg = errorBody?.error?.message || `HTTP ${response.status}: ${response.statusText}`;
+    emitDiagnosticBoundary({
+      subsystem: 'ai-services',
+      component: 'GeminiApiClient',
+      operation: 'translateSingleBubbleRequest',
+      eventType: 'io',
+      severity: 'error',
+      status: 'failed',
+      durationMs: Date.now() - tStart,
+      correlationId,
+      identifiers: { pageId, bubbleId: bubble.id, modelId: String(effectiveModel) },
+      payload: { httpStatus: response.status },
+      explanation: `Gemini single-bubble request failed with HTTP ${response.status}: ${errorMsg}`,
+      error: new Error(errorMsg),
+    });
     throw new Error(errorMsg);
   }
 
@@ -499,7 +690,21 @@ export async function translateSingleBubbleWithGemini(
   // Validate structural output locally
   const validated = validateSingleBubbleOutput(rawText || '', bubble.sourceText);
   if (!validated.isValid || !validated.data) {
-    throw new Error(validated.errors[0] || 'Failed to parse structured JSON from Gemini response.');
+    const errMsg = validated.errors[0] || 'Failed to parse structured JSON from Gemini response.';
+    emitDiagnosticBoundary({
+      subsystem: 'translation',
+      component: 'SingleBubbleTranslator',
+      operation: 'validateSingleBubbleOutput',
+      eventType: 'error',
+      severity: 'error',
+      status: 'failed',
+      durationMs: Date.now() - tStart,
+      correlationId,
+      identifiers: { pageId, bubbleId: bubble.id },
+      explanation: `Single-bubble translation validation failed: ${errMsg}`,
+      error: new Error(errMsg),
+    });
+    throw new Error(errMsg);
   }
 
   const rawArabic = validated.data.translatedText;
@@ -511,6 +716,24 @@ export async function translateSingleBubbleWithGemini(
         isDialectActive: compiled.isDialectActive,
       })
     : rawArabic;
+
+  emitDiagnosticBoundary({
+    subsystem: 'translation',
+    component: 'SingleBubbleTranslator',
+    operation: 'translateSingleBubble',
+    eventType: 'lifecycle',
+    severity: 'healthy',
+    status: 'succeeded',
+    durationMs: Date.now() - tStart,
+    correlationId,
+    identifiers: { pageId, bubbleId: bubble.id, modelId: String(effectiveModel) },
+    payload: {
+      isHumanizerEnabled,
+      rawTranslatedText: rawArabic,
+      humanizedTranslatedText: humanizedArabic,
+    },
+    explanation: `Translated bubble #${bubble.index} in ${Date.now() - tStart}ms.`,
+  });
 
   return {
     sourceText: validated.data.sourceText,

@@ -31,6 +31,7 @@ import type {
   ReviewSeverity,
   ReviewDomain,
 } from '../types/review';
+import { emitDiagnosticBoundary } from '../lib/diagnosticTap';
 
 const DB_NAME = 'dragonfly44_db';
 export const DB_VERSION = 8;
@@ -184,11 +185,31 @@ export function getDatabase(): Promise<IDBDatabase> {
     };
 
     request.onsuccess = () => {
+      emitDiagnosticBoundary({
+        subsystem: 'data-storage',
+        component: 'IndexedDbDriver',
+        operation: 'openDatabase',
+        eventType: 'lifecycle',
+        severity: 'healthy',
+        status: 'succeeded',
+        payload: { dbName: DB_NAME, version: request.result.version, storeCount: request.result.objectStoreNames.length },
+        explanation: `Opened IndexedDB "${DB_NAME}" v${request.result.version} (${request.result.objectStoreNames.length} stores).`,
+      });
       resolve(request.result);
     };
 
     request.onerror = () => {
       dbPromise = null;
+      emitDiagnosticBoundary({
+        subsystem: 'data-storage',
+        component: 'IndexedDbDriver',
+        operation: 'openDatabase',
+        eventType: 'error',
+        severity: 'critical',
+        status: 'failed',
+        explanation: `Failed to open IndexedDB "${DB_NAME}": ${request.error?.message || 'Unknown DB error'}.`,
+        error: request.error,
+      });
       reject(request.error);
     };
   });

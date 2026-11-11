@@ -20,6 +20,7 @@ import { compileInstructions } from './instructionCompiler';
 import { humanizeArabicText } from './arabicHumanizer';
 import { extractCleanJson } from './translationValidator';
 import { assembleTaskTrainingContext } from './training/trainingPromptInjection';
+import { createDiagnosticCorrelationId, emitDiagnosticBoundary } from './diagnosticTap';
 
 export interface BatchTranslateOptions {
   bubbles: BubbleItem[];
@@ -37,6 +38,7 @@ export interface BatchTranslateOptions {
   chapterIntelligence?: ChapterIntelligence | null;
   includeSFX?: boolean;
   rollingContextSnippet?: string;
+  correlationId?: string;
   signal?: AbortSignal;
 }
 
@@ -72,9 +74,12 @@ export async function batchTranslateBubbles(
     chapterIntelligence,
     includeSFX,
     rollingContextSnippet,
+    correlationId: providedCorrelationId,
     signal,
   } = options;
 
+  const correlationId = providedCorrelationId || createDiagnosticCorrelationId('batch-trans');
+  const transStart = Date.now();
   const translationMap = new Map<string, BatchTranslationItemResult>();
 
   // Filter bubbles that actually have source text and need translation:
@@ -191,6 +196,20 @@ Return strictly pure JSON with no markdown wrapping:
       const errText = await response.text().catch(() => '');
       const errMsg = `[BatchTranslation] Translation call returned HTTP ${response.status}: ${errText}`;
       console.warn(errMsg);
+      emitDiagnosticBoundary({
+        subsystem: 'translation',
+        component: 'BatchTranslator',
+        operation: 'batchTranslateBubbles',
+        eventType: 'error',
+        severity: 'error',
+        status: 'failed',
+        durationMs: Date.now() - transStart,
+        correlationId,
+        identifiers: { modelId: selectedModel },
+        payload: { httpStatus: response.status, requestedCount: pendingBubbles.length },
+        explanation: `Batch translation request failed with HTTP ${response.status} for ${pendingBubbles.length} bubble(s).`,
+        error: new Error(errMsg),
+      });
       return {
         success: false,
         translationMap,
@@ -245,6 +264,24 @@ Return strictly pure JSON with no markdown wrapping:
         });
       }
     }
+
+    emitDiagnosticBoundary({
+      subsystem: 'translation',
+      component: 'BatchTranslator',
+      operation: 'batchTranslateBubbles',
+      eventType: 'lifecycle',
+      severity: translationMap.size > 0 ? 'healthy' : 'warning',
+      status: translationMap.size > 0 ? 'succeeded' : 'degraded',
+      durationMs: Date.now() - transStart,
+      correlationId,
+      identifiers: { modelId: selectedModel },
+      payload: {
+        requestedCount: pendingBubbles.length,
+        translatedCount: translationMap.size,
+        isHumanizerEnabled,
+      },
+      explanation: `Translated ${translationMap.size}/${pendingBubbles.length} dialogue bubble(s) in ${Date.now() - transStart}ms.`,
+    });
 
     return {
       success: translationMap.size > 0 || pendingBubbles.length === 0,

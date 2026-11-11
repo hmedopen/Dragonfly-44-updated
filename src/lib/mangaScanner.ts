@@ -22,6 +22,7 @@ import { buildSystem3ScanInstruction } from './scanPromptBuilder';
 import { validateSystem3ScanOutput } from './translationValidator';
 import { performTargetedCropRetries } from './cropRetry';
 import { detectScriptSignal } from './localOcr/languageRouter';
+import { createDiagnosticCorrelationId, emitDiagnosticBoundary } from './diagnosticTap';
 import type {
   PageScanResult,
   PanelRegion,
@@ -112,6 +113,7 @@ export interface ScanMangaPageOptions {
   enableTargetedRetries?: boolean;
   maxRetries?: number;
   ocrConfidenceThreshold?: number;
+  correlationId?: string;
   signal?: AbortSignal;
 }
 
@@ -126,8 +128,12 @@ export async function scanMangaPage(options: ScanMangaPageOptions): Promise<Page
     enableTargetedRetries = true,
     maxRetries = 3,
     ocrConfidenceThreshold = 0.65,
+    correlationId: providedCorrelationId,
     signal,
   } = options;
+
+  const correlationId = providedCorrelationId || createDiagnosticCorrelationId('gemini-scan');
+  const tStart = Date.now();
 
   if (!apiKey || apiKey.trim().length === 0) {
     throw new Error('Gemini API key is required. Please set it in Hardware Settings (Ctrl+,).');
@@ -192,6 +198,7 @@ export async function scanMangaPage(options: ScanMangaPageOptions): Promise<Page
   };
 
   // 4. Dispatch Gemini API Call
+  const apiStart = Date.now();
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -202,8 +209,36 @@ export async function scanMangaPage(options: ScanMangaPageOptions): Promise<Page
   if (!response.ok) {
     const errorBody = await response.json().catch(() => null);
     const errorMsg = errorBody?.error?.message || `HTTP ${response.status}: ${response.statusText}`;
+    emitDiagnosticBoundary({
+      subsystem: 'ai-services',
+      component: 'GeminiFullScanner',
+      operation: 'geminiScanRequest',
+      eventType: 'io',
+      severity: 'error',
+      status: 'failed',
+      durationMs: Date.now() - apiStart,
+      correlationId,
+      identifiers: { pageId, modelId: selectedModel },
+      payload: { httpStatus: response.status },
+      explanation: `Gemini full page scan failed with HTTP ${response.status}: ${errorMsg}`,
+      error: new Error(errorMsg),
+    });
     throw new Error(errorMsg);
   }
+
+  emitDiagnosticBoundary({
+    subsystem: 'ai-services',
+    component: 'GeminiFullScanner',
+    operation: 'geminiScanRequest',
+    eventType: 'io',
+    severity: 'info',
+    status: 'succeeded',
+    durationMs: Date.now() - apiStart,
+    correlationId,
+    identifiers: { pageId, modelId: selectedModel },
+    payload: { httpStatus: response.status, imageWidth: dimensions.width, imageHeight: dimensions.height },
+    explanation: `Gemini scan request returned HTTP ${response.status} in ${Date.now() - apiStart}ms.`,
+  });
 
   const result = await response.json();
   const rawText = result?.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -365,6 +400,25 @@ export async function scanMangaPage(options: ScanMangaPageOptions): Promise<Page
       });
     }
   }
+
+  emitDiagnosticBoundary({
+    subsystem: 'scanning-ocr',
+    component: 'GeminiFullScanner',
+    operation: 'scanMangaPage',
+    eventType: 'lifecycle',
+    severity: 'healthy',
+    status: 'succeeded',
+    durationMs: Date.now() - tStart,
+    correlationId,
+    identifiers: { pageId, modelId: selectedModel },
+    payload: {
+      panelCount: panels.length,
+      rawRegionCount: rawRegions.length,
+      keptRegionCount: textRegions.length,
+      issueCount: issues.length,
+    },
+    explanation: `Gemini full scan detected ${textRegions.length} text region(s) across ${panels.length} panel(s) in ${Date.now() - tStart}ms.`,
+  });
 
   // 11. Assemble Canonical PageScanResult
   return {

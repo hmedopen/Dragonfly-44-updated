@@ -9,6 +9,7 @@ import {
 } from '../../lib/workspace/geometryService';
 import { renderGenerationManager } from '../../lib/workspace/renderGeneration';
 import { settingsService } from '../../services/settings/settingsService';
+import { emitDiagnosticBoundary } from '../../lib/diagnosticTap';
 
 interface CanvasPaneProps {
   imageUrl: string | null;
@@ -441,6 +442,17 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
     const validated = validateCanonicalBox(rawBox, 1000, 15);
     if (validated.valid) {
       onAddManualBubbleWithCoords?.(validated.box);
+    } else {
+      emitDiagnosticBoundary({
+        subsystem: 'rendering-ui',
+        component: 'CanvasPane',
+        operation: 'manualBoxValidation',
+        eventType: 'decision',
+        severity: 'warning',
+        status: 'degraded',
+        payload: { rawBox, errors: validated.errors },
+        explanation: `Drawn manual bounding box required geometry clamping (${validated.errors.join('; ')}).`,
+      });
     }
 
     drawingStartRef.current = null;
@@ -695,6 +707,18 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
               <img
                 src={imageUrl}
                 alt={pageFileName || 'Chapter page scan'}
+                onError={() => {
+                  emitDiagnosticBoundary({
+                    subsystem: 'rendering-ui',
+                    component: 'CanvasPane',
+                    operation: 'renderPageImage',
+                    eventType: 'error',
+                    severity: 'error',
+                    status: 'failed',
+                    payload: { pageFileName },
+                    explanation: `Failed to render page image element on canvas (${pageFileName || 'unknown page'}).`,
+                  });
+                }}
                 className="max-h-[calc(100vh-140px)] max-w-full w-auto h-auto object-contain select-none pointer-events-none block rounded-xs"
                 draggable={false}
               />

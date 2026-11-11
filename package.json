@@ -12,6 +12,7 @@
     "build": "tsc -b && vite build",
     "package:exe": "npm run build && electron-packager . \"Folio Script\" --platform=win32 --arch=x64 --icon=public/icon.ico --out=dist-app --overwrite --prune=true",
     "lint": "oxlint",
+    "test:diagnostics": "node --import ./src/test/localOcr/tsResolveHook.mjs --test src/dev/system-diagnostics/test/*.test.ts",
     "test:local-ocr": "node --import ./src/test/localOcr/tsResolveHook.mjs --test src/test/localOcr/*.test.ts",
     "smoke:local-ocr": "node --import ./src/test/localOcr/tsResolveHook.mjs src/test/localOcr/smokeTest.mjs",
     "validate:local-ocr": "node --import ./src/test/localOcr/tsResolveHook.mjs src/test/localOcr/multilingualValidation.mjs",

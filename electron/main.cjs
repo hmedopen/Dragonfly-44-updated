@@ -142,6 +142,112 @@ if (isDev) {
     const base64 = fileBuffer.toString('base64');
     return `data:${mimeType};base64,${base64}`;
   });
+
+  // Development Feature: System Diagnostics Read-Only Telemetry & Safe Export IPC
+  ipcMain.handle('diagnostics:getRuntimeInfo', async () => {
+    if (!isDev) {
+      throw new Error('System Diagnostics is strictly restricted to development builds.');
+    }
+    const userDataDir = app.getPath('userData');
+    const modelsRoot = path.join(userDataDir, 'folio-models');
+    let modelsRootExists = false;
+    try {
+      await fs.promises.access(modelsRoot, fs.constants.R_OK);
+      modelsRootExists = true;
+    } catch {
+      modelsRootExists = false;
+    }
+
+    const memory = process.memoryUsage();
+    const metrics = typeof app.getAppMetrics === 'function'
+      ? app.getAppMetrics().map((m) => ({
+          pid: m.pid,
+          type: m.type,
+          name: m.name || m.serviceName || m.type,
+          cpuPercent: typeof m.cpu?.percentCPUUsage === 'number' ? Number(m.cpu.percentCPUUsage.toFixed(2)) : null,
+          workingSetSizeKB: m.memory?.workingSetSize ?? null,
+          privateBytesKB: m.memory?.privateBytes ?? null,
+        }))
+      : [];
+
+    return {
+      isDev,
+      isPackaged: Boolean(app.isPackaged),
+      appName: app.name,
+      appVersion: app.getVersion(),
+      platform: process.platform,
+      arch: process.arch,
+      nodeVersion: process.versions.node,
+      electronVersion: process.versions.electron,
+      chromeVersion: process.versions.chrome,
+      uptimeSec: Math.round(process.uptime()),
+      mainMemory: {
+        rss: memory.rss,
+        heapUsed: memory.heapUsed,
+        heapTotal: memory.heapTotal,
+        external: memory.external,
+      },
+      appMetrics: metrics,
+      paths: {
+        userDataExists: fs.existsSync(userDataDir),
+        modelsRootExists,
+      },
+      mainWindowReady: Boolean(mainWindow && !mainWindow.isDestroyed()),
+      mainWindowBounds: mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null,
+      timestamp: Date.now(),
+    };
+  });
+
+  ipcMain.handle('diagnostics:inspectModelCache', async () => {
+    if (!isDev) {
+      throw new Error('System Diagnostics is strictly restricted to development builds.');
+    }
+    const mgr = getModelManager();
+    const manifest = mgr.getManifest();
+    const statuses = await mgr.getModelStatus();
+    return {
+      isProduction: mgr.isProduction,
+      modelsRootExists: fs.existsSync(mgr.modelsRoot),
+      manifestVersion: manifest.manifestVersion,
+      statuses,
+      timestamp: Date.now(),
+    };
+  });
+
+  ipcMain.handle('diagnostics:exportReportFile', async (_event, payload) => {
+    if (!isDev) {
+      throw new Error('System Diagnostics is strictly restricted to development builds.');
+    }
+    if (!payload || typeof payload !== 'object') {
+      throw new Error('Invalid export payload.');
+    }
+    const content = typeof payload.content === 'string' ? payload.content : '';
+    const format = payload.format === 'markdown' ? 'markdown' : 'json';
+    const rawDefaultName = typeof payload.defaultName === 'string' ? payload.defaultName : 'folio-diagnostics-report';
+    const safeName = rawDefaultName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80);
+    const ext = format === 'markdown' ? 'md' : 'json';
+
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: 'Export Diagnostic Report',
+      defaultPath: `${safeName}.${ext}`,
+      filters:
+        format === 'markdown'
+          ? [{ name: 'Markdown Report', extensions: ['md', 'txt'] }]
+          : [{ name: 'JSON Technical Report', extensions: ['json'] }],
+    });
+
+    if (result.canceled || !result.filePath) {
+      return { saved: false, canceled: true };
+    }
+
+    await fs.promises.writeFile(result.filePath, content, 'utf8');
+    return {
+      saved: true,
+      canceled: false,
+      fileName: path.basename(result.filePath),
+      bytesWritten: Buffer.byteLength(content, 'utf8'),
+    };
+  });
 }
 
 // Allowlisted Local OCR Model Management IPC Handlers

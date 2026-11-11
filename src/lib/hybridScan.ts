@@ -37,6 +37,7 @@ import {
 import { inferHierarchicalReadingOrder, resolveReadingConvention } from './readingOrder';
 import { buildHybridContextPrompt } from './scanPromptBuilder';
 import { extractCleanJson } from './translationValidator';
+import { createDiagnosticCorrelationId, emitDiagnosticBoundary } from './diagnosticTap';
 import type {
   LocalOcrEngineOptions,
   LocalOcrScanResult,
@@ -169,6 +170,8 @@ export interface HybridScanDependencies {
 export interface ScanMangaPageHybridOptions extends ScanMangaPageOptions {
   /** Verified sample text from existing page bubbles for safe auto-routing only. */
   sampleTextForAutoRoute?: string;
+  /** Optional diagnostic correlation ID from outer orchestrator. */
+  correlationId?: string;
   /** Optional injectable dependencies for tests. */
   hybridDeps?: HybridScanDependencies;
 }
@@ -816,9 +819,12 @@ export async function scanMangaPageHybridWithMeta(
     enableTargetedRetries = true,
     maxRetries = 3,
     ocrConfidenceThreshold = 0.65,
+    correlationId: providedCorrelationId,
     signal,
     hybridDeps,
   } = options;
+
+  const correlationId = providedCorrelationId || createDiagnosticCorrelationId('hybrid');
 
   if (signal?.aborted) {
     throw createAbortError();
@@ -840,6 +846,18 @@ export async function scanMangaPageHybridWithMeta(
     effectiveLanguage: 'en' | 'ko' | 'ja' | 'zh' | null
   ): Promise<HybridScanOutcome> => {
     if (signal?.aborted) throw createAbortError();
+    emitDiagnosticBoundary({
+      subsystem: 'scanning-ocr',
+      component: 'HybridScanner',
+      operation: 'fallbackDecision',
+      eventType: 'decision',
+      severity: 'warning',
+      status: 'degraded',
+      correlationId,
+      identifiers: { pageId, routeId: resolvedRoute || undefined },
+      payload: { fallbackReason, resolvedRoute, effectiveLanguage, warnings },
+      explanation: `Gemini full scan fallback selected (${fallbackReason}).`,
+    });
     const fallbackResult = await execGeminiFallback({
       pageId,
       apiKey,
@@ -850,6 +868,7 @@ export async function scanMangaPageHybridWithMeta(
       enableTargetedRetries,
       maxRetries,
       ocrConfidenceThreshold,
+      correlationId,
       signal,
     });
     return {
@@ -912,6 +931,7 @@ export async function scanMangaPageHybridWithMeta(
       languageHint: normalizedHint as OcrLanguageHint,
       sampleText: sampleTextForAutoRoute,
       readingConvention: effectiveConvention,
+      correlationId,
       signal,
     });
   } catch (err) {
@@ -1027,7 +1047,7 @@ export async function scanMangaPageHybridWithMeta(
     throw createAbortError();
   }
 
-  if (!geminiContext) {
+    if (!geminiContext) {
     const partialScan = buildPartialLocalOnlyResult({
       pageId,
       dimensions,
@@ -1038,6 +1058,23 @@ export async function scanMangaPageHybridWithMeta(
       sourceLanguageHint: normalizedHint,
       includeSFX,
       failureReason: geminiFailureReason || 'Gemini contextual stage unavailable.',
+    });
+
+    emitDiagnosticBoundary({
+      subsystem: 'scanning-ocr',
+      component: 'HybridScanner',
+      operation: 'geminiContextFallbackLocal',
+      eventType: 'decision',
+      severity: 'warning',
+      status: 'degraded',
+      correlationId,
+      identifiers: { pageId, routeId: route.routeId },
+      payload: {
+        localCandidateCount: localCandidates.length,
+        keptCandidateCount: partialScan.regions.length,
+        failureReason: geminiFailureReason,
+      },
+      explanation: `Gemini contextual pass failed (${geminiFailureReason}); preserved ${partialScan.regions.length} local OCR region(s) as partial scan.`,
     });
 
     return {
@@ -1375,6 +1412,26 @@ export async function scanMangaPageHybridWithMeta(
     createdAt: Date.now(),
     version: 1,
   };
+
+  emitDiagnosticBoundary({
+    subsystem: 'scanning-ocr',
+    component: 'HybridScanner',
+    operation: 'hybridReconcile',
+    eventType: 'decision',
+    severity: 'healthy',
+    status: 'succeeded',
+    correlationId,
+    identifiers: { pageId, routeId: route.routeId },
+    payload: {
+      localCandidateCount: localCandidates.length,
+      keptCandidateCount,
+      verifiedCandidateCount,
+      addedRegionCount,
+      droppedCandidateCount: droppedByContextCount,
+      cropRetryCount,
+    },
+    explanation: `Hybrid reconciliation kept ${keptCandidateCount} local region(s) (${verifiedCandidateCount} verified, ${addedRegionCount} missed added, ${droppedByContextCount} rejected, ${cropRetryCount} crop retries).`,
+  });
 
   return {
     scanResult,

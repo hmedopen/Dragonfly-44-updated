@@ -15,6 +15,7 @@ import type {
   WorkerOcrRequest,
   WorkerOcrResponse,
 } from './workerProtocol.ts';
+import { emitDiagnosticBoundary } from '../diagnosticTap.ts';
 
 export interface WorkerLike {
   postMessage: {
@@ -370,6 +371,39 @@ export class LocalOcrEngineService {
       const jobId = `ocr-job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       this.activeJobId = jobId;
 
+      emitDiagnosticBoundary({
+        subsystem: 'models-assets',
+        component: 'LocalOcrEngineService',
+        operation: 'prepareLocalOcrModels',
+        eventType: 'io',
+        severity: 'info',
+        status: 'succeeded',
+        correlationId: options.correlationId,
+        identifiers: { pageId: options.pageId, jobId, routeId: resolvedRoute },
+        payload: {
+          detectorModelId,
+          ocrModelId,
+          detCacheHit,
+          ocrCacheHit,
+        },
+        explanation:
+          detCacheHit && ocrCacheHit
+            ? `Reused cached worker models (${detectorModelId}, ${ocrModelId}) for route ${resolvedRoute}.`
+            : `Loaded local OCR models (${detectorModelId} cache=${detCacheHit}, ${ocrModelId} cache=${ocrCacheHit}) for route ${resolvedRoute}.`,
+      });
+
+      emitDiagnosticBoundary({
+        subsystem: 'scanning-ocr',
+        component: 'LocalOcrEngineService',
+        operation: 'localOcrWorkerJob',
+        eventType: 'lifecycle',
+        severity: 'info',
+        status: 'running',
+        correlationId: options.correlationId,
+        identifiers: { pageId: options.pageId, jobId, routeId: resolvedRoute },
+        explanation: `Started local OCR worker inference on page ${options.pageId} (${resolvedRoute}).`,
+      });
+
       return await new Promise<LocalOcrScanResult>((resolve, reject) => {
         let settled = false;
         let abortRequested = false;
@@ -465,14 +499,57 @@ export class LocalOcrEngineService {
           syncWorkerKeys(msg);
 
           if (abortRequested || msg.type === 'job_cancelled') {
+            emitDiagnosticBoundary({
+              subsystem: 'scanning-ocr',
+              component: 'LocalOcrEngineService',
+              operation: 'localOcrWorkerJob',
+              eventType: 'lifecycle',
+              severity: 'warning',
+              status: 'cancelled',
+              correlationId: options.correlationId,
+              identifiers: { pageId: options.pageId, jobId, routeId: resolvedRoute },
+              explanation: `Local OCR worker job ${jobId} was cancelled.`,
+            });
             reject(createAbortError());
             return;
           }
           if (msg.type === 'job_error') {
+            emitDiagnosticBoundary({
+              subsystem: 'scanning-ocr',
+              component: 'LocalOcrEngineService',
+              operation: 'localOcrWorkerJob',
+              eventType: 'error',
+              severity: 'error',
+              status: 'failed',
+              correlationId: options.correlationId,
+              identifiers: { pageId: options.pageId, jobId, routeId: resolvedRoute },
+              explanation: `Local OCR worker inference failed: ${msg.error || 'Unknown error'}.`,
+              error: new Error(msg.error || 'Local OCR worker inference failed.'),
+            });
             reject(new Error(msg.error || 'Local OCR worker inference failed.'));
             return;
           }
           if (msg.type === 'job_result') {
+            emitDiagnosticBoundary({
+              subsystem: 'scanning-ocr',
+              component: 'LocalOcrEngineService',
+              operation: 'localOcrWorkerJob',
+              eventType: 'lifecycle',
+              severity: msg.result.status === 'partial' ? 'warning' : 'healthy',
+              status: msg.result.status === 'partial' ? 'degraded' : 'succeeded',
+              durationMs: msg.result.timings.totalMs,
+              correlationId: options.correlationId,
+              identifiers: { pageId: options.pageId, jobId, routeId: resolvedRoute },
+              payload: {
+                status: msg.result.status,
+                textRegionCount: msg.result.textRegions.length,
+                bubbleCount: msg.result.bubbleRegions.length,
+                timings: msg.result.timings,
+                partialFailureCount: msg.result.partialFailures.length,
+                modelsUsed: msg.result.modelsUsed,
+              },
+              explanation: `Local OCR completed in ${msg.result.timings.totalMs}ms (${msg.result.textRegions.length} text region(s), ${msg.result.bubbleRegions.length} bubble(s), ${msg.result.partialFailures.length} partial failure(s)).`,
+            });
             resolve(attachCanonicalProjection(msg.result));
           }
         };

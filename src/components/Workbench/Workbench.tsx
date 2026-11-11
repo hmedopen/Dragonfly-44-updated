@@ -28,10 +28,12 @@ import {
   BoxSelect,
   BookOpen,
   X,
-  Activity
+  Activity,
+  Stethoscope
 } from 'lucide-react';
 import { ToolbarTooltip } from './ToolbarTooltip';
 import { isTrainingStudioEnabled } from '../../lib/training/env';
+import { isSystemDiagnosticsEnabled } from '../../lib/diagnosticTap';
 import { useConfirmationSetting } from '../../lib/confirmation';
 import type { PageMetadata } from '../../types';
 
@@ -44,6 +46,8 @@ interface WorkbenchProps {
   onDeletePage?: (pageId: string) => void;
   onReorderPages?: (updatedPages: PageMetadata[]) => void;
   onOpenTrainingStudio?: () => void;
+  onToggleDiagnostics?: () => void;
+  isDiagnosticsOpen?: boolean;
 }
 
 export const Workbench: React.FC<WorkbenchProps> = ({
@@ -55,6 +59,8 @@ export const Workbench: React.FC<WorkbenchProps> = ({
   onDeletePage,
   onReorderPages,
   onOpenTrainingStudio,
+  onToggleDiagnostics,
+  isDiagnosticsOpen = false,
 }) => {
   const {
     activePageId,
@@ -167,9 +173,9 @@ export const Workbench: React.FC<WorkbenchProps> = ({
     return () => unsub();
   }, []);
 
-  // Workspace Utility Rail Tools definition (Virtual Keyboard & Diagnostics)
-  const utilityTools: UtilityRailTool[] = useMemo(
-    () => [
+  // Workspace Utility Rail Tools definition (Virtual Keyboard, Benchmark, and Dev-Only Diagnostic Studio)
+  const utilityTools: UtilityRailTool[] = useMemo(() => {
+    const base: UtilityRailTool[] = [
       {
         id: 'virtual-keyboard',
         name: 'Virtual Keyboard',
@@ -187,9 +193,20 @@ export const Workbench: React.FC<WorkbenchProps> = ({
         onClick: () => setIsBenchmarkOpen(true),
         isActive: isBenchmarkOpen,
       },
-    ],
-    [toggleKeyboard, isKeyboardOpen, isBenchmarkOpen]
-  );
+    ];
+    if (isSystemDiagnosticsEnabled() && onToggleDiagnostics) {
+      base.push({
+        id: 'diagnostic-studio',
+        name: 'Diagnostic Studio',
+        description: 'Open the OBD-II system diagnostic scanner (Dev Only).',
+        icon: Stethoscope,
+        onClick: onToggleDiagnostics,
+        isActive: isDiagnosticsOpen,
+        shortcut: 'Ctrl+Shift+D',
+      });
+    }
+    return base;
+  }, [toggleKeyboard, isKeyboardOpen, isBenchmarkOpen, onToggleDiagnostics, isDiagnosticsOpen]);
 
   const pages = chapter?.pageList || [];
   const displayPages = pendingPages || pages;

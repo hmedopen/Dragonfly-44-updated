@@ -5,6 +5,7 @@ import {
   type PrefixPosition,
   type TyperSymbolPosition,
 } from '../types/typers';
+import { emitDiagnosticBoundary } from './diagnosticTap';
 
 export interface TypeRCompileOptions {
   chapterName: string;
@@ -96,7 +97,22 @@ export function compileRawTextExtract(options: RawTextExtractOptions): string {
     lines.push(''); // Blank separator between pages
   }
 
-  return lines.join('\n').trim();
+  const compiled = lines.join('\n').trim();
+  emitDiagnosticBoundary({
+    subsystem: 'electron-fs',
+    component: 'TypeRCompiler',
+    operation: 'compileExportScript',
+    eventType: 'io',
+    severity: 'info',
+    status: 'succeeded',
+    payload: {
+      chapterName,
+      pageCount: pages.length,
+      lineCount: lines.length,
+    },
+    explanation: `Compiled export script for "${chapterName}" across ${pages.length} page(s) (${lines.length} line(s)).`,
+  });
+  return compiled;
 }
 
 /**
@@ -168,5 +184,20 @@ export function compileTypeRScript(options: TypeRCompileOptions): string {
     lines.push(''); // Blank separator between pages
   }
 
-  return lines.join('\n').trim();
+  const compiled = lines.join('\n').trim();
+  emitDiagnosticBoundary({
+    subsystem: 'electron-fs',
+    component: 'TypeRCompiler',
+    operation: 'compileExportScript',
+    eventType: 'io',
+    severity: 'info',
+    status: 'succeeded',
+    payload: {
+      chapterName,
+      pageCount: pages.length,
+      lineCount: lines.length,
+    },
+    explanation: `Compiled export script for "${chapterName}" across ${pages.length} page(s) (${lines.length} line(s)).`,
+  });
+  return compiled;
 }
