@@ -70,6 +70,25 @@ export const ScanningView: React.FC<ScanningViewProps> = ({ getVal, setVal }) =>
           </select>
         </SettingRow>
 
+        {/* Source Language */}
+        <SettingRow
+          label="Source Language"
+          description="Primary language of the source pages used for OCR routing and extraction."
+          layout="vertical"
+        >
+          <select
+            value={getVal<string>('scanning.source_language') || 'auto'}
+            onChange={(e) => setVal('scanning.source_language', e.target.value)}
+            className="w-full px-3 py-2 rounded-md bg-[#050508] border border-white/[0.10] text-zinc-200 text-xs font-mono focus:outline-none focus:border-white/20 mt-1"
+          >
+            <option value="auto">Auto-detect</option>
+            <option value="en">English (en)</option>
+            <option value="ko">Korean (ko)</option>
+            <option value="ja">Japanese (ja)</option>
+            <option value="zh">Chinese (zh)</option>
+          </select>
+        </SettingRow>
+
         {/* SFX Extraction */}
         <SettingRow
           label="Extract In-Art Sound Effects (SFX)"

@@ -347,6 +347,28 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
       return { valid: false, error: 'Must be between 1 and 10', sanitizedValue: 3 };
     },
   },
+  'scanning.source_language': {
+    setting_id: 'scanning.source_language',
+    owner_system: 'system_3',
+    type: 'enum',
+    default_value: 'auto',
+    allowed_values: ['en', 'ko', 'ja', 'zh', 'auto'],
+    apply_mode: 'next_operation',
+    scope: ['global', 'project', 'chapter'],
+    visibility: 'basic',
+    runtime_binding: 'System3.SourceLanguage',
+    schema_version: '1.0',
+    reset_behavior: 'default',
+    label: 'Source Language',
+    description: 'Primary language of the source pages used for OCR routing and extraction.',
+    category: 'scanning',
+    validation: (val: string) => {
+      if (['en', 'ko', 'ja', 'zh', 'auto'].includes(val)) {
+        return { valid: true, sanitizedValue: val };
+      }
+      return { valid: false, error: 'Invalid source language', sanitizedValue: 'auto' };
+    },
+  },
 
   // ==========================================
   // SYSTEM #4: REVIEW & QUALITY CONTROL

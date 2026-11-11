@@ -13,9 +13,20 @@ import { loadTyperSettings } from '../types/typers';
 import { compileInstructions } from './instructionCompiler';
 import { humanizeArabicText } from './arabicHumanizer';
 import { validateSingleBubbleOutput } from './translationValidator';
-import { scanMangaPage } from './mangaScanner';
+import { scanMangaPageHybridWithMeta, type HybridScanDependencies } from './hybridScan';
 import { mergeScanWithExistingState } from './rescanMerge';
 import { batchTranslateBubbles } from './batchTranslation';
+import { isMeaningfulLinguisticContent } from './mangaScanner';
+
+export interface ScanPageDeps {
+  getPageBubbles?: typeof getPageBubbles;
+  savePageBubbles?: typeof savePageBubbles;
+  savePageScan?: typeof savePageScan;
+  getProjectLore?: typeof getProjectLore;
+  getChapterIntelligence?: typeof getChapterIntelligence;
+  ingestPageIntelligence?: (...args: Parameters<typeof ingestPageIntelligence>) => Promise<unknown>;
+  batchTranslateBubbles?: typeof batchTranslateBubbles;
+}
 
 export interface ScanPageOptions {
   pageId: string;
@@ -27,6 +38,8 @@ export interface ScanPageOptions {
   selectedModel: GeminiModelKey | string;
   eloquenceLevel: EloquenceLevel;
   includeSFX: boolean;
+  sourceLanguageHint?: string;
+  sampleTextForAutoRoute?: string;
   readingConvention?: ReadingConvention;
   translationFidelity?: TranslationFidelity;
   isHumanizerEnabled?: boolean;
@@ -35,9 +48,12 @@ export interface ScanPageOptions {
   masterPromptOverride?: string;
   isMasterPromptActive?: boolean;
   precedingDialogueSnippet?: string;
+  enableCropRetries?: boolean;
   cropRetryLimit?: number;
   ocrConfidenceThreshold?: number;
   signal?: AbortSignal;
+  hybridDeps?: HybridScanDependencies;
+  scanDeps?: ScanPageDeps;
 }
 
 export interface ScanResult {
@@ -45,6 +61,9 @@ export interface ScanResult {
   pageContext: string;
   detectedGlossaryTerms: Array<{ source: string; arabic: string; category: string }>;
   scanResult?: PageScanResult;
+  ocrSource?: 'hybrid' | 'gemini_fallback' | 'local_partial';
+  translationSuccess?: boolean;
+  warnings?: string[];
 }
 
 /**
@@ -78,6 +97,8 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
     selectedModel,
     eloquenceLevel,
     includeSFX,
+    sourceLanguageHint = 'auto',
+    sampleTextForAutoRoute,
     readingConvention = 'auto',
     translationFidelity = 'localized',
     isHumanizerEnabled = true,
@@ -86,30 +107,56 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
     masterPromptOverride,
     isMasterPromptActive,
     precedingDialogueSnippet,
+    enableCropRetries,
     cropRetryLimit = 3,
     ocrConfidenceThreshold = 0.65,
     signal,
+    hybridDeps,
+    scanDeps,
   } = options;
 
-  if (!apiKey || apiKey.trim().length === 0) {
-    throw new Error('Gemini API key is required. Please set it in Hardware Settings (Ctrl+,).');
-  }
+  const loadBubbles = scanDeps?.getPageBubbles ?? getPageBubbles;
+  const persistBubbles = scanDeps?.savePageBubbles ?? savePageBubbles;
+  const persistScan = scanDeps?.savePageScan ?? savePageScan;
+  const loadLore = scanDeps?.getProjectLore ?? getProjectLore;
+  const loadChapterIntel = scanDeps?.getChapterIntelligence ?? getChapterIntelligence;
+  const saveChapterIntel = scanDeps?.ingestPageIntelligence ?? ingestPageIntelligence;
+  const translateBatch = scanDeps?.batchTranslateBubbles ?? batchTranslateBubbles;
 
-  // 1. SYSTEM #3: Canonical Multimodal Scan & Classification Pass
-  const scanResult = await scanMangaPage({
+  // 1. Fetch existing bubbles upfront for rescan sample-text evidence and non-destructive merge
+  const existingBubbles = await loadBubbles(pageId);
+  const nonSfxSample = existingBubbles
+    .filter((b) => b.type !== 'sfx' && b.typerPrefix !== 'SFX:')
+    .map((b) => (b.sourceText || '').trim())
+    .filter((txt) => isMeaningfulLinguisticContent(txt))
+    .join('\n');
+  const existingSampleText =
+    sampleTextForAutoRoute !== undefined
+      ? sampleTextForAutoRoute
+      : sourceLanguageHint === 'auto' && nonSfxSample.replace(/\s+/g, '').length >= 8
+      ? nonSfxSample
+      : undefined;
+
+  const shouldRetryCrops = enableCropRetries !== undefined ? enableCropRetries : cropRetryLimit > 0;
+
+  // 2. SYSTEM #3: Unified Hybrid Scan & Classification Pass (Local OCR primary + Gemini context/fallback)
+  const hybridOutcome = await scanMangaPageHybridWithMeta({
     pageId,
     apiKey,
     selectedModel: selectedModel ? String(selectedModel) : 'gemini-3.8-flash',
     readingConvention,
     includeSFX,
-    enableTargetedRetries: cropRetryLimit > 0,
+    sourceLanguageHint,
+    sampleTextForAutoRoute: existingSampleText || undefined,
+    enableTargetedRetries: shouldRetryCrops,
     maxRetries: cropRetryLimit,
     ocrConfidenceThreshold,
     signal,
+    hybridDeps,
   });
 
-  // 2. Fetch existing bubbles & Typer configurations for non-destructive rescan merge
-  const existingBubbles = await getPageBubbles(pageId);
+  const scanResult = hybridOutcome.scanResult;
+  const warnings = [...hybridOutcome.meta.warnings];
   const typerSettings = loadTyperSettings();
 
   // 3. Multi-signal merge: preserves manual edits, user typers, manual ordering, and user-drawn boxes
@@ -119,29 +166,65 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
     typerSettings,
   });
 
-  // 4. SYSTEM #2: Batch Translation Pass for un-translated dialogue
-  const projectLore = !isDraft && projectId ? await getProjectLore(projectId) : null;
-  const chapterIntelligence = chapterId ? await getChapterIntelligence(chapterId) : null;
+  // 4. SYSTEM #2: Batch Translation Pass for un-translated dialogue (never drops extracted text on failure)
+  const projectLore = !isDraft && projectId ? await loadLore(projectId) : null;
+  const chapterIntelligence = chapterId ? await loadChapterIntel(chapterId) : null;
 
-  const translationBatchResult = await batchTranslateBubbles({
-    bubbles: mergeResult.mergedBubbles,
-    pageContext: scanResult.visualContext || '',
-    apiKey,
-    selectedModel: selectedModel ? String(selectedModel) : 'gemini-3.8-flash',
-    eloquenceLevel,
-    translationFidelity,
-    isHumanizerEnabled,
-    humanizerIntensity,
-    orthographyMode,
-    masterPromptOverride,
-    isMasterPromptActive,
-    projectLore,
-    chapterIntelligence,
-    rollingContextSnippet: precedingDialogueSnippet,
-    signal,
+  let translationSuccess = true;
+  let translationFailureReason: string | null = null;
+  let translationMap = new Map<string, { rawText: string; humanizedText: string }>();
+
+  const hasPendingTranslatable = mergeResult.mergedBubbles.some((b) => {
+    if (!b.sourceText || b.sourceText.trim().length === 0) return false;
+    if (b.isManuallyEdited) return false;
+    if (!includeSFX && (b.type === 'sfx' || b.typerPrefix === 'SFX:')) return false;
+    if (!b.translatedText || b.translatedText.trim().length === 0) return true;
+    if (b.originalSourceText && b.originalSourceText.trim() !== b.sourceText.trim()) return true;
+    return false;
   });
 
-  const translationMap = translationBatchResult.translationMap;
+  if (hasPendingTranslatable) {
+    if (!apiKey || apiKey.trim().length === 0) {
+      translationSuccess = false;
+      translationFailureReason =
+        'Gemini API key is missing for translation; extracted source text was preserved.';
+    } else {
+      try {
+        const translationBatchResult = await translateBatch({
+          bubbles: mergeResult.mergedBubbles,
+          pageContext: scanResult.visualContext || '',
+          apiKey,
+          selectedModel: selectedModel ? String(selectedModel) : 'gemini-3.8-flash',
+          eloquenceLevel,
+          translationFidelity,
+          isHumanizerEnabled,
+          humanizerIntensity,
+          orthographyMode,
+          masterPromptOverride,
+          isMasterPromptActive,
+          projectLore,
+          chapterIntelligence,
+          includeSFX,
+          rollingContextSnippet: precedingDialogueSnippet,
+          signal,
+        });
+
+        translationMap = translationBatchResult.translationMap;
+        if (!translationBatchResult.success) {
+          translationSuccess = false;
+          translationFailureReason =
+            translationBatchResult.error ||
+            'Batch translation failed; extracted source text was preserved.';
+        }
+      } catch (err: any) {
+        if (signal?.aborted || err?.name === 'AbortError') {
+          throw err;
+        }
+        translationSuccess = false;
+        translationFailureReason = `Translation failed (${err?.message || 'unknown error'}); extracted source text was preserved.`;
+      }
+    }
+  }
 
   // 5. Apply translations to non-manually-edited bubbles
   const now = Date.now();
@@ -168,14 +251,42 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
     };
   });
 
+  // Record partial status when translation fails so recoverable partial failures remain explicit
+  let finalScanRecord = mergeResult.updatedScanResult;
+  if (!translationSuccess && translationFailureReason) {
+    warnings.push(translationFailureReason);
+    finalScanRecord = {
+      ...finalScanRecord,
+      status: 'partial',
+      issues: [
+        ...finalScanRecord.issues,
+        {
+          issueId: `issue-${pageId}-translation-unavailable`,
+          flag: 'STAGE_UNAVAILABLE',
+          severity: 'warning',
+          affectedRegionIds: finalBubbles
+            .filter((b) => b.sourceText?.trim() && !b.translatedText?.trim())
+            .map((b) => b.id),
+          reason: translationFailureReason,
+          retryable: true,
+        },
+      ],
+    };
+  }
+
   // 6. Persist Canonical Scan Record & Workspace Bubbles to IndexedDB
-  await savePageScan(pageId, mergeResult.updatedScanResult);
-  await savePageBubbles(pageId, finalBubbles);
+  await persistScan(pageId, finalScanRecord);
+  await persistBubbles(pageId, finalBubbles);
 
   // 7. Ingest newly detected entities into Chapter Intelligence (System #5)
-  if (chapterId) {
+  if (
+    chapterId &&
+    (scanResult.visualContext ||
+      (scanResult.detectedCharacters && scanResult.detectedCharacters.length > 0) ||
+      (scanResult.detectedGlossaryTerms && scanResult.detectedGlossaryTerms.length > 0))
+  ) {
     try {
-      await ingestPageIntelligence({
+      await saveChapterIntel({
         chapterId,
         projectId,
         pageId,
@@ -203,7 +314,10 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
     bubbles: finalBubbles,
     pageContext: scanResult.visualContext || '',
     detectedGlossaryTerms: scanResult.detectedGlossaryTerms || [],
-    scanResult: mergeResult.updatedScanResult,
+    scanResult: finalScanRecord,
+    ocrSource: hybridOutcome.meta.ocrSource,
+    translationSuccess,
+    warnings,
   };
 }
 

@@ -294,10 +294,14 @@ export function mergeScanWithExistingState(options: {
           classification: 1.0,
         },
         classification: {
-          primaryClass: 'dialogue',
+          primaryClass:
+            oldBubble.type === 'sfx' || oldBubble.typerPrefix === 'SFX:'
+              ? 'sfx'
+              : 'dialogue',
           confidence: 1.0,
           needsReview: false,
         },
+        sourceLanguage: oldBubble.sourceLanguage,
         associations: {},
         order: {
           sequenceIndex: oldBubble.index,
@@ -305,7 +309,8 @@ export function mergeScanWithExistingState(options: {
           rationale: 'User manual annotation',
         },
         flags: [],
-        isManuallyEdited: true,
+        isManuallyEdited:
+          oldBubble.isManuallyEdited !== undefined ? oldBubble.isManuallyEdited : true,
       });
     }
   }

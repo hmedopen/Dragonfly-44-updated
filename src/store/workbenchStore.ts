@@ -20,6 +20,8 @@ import { auditChapterWithGemini } from '../lib/reviewEngine';
 import { translateSingleBubbleWithGemini } from '../lib/geminiScan';
 import { settingsService } from '../services/settings/settingsService';
 
+let unsubscribeBatchScanQueue: (() => void) | null = null;
+
 export type CurrentView = 'hub' | 'workbench';
 export type ViewportMode = 'manga-flip' | 'webtoon-strip';
 export type FeedFilterMode = 'all' | 'flagged';
@@ -922,7 +924,13 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     const chapterId = get().activeChapterId || undefined;
     const snapshot = settingsService.createOperationSnapshot({ projectId, chapterId });
     const apiKey = snapshot.values['general.gemini_api_key'] || '';
-    const selectedModel = (snapshot.values['translation.model'] as GeminiModelKey) || 'gemini-3.8-flash';
+    const rawModel = String(snapshot.values['translation.model'] || 'gemini-3.8-flash');
+    const customModel = String(snapshot.values['translation.custom_model'] || '').trim();
+    const selectedModel = (rawModel === 'custom' && customModel
+      ? customModel
+      : rawModel === 'custom'
+      ? 'gemini-3.8-flash'
+      : rawModel) as GeminiModelKey;
     const eloquenceLevel = (snapshot.values['translation.eloquence'] as EloquenceLevel) || 2;
     const includeSFX = Boolean(snapshot.values['scanning.include_sfx']);
     const translationFidelity = (snapshot.values['translation.fidelity'] as TranslationFidelity) || 'localized';
@@ -932,11 +940,23 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     const masterPromptOverride = snapshot.values['translation.master_prompt_override'] || '';
     const isMasterPromptActive = Boolean(snapshot.values['translation.master_prompt_active']);
     const readingConvention = (snapshot.values['scanning.reading_convention'] as any) || 'auto';
+    const sourceLanguageHint = String(snapshot.values['scanning.source_language'] || 'auto');
+    const scanProfile = String(snapshot.values['scanning.profile'] || 'balanced');
+    const ocrConfidenceThreshold = Number(snapshot.values['scanning.ocr_confidence_threshold'] ?? 0.65);
+    const enableCropRetries =
+      scanProfile === 'fast'
+        ? false
+        : Boolean(snapshot.values['scanning.enable_crop_retries'] ?? true);
+    const cropRetryLimit = enableCropRetries
+      ? Number(snapshot.values['scanning.max_crop_retries'] ?? 3)
+      : 0;
 
-    const queueItems = pages.map((p) => ({
+    const sortedPages = [...pages].sort((a, b) => a.pageIndex - b.pageIndex);
+    const queueItems = sortedPages.map((p, idx) => ({
       pageId: p.pageId,
       chapterId,
       pageIndex: p.pageIndex,
+      previousPageId: idx > 0 ? sortedPages[idx - 1].pageId : undefined,
       options: {
         projectId,
         isDraft,
@@ -944,6 +964,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
         selectedModel,
         eloquenceLevel,
         includeSFX,
+        sourceLanguageHint,
         readingConvention,
         translationFidelity,
         isHumanizerEnabled,
@@ -951,17 +972,26 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
         orthographyMode,
         masterPromptOverride,
         isMasterPromptActive,
+        enableCropRetries,
+        cropRetryLimit,
+        ocrConfidenceThreshold,
       },
     }));
 
-    scanQueue.subscribe((progress) => {
+    if (unsubscribeBatchScanQueue) {
+      unsubscribeBatchScanQueue();
+      unsubscribeBatchScanQueue = null;
+    }
+
+    unsubscribeBatchScanQueue = scanQueue.subscribe((progress) => {
       const isBatch = progress.totalCount > 1;
+      const activeStep = Math.min(progress.completedCount + 1, Math.max(1, progress.totalCount));
       set({
         isScanningActive: isBatch && progress.isScanning,
         isScanningSinglePage: !isBatch && progress.isScanning,
         pageStatuses: progress.pageStatuses,
         scanProgressText: isBatch && progress.isScanning
-          ? `${progress.completedCount + 1}/${progress.totalCount} - CANCEL`
+          ? `${activeStep}/${progress.totalCount} - CANCEL`
           : null,
       });
     });

@@ -21,6 +21,7 @@ import { resolveReadingConvention, inferHierarchicalReadingOrder } from './readi
 import { buildSystem3ScanInstruction } from './scanPromptBuilder';
 import { validateSystem3ScanOutput } from './translationValidator';
 import { performTargetedCropRetries } from './cropRetry';
+import { detectScriptSignal } from './localOcr/languageRouter';
 import type {
   PageScanResult,
   PanelRegion,
@@ -107,6 +108,7 @@ export interface ScanMangaPageOptions {
   selectedModel?: string;
   readingConvention?: ReadingConvention;
   includeSFX?: boolean;
+  sourceLanguageHint?: string;
   enableTargetedRetries?: boolean;
   maxRetries?: number;
   ocrConfidenceThreshold?: number;
@@ -120,6 +122,7 @@ export async function scanMangaPage(options: ScanMangaPageOptions): Promise<Page
     selectedModel = 'gemini-3.8-flash',
     readingConvention = 'auto',
     includeSFX = true,
+    sourceLanguageHint = 'auto',
     enableTargetedRetries = true,
     maxRetries = 3,
     ocrConfidenceThreshold = 0.65,
@@ -154,6 +157,7 @@ export async function scanMangaPage(options: ScanMangaPageOptions): Promise<Page
   const systemInstruction = buildSystem3ScanInstruction({
     readingConvention: effectiveConvention,
     includeSFX,
+    sourceLanguageHint,
   });
 
   const mimeType = blob.type || 'image/png';
@@ -219,8 +223,12 @@ export async function scanMangaPage(options: ScanMangaPageOptions): Promise<Page
     detectedRelationships,
   } = validated.data;
 
-  // Filter out empty and symbol-only regions (Phase 1.2)
-  const meaningfulRegions = rawRegions.filter((r) => isMeaningfulLinguisticContent(r.rawOCR));
+  // Filter out empty and symbol-only regions (Phase 1.2), and strictly exclude SFX when disabled
+  const meaningfulRegions = rawRegions.filter(
+    (r) =>
+      isMeaningfulLinguisticContent(r.rawOCR) &&
+      (includeSFX || String(r.primaryClass).toLowerCase() !== 'sfx')
+  );
 
   // 6. Build PanelRegion entities
   const panels: PanelRegion[] = rawPanels.map((p, idx) => ({
@@ -257,6 +265,8 @@ export async function scanMangaPage(options: ScanMangaPageOptions): Promise<Page
     const imageQualityConfidence = isHighRes ? 0.98 : 0.80;
 
     const normalizedRawOCR = normalizeExtractedDialogue(r.rawOCR);
+    const rawSourceLang = (r as { sourceLanguage?: string }).sourceLanguage;
+    const resolvedSourceLang = inferRegionLanguage(rawSourceLang, normalizedRawOCR, sourceLanguageHint);
 
     // OCR confidence calibration
     let ocrConfidence = 0.95;
@@ -309,6 +319,7 @@ export async function scanMangaPage(options: ScanMangaPageOptions): Promise<Page
         confidence: 0.90,
       },
       flags,
+      sourceLanguage: resolvedSourceLang,
       isVertical: r.isVertical,
       isManuallyEdited: false,
     };
@@ -374,4 +385,28 @@ export async function scanMangaPage(options: ScanMangaPageOptions): Promise<Page
     createdAt: Date.now(),
     version: 1,
   };
+}
+
+function inferRegionLanguage(
+  modelHint: string | undefined,
+  text: string,
+  pageHint: string | undefined
+): string {
+  const cleanHint = typeof modelHint === 'string' ? modelHint.trim().toLowerCase() : '';
+  if (cleanHint === 'en' || cleanHint === 'ko' || cleanHint === 'ja' || cleanHint === 'zh' || cleanHint === 'mixed') {
+    return cleanHint;
+  }
+  const signal = detectScriptSignal(text);
+  if (signal === 'hangul') return 'ko';
+  if (signal === 'kana') return 'ja';
+  if (signal === 'latin') return 'en';
+  if (signal === 'mixed') return 'mixed';
+  if (signal === 'han_only') {
+    if (pageHint === 'ja' || pageHint === 'zh') return pageHint;
+    return 'zh';
+  }
+  if (pageHint === 'en' || pageHint === 'ko' || pageHint === 'ja' || pageHint === 'zh') {
+    return pageHint;
+  }
+  return 'ja';
 }

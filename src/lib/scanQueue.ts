@@ -8,7 +8,16 @@ export interface QueueItem {
   pageId: string;
   chapterId?: string;
   pageIndex: number;
+  previousPageId?: string;
   options: Omit<ScanPageOptions, 'pageId' | 'chapterId' | 'pageIndex'>;
+}
+
+export interface ScanQueueDependencies {
+  scanPage?: typeof scanPageWithGemini;
+  savePageBubbles?: typeof savePageBubbles;
+  getPageBubbles?: typeof getPageBubbles;
+  getRollingContextForPage?: typeof getRollingContextForPage;
+  interRequestDelayMs?: number;
 }
 
 export type QueueProgressCallback = (progress: {
@@ -16,22 +25,34 @@ export type QueueProgressCallback = (progress: {
   completedCount: number;
   totalCount: number;
   pageStatuses: Record<string, PageScanStatus>;
+  pageErrors: Record<string, string>;
+  pageWarnings: Record<string, string[]>;
+  partialPageIds: string[];
   isScanning: boolean;
   currentPageIndex?: number;
   operationId?: string;
 }) => void;
 
-class ScanQueueManager {
+export class ScanQueueManager {
   private queue: QueueItem[] = [];
   private isProcessing = false;
   private isCancelled = false;
   private completedCount = 0;
   private totalCount = 0;
   private pageStatuses: Record<string, PageScanStatus> = {};
+  private pageErrors: Record<string, string> = {};
+  private pageWarnings: Record<string, string[]> = {};
+  private partialPageIds: Set<string> = new Set();
   private listeners: Set<QueueProgressCallback> = new Set();
   private abortController: AbortController | null = null;
   private activeOperationId: string | null = null;
+  private operationSequence = 0;
   private lastCompletedBubbles: { pageIndex: number; bubbles: any[] } | null = null;
+  private readonly deps: ScanQueueDependencies;
+
+  constructor(deps: ScanQueueDependencies = {}) {
+    this.deps = deps;
+  }
 
   public subscribe(cb: QueueProgressCallback): () => void {
     this.listeners.add(cb);
@@ -47,6 +68,9 @@ class ScanQueueManager {
       completedCount: this.completedCount,
       totalCount: this.totalCount,
       pageStatuses: { ...this.pageStatuses },
+      pageErrors: { ...this.pageErrors },
+      pageWarnings: { ...this.pageWarnings },
+      partialPageIds: Array.from(this.partialPageIds),
       isScanning: this.isProcessing || this.queue.length > 0,
       currentPageIndex,
       operationId: this.activeOperationId || undefined,
@@ -63,6 +87,18 @@ class ScanQueueManager {
     return this.pageStatuses[pageId] || 'unscanned';
   }
 
+  public getPageErrors(): Record<string, string> {
+    return { ...this.pageErrors };
+  }
+
+  public getPageWarnings(): Record<string, string[]> {
+    return { ...this.pageWarnings };
+  }
+
+  public getPartialPageIds(): string[] {
+    return Array.from(this.partialPageIds);
+  }
+
   /**
    * Enqueues pages for processing.
    * Resolves the parallel vs sequential conflict: Chapter pages are sorted by natural page index
@@ -73,88 +109,153 @@ class ScanQueueManager {
     items: QueueItem[],
     onPageSuccess?: (pageId: string, bubbles: any[]) => void
   ) {
+    // Cancel any previous in-flight queue operation cleanly before starting the new operation
+    if (this.abortController) {
+      this.abortController.abort();
+      this.abortController = null;
+    }
+
     this.isCancelled = false;
-    this.activeOperationId = `scan-op-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    this.operationSequence += 1;
+    const operationId = `scan-op-${Date.now()}-${this.operationSequence}`;
+    this.activeOperationId = operationId;
 
     // Reset per-job counters to ensure current job progress is completely accurate and fresh
     this.completedCount = 0;
     this.totalCount = items.length;
     this.queue = [];
     this.lastCompletedBubbles = null;
+    this.isProcessing = items.length > 0;
 
     // Natural sort incoming items by page index to guarantee chronological narrative flow
     const sortedItems = [...items].sort((a, b) => a.pageIndex - b.pageIndex);
 
-    sortedItems.forEach((item) => {
-      if (!this.pageStatuses[item.pageId] || this.pageStatuses[item.pageId] === 'error') {
+    sortedItems.forEach((item, idx) => {
+      if (!this.pageStatuses[item.pageId] || this.pageStatuses[item.pageId] === 'error' || this.pageStatuses[item.pageId] === 'scanning') {
         this.pageStatuses[item.pageId] = 'unscanned';
       }
-      this.queue.push(item);
+      delete this.pageErrors[item.pageId];
+      delete this.pageWarnings[item.pageId];
+      this.partialPageIds.delete(item.pageId);
+
+      const resolvedPrevId =
+        item.previousPageId ?? (idx > 0 ? sortedItems[idx - 1].pageId : undefined);
+      this.queue.push({
+        ...item,
+        previousPageId: resolvedPrevId,
+      });
     });
 
     this.notify();
 
-    if (!this.isProcessing) {
-      this.processQueueSequentially(onPageSuccess);
+    if (items.length > 0) {
+      void this.processQueueSequentially(operationId, onPageSuccess);
     }
   }
 
   /**
    * Aborts pending queue items cleanly and cancels in-flight network requests.
-   * Propagates signal cancellation to active HTTP requests (F-07).
+   * Propagates signal cancellation to active HTTP requests and local OCR worker (F-07).
    */
   public cancel() {
     this.isCancelled = true;
+    this.operationSequence += 1;
+    this.activeOperationId = null;
     if (this.abortController) {
       this.abortController.abort();
       this.abortController = null;
     }
     this.queue = [];
     this.isProcessing = false;
+    for (const [pageId, status] of Object.entries(this.pageStatuses)) {
+      if (status === 'scanning') {
+        this.pageStatuses[pageId] = 'unscanned';
+      }
+    }
     this.notify();
+  }
+
+  private waitInterruptibly(ms: number, operationId: string, signal?: AbortSignal): Promise<void> {
+    if (ms <= 0 || this.isCancelled || this.activeOperationId !== operationId || signal?.aborted) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const done = () => {
+        if (timer) clearTimeout(timer);
+        signal?.removeEventListener('abort', done);
+        resolve();
+      };
+      signal?.addEventListener('abort', done, { once: true });
+      timer = setTimeout(done, ms);
+    });
   }
 
   /**
    * Sequential execution pipeline preserving chapter context causality.
    */
-  private async processQueueSequentially(onPageSuccess?: (pageId: string, bubbles: any[]) => void) {
-    if (this.isProcessing || this.isCancelled) return;
+  private async processQueueSequentially(
+    operationId: string,
+    onPageSuccess?: (pageId: string, bubbles: any[]) => void
+  ) {
     this.isProcessing = true;
 
-    while (this.queue.length > 0 && !this.isCancelled) {
+    while (
+      this.queue.length > 0 &&
+      !this.isCancelled &&
+      this.activeOperationId === operationId
+    ) {
       const currentItem = this.queue.shift();
       if (!currentItem) break;
 
       this.pageStatuses[currentItem.pageId] = 'scanning';
       this.notify(currentItem.pageIndex);
 
-      this.abortController = new AbortController();
-      const currentSignal = this.abortController.signal;
+      const controller = new AbortController();
+      this.abortController = controller;
+      const currentSignal = controller.signal;
 
       // Dynamic model rate-limit calculation
       const modelKey = (currentItem.options.selectedModel || 'gemini-3.8-flash') as GeminiModelKey;
       const modelProfile = GEMINI_MODEL_PROFILES[modelKey] || GEMINI_MODEL_PROFILES['gemini-3.8-flash'];
       const targetRpm = modelProfile.rpm || 15;
       // Pro models (RPM=2) require at least 30s delay; Flash models (RPM=15) need ~1s cooldown
-      const interRequestCooldownMs = targetRpm <= 2 ? 30000 : 1000;
+      const interRequestCooldownMs =
+        this.deps.interRequestDelayMs !== undefined
+          ? this.deps.interRequestDelayMs
+          : targetRpm <= 2
+          ? 30000
+          : 1000;
 
       try {
-        await this.executeItemWithRetry(currentItem, 0, currentSignal, onPageSuccess);
+        await this.executeItemWithRetry(currentItem, 0, operationId, currentSignal, onPageSuccess);
       } catch (err: any) {
-        if (this.isCancelled || currentSignal.aborted) {
+        if (this.activeOperationId !== operationId) {
+          return;
+        }
+        if (this.isCancelled || currentSignal.aborted || err?.name === 'AbortError') {
           console.log(`[ScanQueue] Page ${currentItem.pageId} cancelled.`);
           this.pageStatuses[currentItem.pageId] = 'unscanned';
         } else {
           console.error(`[ScanQueue] Unrecoverable failure for page ${currentItem.pageId}:`, err);
           this.pageStatuses[currentItem.pageId] = 'error';
+          this.pageErrors[currentItem.pageId] = err?.message || 'Scan failed';
         }
-        this.notify();
+        this.notify(currentItem.pageIndex);
+      }
+
+      if (this.activeOperationId !== operationId) {
+        return;
       }
 
       // Inter-request pacing to eliminate 429 quota exhaustion
       if (this.queue.length > 0 && !this.isCancelled) {
-        await new Promise((resolve) => setTimeout(resolve, interRequestCooldownMs));
+        await this.waitInterruptibly(interRequestCooldownMs, operationId, currentSignal);
       }
+    }
+
+    if (this.activeOperationId !== operationId) {
+      return;
     }
 
     this.isProcessing = false;
@@ -165,10 +266,16 @@ class ScanQueueManager {
   private async executeItemWithRetry(
     item: QueueItem,
     attempt: number,
+    operationId: string,
     signal: AbortSignal,
     onPageSuccess?: (pageId: string, bubbles: any[]) => void
   ): Promise<void> {
-    if (this.isCancelled || signal.aborted) return;
+    if (this.isCancelled || signal.aborted || this.activeOperationId !== operationId) return;
+
+    const scanPage = this.deps.scanPage ?? scanPageWithGemini;
+    const persistBubbles = this.deps.savePageBubbles ?? savePageBubbles;
+    const loadBubbles = this.deps.getPageBubbles ?? getPageBubbles;
+    const fetchRollingContext = this.deps.getRollingContextForPage ?? getRollingContextForPage;
 
     try {
       // 1. Fetch sequential rolling context from preceding page if index > 1 (F-12)
@@ -178,16 +285,15 @@ class ScanQueueManager {
           let precedingBubbles: any[] = [];
           if (this.lastCompletedBubbles && this.lastCompletedBubbles.pageIndex === item.pageIndex - 1) {
             precedingBubbles = this.lastCompletedBubbles.bubbles;
-          } else {
-            // Load prior page bubbles from database if available
-            // Look up prior page bubbles from IndexedDB
-            const previousPageBubbles = await getPageBubbles(item.pageId).catch(() => []);
+          } else if (item.previousPageId) {
+            // Load preceding page bubbles from database if available
+            const previousPageBubbles = await loadBubbles(item.previousPageId).catch(() => []);
             if (previousPageBubbles && previousPageBubbles.length > 0) {
               precedingBubbles = previousPageBubbles;
             }
           }
 
-          const rollingContext = await getRollingContextForPage(
+          const rollingContext = await fetchRollingContext(
             item.chapterId,
             item.pageIndex,
             precedingBubbles.map((b) => ({
@@ -212,8 +318,10 @@ class ScanQueueManager {
         }
       }
 
-      // 2. Multimodal Scan with AbortSignal propagation (F-07)
-      const result = await scanPageWithGemini({
+      if (this.isCancelled || signal.aborted || this.activeOperationId !== operationId) return;
+
+      // 2. Hybrid Scan + Translation with AbortSignal propagation (F-07)
+      const result = await scanPage({
         pageId: item.pageId,
         chapterId: item.chapterId,
         pageIndex: item.pageIndex,
@@ -222,18 +330,39 @@ class ScanQueueManager {
         signal,
       });
 
-      if (this.isCancelled || signal.aborted) return;
+      if (this.isCancelled || signal.aborted || this.activeOperationId !== operationId) return;
 
-      // 3. Persist bubbles to IndexedDB
-      await savePageBubbles(item.pageId, result.bubbles);
+      // 3. Persist bubbles to IndexedDB (guarantee consistency even with custom scanPage mocks)
+      await persistBubbles(item.pageId, result.bubbles);
+
+      if (this.isCancelled || signal.aborted || this.activeOperationId !== operationId) return;
+
+      const isPartial =
+        result.scanResult?.status === 'partial' || result.translationSuccess === false;
+      if (isPartial) {
+        this.partialPageIds.add(item.pageId);
+        this.pageWarnings[item.pageId] =
+          result.warnings && result.warnings.length > 0
+            ? result.warnings
+            : ['Partial scan result saved with recoverable stage unavailability.'];
+      } else {
+        this.partialPageIds.delete(item.pageId);
+        delete this.pageWarnings[item.pageId];
+      }
+
       this.lastCompletedBubbles = { pageIndex: item.pageIndex, bubbles: result.bubbles };
       this.pageStatuses[item.pageId] = 'scanned';
       this.completedCount++;
       onPageSuccess?.(item.pageId, result.bubbles);
       this.notify(item.pageIndex);
     } catch (err: any) {
-      if (this.isCancelled || signal.aborted) {
-        return;
+      if (
+        this.isCancelled ||
+        signal.aborted ||
+        err?.name === 'AbortError' ||
+        this.activeOperationId !== operationId
+      ) {
+        throw err;
       }
       console.warn(`[ScanQueue] Scan failed for page ${item.pageId} (Attempt ${attempt + 1}):`, err);
 
@@ -243,15 +372,25 @@ class ScanQueueManager {
         err?.message?.toLowerCase().includes('quota') ||
         err?.message?.toLowerCase().includes('rate limit');
 
-      if (isRateLimitOrOverloaded && attempt < 4 && !this.isCancelled && !signal.aborted) {
+      if (
+        isRateLimitOrOverloaded &&
+        attempt < 4 &&
+        !this.isCancelled &&
+        !signal.aborted &&
+        this.activeOperationId === operationId
+      ) {
         // Exponential backoff: delay = 2000 * 2^attempt + random(1000)
         const delay = 2000 * Math.pow(2, attempt) + Math.random() * 1000;
         console.log(`[ScanQueue] Rate limit reached. Backing off for ${(delay / 1000).toFixed(1)}s...`);
-        await new Promise((resolve) => setTimeout(resolve, delay));
-        return this.executeItemWithRetry(item, attempt + 1, signal, onPageSuccess);
+        await this.waitInterruptibly(delay, operationId, signal);
+        if (this.isCancelled || signal.aborted || this.activeOperationId !== operationId) {
+          return;
+        }
+        return this.executeItemWithRetry(item, attempt + 1, operationId, signal, onPageSuccess);
       }
 
       this.pageStatuses[item.pageId] = 'error';
+      this.pageErrors[item.pageId] = err?.message || 'Scan failed';
       this.notify(item.pageIndex);
       throw err;
     }
