@@ -13,8 +13,8 @@ import { VirtualKeyboard } from '../Tools/VirtualKeyboard';
 import { TypeRModal } from '../Export/TypeRModal';
 import { ingestImageFiles, pickImageFiles } from '../../services/fileIngestion';
 import { compileRawTextExtract } from '../../lib/compileTypeR';
-import { loadTyperSettings } from '../../types/typers';
-import { 
+import { deriveFallbackTyperColor, loadTyperSettings, normalizeHexColor } from '../../types/typers';
+import {
   ArrowLeft, 
   Menu, 
   FileText, 
@@ -29,13 +29,18 @@ import {
   BookOpen,
   X,
   Activity,
-  Stethoscope
+  Stethoscope,
+  Lasso
 } from 'lucide-react';
 import { ToolbarTooltip } from './ToolbarTooltip';
 import { isTrainingStudioEnabled } from '../../lib/training/env';
 import { isSystemDiagnosticsEnabled } from '../../lib/diagnosticTap';
 import { useConfirmationSetting } from '../../lib/confirmation';
 import type { PageMetadata } from '../../types';
+import { ManualSelectionPanel } from '../../features/manual-selection/components/ManualSelectionPanel';
+import { useManualControllerStore } from '../../features/manual-selection/services/manualActionsService';
+import { shouldHandleWorkspaceShortcut } from '../../features/manual-selection/selection/shortcuts';
+import { useTyperSettings } from '../../features/manual-selection/symbols/useTyperSettings';
 
 interface WorkbenchProps {
   folder: Folder | null;
@@ -88,6 +93,14 @@ export const Workbench: React.FC<WorkbenchProps> = ({
     isKeyboardOpen,
     setIsKeyboardOpen,
     toggleKeyboard,
+    isManualSelectionOpen,
+    setIsManualSelectionOpen,
+    toggleManualSelection,
+    manualSelectionMode,
+    setManualSelectionMode,
+    manualSelectedTyperId,
+    addManualSelectionRecord,
+    updateManualSelectionGeometry,
     isTypeRModalOpen,
     setIsTypeRModalOpen,
     isDrawBoxActive,
@@ -138,6 +151,8 @@ export const Workbench: React.FC<WorkbenchProps> = ({
   const zoomMenuRef = useRef<HTMLDivElement>(null);
   const [deletingPageId, setDeletingPageId] = useState<string | null>(null);
   const [isBenchmarkOpen, setIsBenchmarkOpen] = useState(false);
+  const typerSettings = useTyperSettings();
+  const setManualDrawing = useManualControllerStore((s) => s.setDrawing);
 
   // Phase 3.1: Original Filename Tooltip State (~1000ms hover delay)
   const [hoveredPageTooltip, setHoveredPageTooltip] = useState<{ fileName: string; x: number; y: number } | null>(null);
@@ -173,9 +188,33 @@ export const Workbench: React.FC<WorkbenchProps> = ({
     return () => unsub();
   }, []);
 
-  // Workspace Utility Rail Tools definition (Virtual Keyboard, Benchmark, and Dev-Only Diagnostic Studio)
+  const pages = chapter?.pageList || [];
+  const displayPages = pendingPages || pages;
+  const effectivePageId = activePageId || displayPages[0]?.id || null;
+  const currentPageIndex = effectivePageId ? displayPages.findIndex((p) => p.id === effectivePageId) : -1;
+  const activePageNum = currentPageIndex >= 0 ? currentPageIndex + 1 : 0;
+
+  const activeManualTyperColor = useMemo(() => {
+    const matched =
+      typerSettings.typers.find((t) => t.id === manualSelectedTyperId) ||
+      typerSettings.typers.find((t) => t.id === 'speech_bubbles') ||
+      typerSettings.typers[0];
+    return matched
+      ? normalizeHexColor(matched.color, deriveFallbackTyperColor(matched.id))
+      : '#2563EB';
+  }, [typerSettings.typers, manualSelectedTyperId]);
+
+  // Workspace Utility Rail Tools definition (Virtual Keyboard, Manual Selection, Diagnostics, and Dev-Only Diagnostic Studio)
   const utilityTools: UtilityRailTool[] = useMemo(() => {
     const base: UtilityRailTool[] = [
+      {
+        id: 'manual-selection',
+        name: 'Manual Selection',
+        description: 'Open floating Manual Selection controls to draw Box, Bubble, and Lasso regions on this canvas.',
+        icon: Lasso,
+        onClick: toggleManualSelection,
+        isActive: isManualSelectionOpen,
+      },
       {
         id: 'virtual-keyboard',
         name: 'Virtual Keyboard',
@@ -206,13 +245,15 @@ export const Workbench: React.FC<WorkbenchProps> = ({
       });
     }
     return base;
-  }, [toggleKeyboard, isKeyboardOpen, isBenchmarkOpen, onToggleDiagnostics, isDiagnosticsOpen]);
-
-  const pages = chapter?.pageList || [];
-  const displayPages = pendingPages || pages;
-  const effectivePageId = activePageId || displayPages[0]?.id || null;
-  const currentPageIndex = effectivePageId ? displayPages.findIndex((p) => p.id === effectivePageId) : -1;
-  const activePageNum = currentPageIndex >= 0 ? currentPageIndex + 1 : 0;
+  }, [
+    toggleManualSelection,
+    isManualSelectionOpen,
+    toggleKeyboard,
+    isKeyboardOpen,
+    isBenchmarkOpen,
+    onToggleDiagnostics,
+    isDiagnosticsOpen,
+  ]);
 
   // Auto-expire pending reorder after 60 seconds if unconfirmed
   useEffect(() => {
@@ -476,13 +517,14 @@ export const Workbench: React.FC<WorkbenchProps> = ({
     prevPageIdRef.current = effectivePageId;
   }, [effectivePageId, resetZoom, setSelectedBubbleId]);
 
-  // Global Keyboard shortcuts: Escape, Ctrl+, Ctrl+K, J, K (focus-guarded)
+  // Global Keyboard shortcuts: Escape, Ctrl+, Ctrl+K, Manual Selection modes (1/2/3/Del), J, K (IME & focus guarded)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const activeEl = document.activeElement;
       const isInputFocused =
         activeEl instanceof HTMLTextAreaElement ||
         activeEl instanceof HTMLInputElement ||
+        activeEl instanceof HTMLSelectElement ||
         activeEl?.getAttribute('contenteditable') === 'true';
 
       if ((e.ctrlKey || e.metaKey) && e.key === ',') {
@@ -492,7 +534,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
         e.preventDefault();
         toggleKeyboard();
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-        if (!isInputFocused) {
+        if (!isInputFocused && !e.isComposing && e.keyCode !== 229) {
           e.preventDefault();
           if (e.shiftKey) {
             if (effectivePageId) redoBubbleAction(effectivePageId);
@@ -501,7 +543,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
           }
         }
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
-        if (!isInputFocused) {
+        if (!isInputFocused && !e.isComposing && e.keyCode !== 229) {
           e.preventDefault();
           if (effectivePageId) redoBubbleAction(effectivePageId);
         }
@@ -512,10 +554,39 @@ export const Workbench: React.FC<WorkbenchProps> = ({
           setIsTypeRModalOpen(false);
         } else if (isKeyboardOpen) {
           setIsKeyboardOpen(false);
+        } else if (isManualSelectionOpen) {
+          setIsManualSelectionOpen(false);
         } else {
           onBack();
         }
-      } else if (!isInputFocused && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      } else if (shouldHandleWorkspaceShortcut(e)) {
+        if (isManualSelectionOpen) {
+          if (e.key === '1') {
+            e.preventDefault();
+            setManualSelectionMode('box');
+            return;
+          }
+          if (e.key === '2') {
+            e.preventDefault();
+            setManualSelectionMode('bubble');
+            return;
+          }
+          if (e.key === '3') {
+            e.preventDefault();
+            setManualSelectionMode('lasso');
+            return;
+          }
+          if ((e.key === 'Delete' || e.key === 'Backspace') && effectivePageId && selectedBubbleId) {
+            const currentList = bubblesByPage[effectivePageId] || [];
+            const target = currentList.find((b) => b.id === selectedBubbleId);
+            if (target?.provenance === 'manual_selection') {
+              e.preventDefault();
+              deleteBubble(effectivePageId, selectedBubbleId);
+              return;
+            }
+          }
+        }
+
         const currentList = effectivePageId ? (bubblesByPage[effectivePageId] || []) : [];
         if (currentList.length > 0) {
           const currentIdx = currentList.findIndex((b) => b.id === selectedBubbleId);
@@ -539,11 +610,17 @@ export const Workbench: React.FC<WorkbenchProps> = ({
     isSettingsOpen,
     isTypeRModalOpen,
     isKeyboardOpen,
+    isManualSelectionOpen,
     toggleSettings,
     toggleKeyboard,
     setIsSettingsOpen,
     setIsTypeRModalOpen,
     setIsKeyboardOpen,
+    setIsManualSelectionOpen,
+    setManualSelectionMode,
+    undoBubbleAction,
+    redoBubbleAction,
+    deleteBubble,
     onBack,
     effectivePageId,
     bubblesByPage,
@@ -753,8 +830,8 @@ export const Workbench: React.FC<WorkbenchProps> = ({
     }
   };
 
-  const handleCanvasSelectBubble = (bubbleId: string) => {
-    setSelectedBubbleId(bubbleId);
+  const handleCanvasSelectBubble = (bubbleId: string | null) => {
+    setSelectedBubbleId(bubbleId || null);
   };
 
   useEffect(() => {
@@ -1164,7 +1241,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
               type="button"
               onClick={handleScanThisPage}
               disabled={isScanningSinglePage}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl border text-xs font-medium transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl border text-xs font-medium whitespace-nowrap transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
                 isScanningSinglePage
                   ? 'bg-[#181920] border-sky-500/40 text-sky-300 animate-pulse'
                   : 'bg-[#121317] border-white/[0.08] hover:bg-[#181920] hover:border-white/[0.16] text-zinc-200'
@@ -1186,7 +1263,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
               type="button"
               onClick={handleReviewThisPage}
               disabled={isReviewingSinglePage}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl border text-xs font-medium transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl border text-xs font-medium whitespace-nowrap transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
                 isReviewingSinglePage
                   ? 'bg-[#181920] border-amber-400/40 text-amber-300 animate-pulse'
                   : 'bg-[#121317] border-white/[0.08] hover:bg-[#181920] hover:border-white/[0.16] text-zinc-200'
@@ -1207,7 +1284,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
             <button
               type="button"
               onClick={handleExtractPage}
-              className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-[#121317] border border-white/[0.08] hover:bg-[#181920] hover:border-white/[0.16] text-xs font-medium text-zinc-200 transition-all cursor-pointer shadow-sm active:scale-95 shrink-0"
+              className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-[#121317] border border-white/[0.08] hover:bg-[#181920] hover:border-white/[0.16] text-xs font-medium whitespace-nowrap text-zinc-200 transition-all cursor-pointer shadow-sm active:scale-95 shrink-0"
               title="Extract Current Page Text (No Translation)"
             >
               <FileText className="w-3.5 h-3.5 text-zinc-300" />
@@ -1220,7 +1297,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
             <button
               type="button"
               onClick={handleExtractAll}
-              className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-[#121317] border border-white/[0.08] hover:bg-[#181920] hover:border-white/[0.16] text-xs font-medium text-zinc-200 transition-all cursor-pointer shadow-sm active:scale-95 shrink-0"
+              className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-[#121317] border border-white/[0.08] hover:bg-[#181920] hover:border-white/[0.16] text-xs font-medium whitespace-nowrap text-zinc-200 transition-all cursor-pointer shadow-sm active:scale-95 shrink-0"
               title="Extract All Chapter Text (No Translation)"
             >
               <FileText className="w-3.5 h-3.5 text-zinc-300" />
@@ -1231,7 +1308,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
               type="button"
               onClick={handleReviewChapterClick}
               disabled={isReviewingChapter}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-medium transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-medium whitespace-nowrap transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
                 isReviewingChapter
                   ? 'bg-amber-300 text-black animate-pulse'
                   : 'bg-amber-400 hover:bg-amber-300 text-black'
@@ -1252,7 +1329,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
             <button
               type="button"
               onClick={handleScanAll}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-medium transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-medium whitespace-nowrap transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
                 isScanningActive
                   ? 'bg-blue-400 text-white animate-pulse'
                   : 'bg-blue-600 hover:bg-blue-500 text-white'
@@ -1278,6 +1355,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
         {/* Left Column: Canvas Card Container (Preview: 30-32% width preserved strictly) */}
         <div className="w-[32%] max-w-[34%] min-w-[28%] shrink-0 h-full flex flex-col min-h-0">
           <CanvasPane
+            projectId={folder?.id ?? null}
             imageUrl={imageUrl}
             isLoading={isLoadingBlob}
             pageFileName={pages[currentPageIndex]?.fileName}
@@ -1287,6 +1365,9 @@ export const Workbench: React.FC<WorkbenchProps> = ({
             centerTarget={centerTarget}
             panTarget={panTarget}
             isDrawBoxActive={isDrawBoxActive}
+            isManualSelectionActive={isManualSelectionOpen}
+            manualSelectionMode={manualSelectionMode}
+            manualActiveTyperColor={activeManualTyperColor}
             zoomLevel={zoomLevel}
             showBoxes={showBoxes}
             isFlipPageActive={isFlipPageActive}
@@ -1300,6 +1381,17 @@ export const Workbench: React.FC<WorkbenchProps> = ({
             onPanChange={(p) => { currentPanRef.current = p; }}
             onSelectBubble={handleCanvasSelectBubble}
             onAddManualBubbleWithCoords={handleAddManualBubbleWithCoords}
+            onCreateManualSelection={(input) => {
+              if (effectivePageId) {
+                addManualSelectionRecord(effectivePageId, input);
+              }
+            }}
+            onUpdateManualSelectionGeometry={(bubbleId, next) => {
+              if (effectivePageId) {
+                updateManualSelectionGeometry(effectivePageId, bubbleId, next);
+              }
+            }}
+            onManualDrawingStateChange={setManualDrawing}
             onIngestDroppedFiles={handleIngestDroppedOnCanvas}
           />
         </div>
@@ -1398,6 +1490,14 @@ export const Workbench: React.FC<WorkbenchProps> = ({
       <VirtualKeyboard
         isOpen={isKeyboardOpen}
         onClose={() => setIsKeyboardOpen(false)}
+      />
+
+      {/* 7. Floating Manual Selection Control Panel */}
+      <ManualSelectionPanel
+        projectId={folder?.id ?? null}
+        chapterId={chapter?.id ?? null}
+        pages={displayPages.map((p) => ({ id: p.id, index: p.index }))}
+        activePageId={effectivePageId}
       />
 
       {/* Phase 3.1: Original Filename Tooltip (~1000ms delay) */}

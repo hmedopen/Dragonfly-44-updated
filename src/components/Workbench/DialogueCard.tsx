@@ -1,7 +1,6 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import type { BubbleItem } from '../../types/workbench';
 import { BUBBLE_TYPE_CONFIG, REVIEW_CATEGORY_LABELS } from '../../types/workbench';
-import { loadTyperSettings } from '../../types/typers';
 import { focusRegistry } from '../../lib/focusRegistry';
 import { internalTextDrag, type TextDragPayload } from '../../lib/internalTextDrag';
 import { useConfirmationSetting } from '../../lib/confirmation';
@@ -18,6 +17,14 @@ import {
   Languages,
   Scissors
 } from 'lucide-react';
+import {
+  deriveFallbackTyperColor,
+  formatTyperSymbol,
+  normalizeHexColor,
+  resolveTyperVisual,
+} from '../../types/typers';
+import { TyperSymbolBadge } from '../../features/manual-selection/components/TyperSymbolBadge';
+import { useTyperSettings } from '../../features/manual-selection/symbols/useTyperSettings';
 
 interface DialogueCardProps {
   bubble: BubbleItem;
@@ -133,16 +140,9 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
     autoResize(translationTextareaRef.current);
   }, [draftTranslatedText]);
 
-  // Listen to typer settings updates dynamically
-  const [typerSettings, setTyperSettings] = useState(() => loadTyperSettings());
-
-  useEffect(() => {
-    const handleSettingsUpdate = () => {
-      setTyperSettings(loadTyperSettings());
-    };
-    window.addEventListener('dragonfly44_typer_settings_updated', handleSettingsUpdate);
-    return () => window.removeEventListener('dragonfly44_typer_settings_updated', handleSettingsUpdate);
-  }, []);
+  // Listen to shared Workspace typer settings updates dynamically
+  const typerSettings = useTyperSettings();
+  const bubbleTyperVisual = resolveTyperVisual(bubble, typerSettings.typers);
 
   // Close type dropdown on outside click
   useEffect(() => {
@@ -514,11 +514,42 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
           </div>
 
           {/* Index Chip #01 */}
-          <div className="px-2.5 py-0.5 rounded-full bg-[#181920] border border-white/5 flex items-center justify-center">
+          <div className="px-2.5 py-0.5 rounded-full bg-[#181920] border border-white/5 flex items-center justify-center shrink-0">
             <span className="font-sans text-xs font-semibold text-zinc-300">
               #{paddedIndex}
             </span>
           </div>
+
+          {/* Solid Colored Box with Actual Typer Symbol (Shared across Manual & Automatic Records) */}
+          {bubbleTyperVisual.isClassified && (
+            <TyperSymbolBadge
+              symbol={bubbleTyperVisual.symbol}
+              color={bubbleTyperVisual.color}
+              title={`${bubbleTyperVisual.name} (${bubbleTyperVisual.symbol})`}
+            />
+          )}
+
+          {bubble.manualExtractionStatus === 'ocr_running' && (
+            <span className="px-1.5 py-0.5 rounded bg-sky-600 text-white text-[10px] font-bold shrink-0">
+              OCR
+            </span>
+          )}
+          {bubble.manualExtractionStatus === 'ocr_failed' && (
+            <span
+              title={bubble.manualExtractionError || 'Local OCR failed'}
+              className="px-1.5 py-0.5 rounded bg-rose-600 text-white text-[10px] font-bold shrink-0"
+            >
+              OCR FAILED
+            </span>
+          )}
+          {bubble.manualTranslationStatus === 'translation_failed' && (
+            <span
+              title={bubble.manualTranslationError || 'Translation failed'}
+              className="px-1.5 py-0.5 rounded bg-rose-600 text-white text-[10px] font-bold shrink-0"
+            >
+              TRANS FAILED
+            </span>
+          )}
 
           {/* Bubble Type Dropdown Pill */}
           <div className="relative" ref={dropdownRef}>
@@ -542,7 +573,7 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
             </button>
 
             {isTypeDropdownOpen && (
-              <div className="absolute left-0 top-full mt-1.5 w-52 max-h-64 overflow-y-auto rounded-xl bg-[#181920] border border-white/[0.12] shadow-2xl z-50 py-1.5 custom-scrollbar animate-in fade-in zoom-in-95 duration-100">
+              <div className="absolute left-0 top-full mt-1.5 w-56 max-h-64 overflow-y-auto rounded-xl bg-[#181920] border border-white/[0.12] shadow-2xl z-50 py-1.5 custom-scrollbar animate-in fade-in zoom-in-95 duration-100">
                 {/* Option: None */}
                 <button
                   type="button"
@@ -563,6 +594,11 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
                 {/* All dynamically configured typers from settings */}
                 {typerSettings.typers.map((typer) => {
                   const isCurrent = bubble.type === typer.id;
+                  const tColor = normalizeHexColor(
+                    typer.color,
+                    deriveFallbackTyperColor(typer.id)
+                  );
+                  const tSym = formatTyperSymbol(typer.prefix, typer.name);
                   return (
                     <button
                       key={typer.id}
@@ -571,15 +607,15 @@ export const DialogueCard: React.FC<DialogueCardProps> = ({
                         e.stopPropagation();
                         handleTypeSelect(typer.id, typer.prefix);
                       }}
-                      className={`w-full px-3 py-1.5 text-left text-xs font-sans flex items-center justify-between transition-colors cursor-pointer ${
+                      className={`w-full px-3 py-1.5 text-left text-xs font-sans flex items-center justify-between gap-2 transition-colors cursor-pointer ${
                         isCurrent
                           ? 'bg-sky-500/20 text-sky-300 font-semibold'
                           : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'
                       }`}
                     >
-                      <span className="truncate pr-2">{typer.name}</span>
-                      <span className="text-[10px] font-mono text-zinc-400 shrink-0">
-                        {typer.prefix || '""'}
+                      <span className="flex items-center gap-2 min-w-0">
+                        <TyperSymbolBadge symbol={tSym} color={tColor} size="xs" />
+                        <span className="truncate">{typer.name}</span>
                       </span>
                     </button>
                   );

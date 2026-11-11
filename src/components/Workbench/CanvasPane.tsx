@@ -10,8 +10,123 @@ import {
 import { renderGenerationManager } from '../../lib/workspace/renderGeneration';
 import { settingsService } from '../../services/settings/settingsService';
 import { emitDiagnosticBoundary } from '../../lib/diagnosticTap';
+import { resolveTyperVisual } from '../../types/typers';
+import { useTyperSettings } from '../../features/manual-selection/symbols/useTyperSettings';
+import { TyperSymbolBadge } from '../../features/manual-selection/components/TyperSymbolBadge';
+import {
+  finalizeLassoPolygon,
+  finalizeTwoPointBox,
+  isPointInBox,
+  isPointInEllipse,
+  isPointInPolygon,
+  resizeBoxFromHandle,
+  roundNorm,
+  scalePolygonFromBox,
+  translateSelectionGeometry,
+  type ResizeHandle,
+} from '../../features/manual-selection/selection/geometry';
+import {
+  computeOverlayZoomCompensation,
+  normalizeSelectionOverlaySize,
+  SELECTION_OVERLAY_METRICS,
+  type SelectionOverlaySize,
+} from '../../features/manual-selection/selection/overlaySizing';
+import type {
+  NormalizedBox2D,
+  NormalizedPolygon,
+  SelectionMode,
+} from '../../features/manual-selection/types/selection';
+
+function hexToRgba(hexColor: string, alpha: number): string {
+  const clean = hexColor.replace('#', '');
+  if (!/^[0-9a-fA-F]{6}$/.test(clean)) {
+    return `rgba(56, 189, 248, ${alpha})`;
+  }
+  const r = parseInt(clean.slice(0, 2), 16);
+  const g = parseInt(clean.slice(2, 4), 16);
+  const b = parseInt(clean.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+const RESIZE_HANDLES: Array<{
+  id: ResizeHandle;
+  cursor: string;
+  getPoint: (box: NormalizedBox2D) => [number, number];
+}> = [
+  { id: 'nw', cursor: 'nwse-resize', getPoint: (b) => [b[1], b[0]] },
+  { id: 'n', cursor: 'ns-resize', getPoint: (b) => [(b[1] + b[3]) / 2, b[0]] },
+  { id: 'ne', cursor: 'nesw-resize', getPoint: (b) => [b[3], b[0]] },
+  { id: 'e', cursor: 'ew-resize', getPoint: (b) => [b[3], (b[0] + b[2]) / 2] },
+  { id: 'se', cursor: 'nwse-resize', getPoint: (b) => [b[3], b[2]] },
+  { id: 's', cursor: 'ns-resize', getPoint: (b) => [(b[1] + b[3]) / 2, b[2]] },
+  { id: 'sw', cursor: 'nesw-resize', getPoint: (b) => [b[1], b[2]] },
+  { id: 'w', cursor: 'ew-resize', getPoint: (b) => [b[1], (b[0] + b[2]) / 2] },
+];
+
+const CORNER_HANDLE_IDS = new Set<ResizeHandle>(['nw', 'ne', 'se', 'sw']);
+
+function setSvgRectBounds(el: SVGRectElement, box: NormalizedBox2D): void {
+  el.setAttribute('x', String(box[1]));
+  el.setAttribute('y', String(box[0]));
+  el.setAttribute('width', String(Math.max(0.5, box[3] - box[1])));
+  el.setAttribute('height', String(Math.max(0.5, box[2] - box[0])));
+}
+
+function setSvgEllipseBounds(el: SVGEllipseElement, box: NormalizedBox2D): void {
+  el.setAttribute('cx', String((box[1] + box[3]) / 2));
+  el.setAttribute('cy', String((box[0] + box[2]) / 2));
+  el.setAttribute('rx', String(Math.max(0.25, (box[3] - box[1]) / 2)));
+  el.setAttribute('ry', String(Math.max(0.25, (box[2] - box[0]) / 2)));
+}
+
+function isParametricBubbleItem(bubble: Pick<BubbleItem, 'manualSelectionShape' | 'manualPolygon'>): boolean {
+  return (
+    bubble.manualSelectionShape === 'bubble' &&
+    !(bubble.manualPolygon && bubble.manualPolygon.length >= 3)
+  );
+}
+
+type ManualCanvasGesture =
+  | {
+      kind: 'draw_box';
+      shape: 'box' | 'bubble';
+      startNorm: [number, number];
+      currentNorm: [number, number];
+      startClient: [number, number];
+      didDrag: boolean;
+    }
+  | {
+      kind: 'draw_freehand';
+      mode: 'lasso';
+      points: NormalizedPolygon;
+      startClient: [number, number];
+      didDrag: boolean;
+    }
+  | {
+      kind: 'move';
+      bubbleId: string;
+      isEllipse?: boolean;
+      initialBox: NormalizedBox2D;
+      initialPolygon?: NormalizedPolygon;
+      startNorm: [number, number];
+      currentBox: NormalizedBox2D;
+      currentPolygon?: NormalizedPolygon;
+      didDrag: boolean;
+    }
+  | {
+      kind: 'resize';
+      bubbleId: string;
+      isEllipse?: boolean;
+      handle: ResizeHandle;
+      initialBox: NormalizedBox2D;
+      initialPolygon?: NormalizedPolygon;
+      currentBox: NormalizedBox2D;
+      currentPolygon?: NormalizedPolygon;
+      didDrag: boolean;
+    };
 
 interface CanvasPaneProps {
+  projectId?: string | null;
   imageUrl: string | null;
   isLoading: boolean;
   pageFileName?: string;
@@ -21,6 +136,9 @@ interface CanvasPaneProps {
   centerTarget?: { bubbleId: string; box_2d: [number, number, number, number]; trigger: number } | null;
   panTarget?: { x: number; y: number; trigger: number } | null;
   isDrawBoxActive: boolean;
+  isManualSelectionActive?: boolean;
+  manualSelectionMode?: SelectionMode;
+  manualActiveTyperColor?: string;
   zoomLevel: number;
   showBoxes?: boolean;
   isFlipPageActive?: boolean;
@@ -32,12 +150,23 @@ interface CanvasPaneProps {
   onResetZoom?: () => void;
   resetViewTrigger?: number;
   onPanChange?: (pan: { x: number; y: number }) => void;
-  onSelectBubble: (bubbleId: string) => void;
+  onSelectBubble: (bubbleId: string | null) => void;
   onAddManualBubbleWithCoords?: (box_2d: [number, number, number, number]) => void;
+  onCreateManualSelection?: (input: {
+    shape: SelectionMode;
+    box_2d: NormalizedBox2D;
+    polygon?: NormalizedPolygon;
+  }) => void;
+  onUpdateManualSelectionGeometry?: (
+    bubbleId: string,
+    next: { box_2d: NormalizedBox2D; polygon?: NormalizedPolygon }
+  ) => void;
+  onManualDrawingStateChange?: (drawing: boolean) => void;
   onIngestDroppedFiles?: (files: File[]) => void;
 }
 
 export const CanvasPane: React.FC<CanvasPaneProps> = ({
+  projectId = null,
   imageUrl,
   isLoading,
   pageFileName,
@@ -47,6 +176,9 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
   centerTarget,
   panTarget,
   isDrawBoxActive,
+  isManualSelectionActive = false,
+  manualSelectionMode = 'box',
+  manualActiveTyperColor = '#2563EB',
   zoomLevel,
   showBoxes = true,
   isFlipPageActive = false,
@@ -60,9 +192,25 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
   onPanChange,
   onSelectBubble,
   onAddManualBubbleWithCoords,
+  onCreateManualSelection,
+  onUpdateManualSelectionGeometry,
+  onManualDrawingStateChange,
   onIngestDroppedFiles,
 }) => {
   const [isDragOver, setIsDragOver] = useState(false);
+  const typerSettings = useTyperSettings();
+  const imgRef = useRef<HTMLImageElement>(null);
+  const imgNaturalRef = useRef<{ width: number; height: number }>({ width: 1000, height: 1000 });
+  const [imgNaturalSize, setImgNaturalSize] = useState<{ width: number; height: number }>({
+    width: 1000,
+    height: 1000,
+  });
+  const manualGestureRef = useRef<ManualCanvasGesture | null>(null);
+  const manualRafRef = useRef<number | null>(null);
+  const previewRectRef = useRef<SVGRectElement>(null);
+  const previewEllipseRef = useRef<SVGEllipseElement>(null);
+  const previewPolyRef = useRef<SVGPolygonElement>(null);
+  const previewFreehandRef = useRef<SVGPathElement>(null);
 
   // Pan and drag state
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -84,29 +232,30 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
     onPanChangeRef.current?.(pan);
   }, [pan]);
 
-  // Settings subscription for overlay visibility & diagnostics HUD
-  const [overlaySettings, setOverlaySettings] = useState(() => ({
-    boxesVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_boxes_visible').value,
-    readingOrderVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_reading_order_visible').value,
-    panelsVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_panels_visible').value,
-    reviewMarkersVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_review_markers_visible').value,
-    coordinateDiagnostics: settingsService.getEffectiveValue<boolean>('workspace.coordinate_diagnostics').value,
-    includeSFX: settingsService.getEffectiveValue<boolean>('scanning.include_sfx').value,
-  }));
+  // Settings subscription for overlay visibility, sizing & diagnostics HUD
+  const [settingsRevision, setSettingsRevision] = useState(() => settingsService.getRevision());
 
   useEffect(() => {
     const unsub = settingsService.subscribe(() => {
-      setOverlaySettings({
-        boxesVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_boxes_visible').value,
-        readingOrderVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_reading_order_visible').value,
-        panelsVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_panels_visible').value,
-        reviewMarkersVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_review_markers_visible').value,
-        coordinateDiagnostics: settingsService.getEffectiveValue<boolean>('workspace.coordinate_diagnostics').value,
-        includeSFX: settingsService.getEffectiveValue<boolean>('scanning.include_sfx').value,
-      });
+      setSettingsRevision(settingsService.getRevision());
     });
     return () => unsub();
   }, []);
+
+  const overlaySettings = useMemo(() => {
+    void settingsRevision;
+    return {
+      boxesVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_boxes_visible', { projectId }).value,
+      readingOrderVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_reading_order_visible', { projectId }).value,
+      panelsVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_panels_visible', { projectId }).value,
+      reviewMarkersVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_review_markers_visible', { projectId }).value,
+      coordinateDiagnostics: settingsService.getEffectiveValue<boolean>('workspace.coordinate_diagnostics', { projectId }).value,
+      selectionOverlaySize: normalizeSelectionOverlaySize(
+        settingsService.getEffectiveValue<SelectionOverlaySize>('workspace.selection_overlay_size', { projectId }).value
+      ),
+      includeSFX: settingsService.getEffectiveValue<boolean>('scanning.include_sfx', { projectId }).value,
+    };
+  }, [projectId, settingsRevision]);
 
   // Cursor coordinates for diagnostics HUD
   const [cursorPos, setCursorPos] = useState<{ screenX: number; screenY: number; srcX: number; srcY: number } | null>(null);
@@ -396,7 +545,7 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
   };
 
   const handleDoubleClick = (e: React.MouseEvent) => {
-    if (isDrawBoxActive) return;
+    if (isDrawBoxActive || isManualSelectionActive) return;
     if ((e.target as HTMLElement)?.closest('[data-flip-edge="true"]')) return;
     e.preventDefault();
     onResetZoom?.();
@@ -404,21 +553,320 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
   };
 
   /**
-   * Maps pointer event to canonical source space (0-1000) using geometryService inverse transform.
+   * Maps pointer event to canonical source space (0-1000) with sub-pixel float precision.
    */
+  const getCanonicalFloatCoords = useCallback(
+    (e: { clientX: number; clientY: number }): [number, number] | null => {
+      const targetEl = imgRef.current ?? svgRef.current;
+      if (!targetEl) return null;
+      const rect = targetEl.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return null;
+
+      const rawX = ((e.clientX - rect.left) / rect.width) * 1000;
+      const rawY = ((e.clientY - rect.top) / rect.height) * 1000;
+      return [roundNorm(rawX), roundNorm(rawY)];
+    },
+    []
+  );
+
   const getCanonicalSourceCoords = (e: { clientX: number; clientY: number }): { x: number; y: number } | null => {
-    if (!svgRef.current) return null;
-    const rect = svgRef.current.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) return null;
-
-    const rawX = ((e.clientX - rect.left) / rect.width) * 1000;
-    const rawY = ((e.clientY - rect.top) / rect.height) * 1000;
-
-    return {
-      x: Math.max(0, Math.min(1000, Math.round(rawX))),
-      y: Math.max(0, Math.min(1000, Math.round(rawY))),
-    };
+    const pt = getCanonicalFloatCoords(e);
+    if (!pt) return null;
+    return { x: Math.round(pt[0]), y: Math.round(pt[1]) };
   };
+
+  const clearManualPreview = useCallback(() => {
+    if (manualRafRef.current !== null) {
+      cancelAnimationFrame(manualRafRef.current);
+      manualRafRef.current = null;
+    }
+    if (previewRectRef.current) previewRectRef.current.style.display = 'none';
+    if (previewEllipseRef.current) previewEllipseRef.current.style.display = 'none';
+    if (previewPolyRef.current) previewPolyRef.current.style.display = 'none';
+    if (previewFreehandRef.current) previewFreehandRef.current.style.display = 'none';
+  }, []);
+
+  const scheduleManualPreviewPaint = useCallback(() => {
+    if (manualRafRef.current !== null) return;
+    manualRafRef.current = requestAnimationFrame(() => {
+      manualRafRef.current = null;
+      const g = manualGestureRef.current;
+      if (!g) {
+        clearManualPreview();
+        return;
+      }
+
+      const rectEl = previewRectRef.current;
+      const ellipseEl = previewEllipseRef.current;
+      const polyEl = previewPolyRef.current;
+      const pathEl = previewFreehandRef.current;
+
+      if (g.kind === 'draw_box') {
+        if (polyEl) polyEl.style.display = 'none';
+        if (pathEl) pathEl.style.display = 'none';
+        const box: NormalizedBox2D = [
+          Math.min(g.startNorm[1], g.currentNorm[1]),
+          Math.min(g.startNorm[0], g.currentNorm[0]),
+          Math.max(g.startNorm[1], g.currentNorm[1]),
+          Math.max(g.startNorm[0], g.currentNorm[0]),
+        ];
+        if (g.shape === 'bubble') {
+          if (rectEl) rectEl.style.display = 'none';
+          if (ellipseEl) {
+            ellipseEl.style.display = 'block';
+            setSvgEllipseBounds(ellipseEl, box);
+          }
+        } else {
+          if (ellipseEl) ellipseEl.style.display = 'none';
+          if (rectEl) {
+            rectEl.style.display = 'block';
+            setSvgRectBounds(rectEl, box);
+          }
+        }
+      } else if (g.kind === 'draw_freehand') {
+        if (rectEl) rectEl.style.display = 'none';
+        if (ellipseEl) ellipseEl.style.display = 'none';
+        if (polyEl) polyEl.style.display = 'none';
+        if (pathEl && g.points.length > 0) {
+          const d =
+            g.points.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x} ${y}`).join(' ') +
+            (g.points.length >= 3 ? ' Z' : '');
+          pathEl.style.display = 'block';
+          pathEl.setAttribute('d', d);
+        }
+      } else {
+        if (pathEl) pathEl.style.display = 'none';
+        if (g.currentPolygon && g.currentPolygon.length >= 3) {
+          if (rectEl) rectEl.style.display = 'none';
+          if (ellipseEl) ellipseEl.style.display = 'none';
+          if (polyEl) {
+            polyEl.style.display = 'block';
+            polyEl.setAttribute('points', g.currentPolygon.map(([x, y]) => `${x},${y}`).join(' '));
+          }
+        } else if (g.isEllipse) {
+          if (rectEl) rectEl.style.display = 'none';
+          if (polyEl) polyEl.style.display = 'none';
+          if (ellipseEl) {
+            ellipseEl.style.display = 'block';
+            setSvgEllipseBounds(ellipseEl, g.currentBox);
+          }
+        } else {
+          if (polyEl) polyEl.style.display = 'none';
+          if (ellipseEl) ellipseEl.style.display = 'none';
+          if (rectEl) {
+            rectEl.style.display = 'block';
+            setSvgRectBounds(rectEl, g.currentBox);
+          }
+        }
+      }
+    });
+  }, [clearManualPreview]);
+
+  const hitTestAnyBubbleAt = useCallback(
+    (nx: number, ny: number): BubbleItem | null => {
+      // Check visible bubbles in reverse order so top-most / newly added wins on overlap
+      for (let i = visibleBubbles.length - 1; i >= 0; i--) {
+        const b = visibleBubbles[i];
+        if (b.manualPolygon && b.manualPolygon.length >= 3) {
+          if (isPointInPolygon(nx, ny, b.manualPolygon)) return b;
+        } else if (b.manualSelectionShape === 'bubble') {
+          if (isPointInEllipse(nx, ny, b.box_2d, 0.5)) return b;
+        } else if (isPointInBox(nx, ny, b.box_2d, 0.5)) {
+          return b;
+        }
+      }
+      return null;
+    },
+    [visibleBubbles]
+  );
+
+  const commitManualGesture = useCallback(
+    (e?: { clientX: number; clientY: number }) => {
+      const g = manualGestureRef.current;
+      manualGestureRef.current = null;
+      onManualDrawingStateChange?.(false);
+      clearManualPreview();
+      if (!g) return;
+
+      const natW = imgNaturalRef.current.width || 1000;
+      const natH = imgNaturalRef.current.height || 1000;
+
+      if (g.kind === 'draw_box') {
+        if (!g.didDrag) {
+          if (e) {
+            const coords = getCanonicalFloatCoords(e);
+            const hit = coords ? hitTestAnyBubbleAt(coords[0], coords[1]) : null;
+            onSelectBubble(hit ? hit.id : null);
+          }
+          return;
+        }
+        const box = finalizeTwoPointBox(g.startNorm, g.currentNorm, natW, natH);
+        if (box) {
+          onCreateManualSelection?.({
+            shape: g.shape,
+            box_2d: box,
+          });
+        }
+        return;
+      }
+
+      if (g.kind === 'draw_freehand') {
+        if (!g.didDrag || g.points.length < 3) {
+          if (e) {
+            const coords = getCanonicalFloatCoords(e);
+            const hit = coords ? hitTestAnyBubbleAt(coords[0], coords[1]) : null;
+            onSelectBubble(hit ? hit.id : null);
+          }
+          return;
+        }
+        const result = finalizeLassoPolygon(g.points, natW, natH);
+        if (result.valid) {
+          onCreateManualSelection?.({
+            shape: 'lasso',
+            box_2d: result.box_2d,
+            polygon: result.polygon,
+          });
+        }
+        return;
+      }
+
+      if (g.kind === 'move') {
+        if (!g.didDrag) {
+          onSelectBubble(g.bubbleId);
+          return;
+        }
+        onUpdateManualSelectionGeometry?.(g.bubbleId, {
+          box_2d: g.currentBox,
+          ...(g.currentPolygon ? { polygon: g.currentPolygon } : {}),
+        });
+        return;
+      }
+
+      if (g.kind === 'resize' && g.didDrag) {
+        onUpdateManualSelectionGeometry?.(g.bubbleId, {
+          box_2d: g.currentBox,
+          ...(g.currentPolygon ? { polygon: g.currentPolygon } : {}),
+        });
+      }
+    },
+    [
+      clearManualPreview,
+      getCanonicalFloatCoords,
+      hitTestAnyBubbleAt,
+      onCreateManualSelection,
+      onManualDrawingStateChange,
+      onSelectBubble,
+      onUpdateManualSelectionGeometry,
+    ]
+  );
+
+  // Global mousemove/mouseup/keydown listeners while a manual gesture is active (stable, 0 rerenders per frame)
+  const attachManualWindowListeners = useCallback(() => {
+    const handleMove = (ev: MouseEvent) => {
+      const g = manualGestureRef.current;
+      if (!g) return;
+      const coords = getCanonicalFloatCoords(ev);
+      if (!coords) return;
+
+      if (g.kind === 'draw_box') {
+        g.currentNorm = coords;
+        if (!g.didDrag && Math.hypot(ev.clientX - g.startClient[0], ev.clientY - g.startClient[1]) >= 4) {
+          g.didDrag = true;
+          onManualDrawingStateChange?.(true);
+        }
+      } else if (g.kind === 'draw_freehand') {
+        if (!g.didDrag && Math.hypot(ev.clientX - g.startClient[0], ev.clientY - g.startClient[1]) >= 4) {
+          g.didDrag = true;
+          onManualDrawingStateChange?.(true);
+        }
+        const prev = g.points[g.points.length - 1];
+        if (!prev || Math.hypot(coords[0] - prev[0], coords[1] - prev[1]) >= 1.2) {
+          g.points.push(coords);
+        }
+      } else if (g.kind === 'move') {
+        const dx = coords[0] - g.startNorm[0];
+        const dy = coords[1] - g.startNorm[1];
+        if (!g.didDrag && (Math.abs(dx) > 0.3 || Math.abs(dy) > 0.3)) {
+          g.didDrag = true;
+        }
+        const translated = translateSelectionGeometry(
+          { box_2d: g.initialBox, polygon: g.initialPolygon },
+          dx,
+          dy
+        );
+        g.currentBox = translated.box_2d;
+        g.currentPolygon = translated.polygon;
+      } else if (g.kind === 'resize') {
+        g.didDrag = true;
+        const nextBox = resizeBoxFromHandle(g.initialBox, g.handle, coords[0], coords[1], 0.8, 0.5);
+        g.currentBox = nextBox;
+        g.currentPolygon = g.initialPolygon
+          ? scalePolygonFromBox(g.initialPolygon, g.initialBox, nextBox)
+          : undefined;
+      }
+
+      scheduleManualPreviewPaint();
+    };
+
+    const handleUp = (ev: MouseEvent) => {
+      if (ev.button !== 0 && manualGestureRef.current) return;
+      cleanup();
+      commitManualGesture(ev);
+    };
+
+    const handleBlur = () => {
+      cleanup();
+      manualGestureRef.current = null;
+      onManualDrawingStateChange?.(false);
+      clearManualPreview();
+    };
+
+    const handleKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape' && manualGestureRef.current) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        handleBlur();
+      }
+    };
+
+    const cleanup = () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+      window.removeEventListener('blur', handleBlur);
+      window.removeEventListener('keydown', handleKey, true);
+    };
+
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+    window.addEventListener('blur', handleBlur);
+    window.addEventListener('keydown', handleKey, true);
+  }, [
+    clearManualPreview,
+    commitManualGesture,
+    getCanonicalFloatCoords,
+    onManualDrawingStateChange,
+    scheduleManualPreviewPaint,
+  ]);
+
+  const startManualResizeGesture = useCallback(
+    (bubble: BubbleItem, handle: ResizeHandle, e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      manualGestureRef.current = {
+        kind: 'resize',
+        bubbleId: bubble.id,
+        isEllipse: isParametricBubbleItem(bubble),
+        handle,
+        initialBox: [...bubble.box_2d] as NormalizedBox2D,
+        initialPolygon: bubble.manualPolygon ? bubble.manualPolygon.map((p) => [...p] as [number, number]) : undefined,
+        currentBox: [...bubble.box_2d] as NormalizedBox2D,
+        currentPolygon: bubble.manualPolygon,
+        didDrag: false,
+      };
+      attachManualWindowListeners();
+    },
+    [attachManualWindowListeners]
+  );
 
   const commitDrawnBox = useCallback(() => {
     const start = drawingStartRef.current;
@@ -461,9 +909,9 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
     setDrawingCurrent(null);
   }, [onAddManualBubbleWithCoords]);
 
-  // Window mousemove & mouseup for drawing across canvas boundaries
+  // Window mousemove & mouseup for legacy Add-Bubble drawing across canvas boundaries
   useEffect(() => {
-    if (!drawingStart || !isDrawBoxActive) return;
+    if (!drawingStart || !isDrawBoxActive || isManualSelectionActive) return;
 
     const handleWindowMouseMove = (e: MouseEvent) => {
       const coords = getCanonicalSourceCoords(e);
@@ -495,7 +943,7 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
       window.removeEventListener('mouseup', handleWindowMouseUp);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [drawingStart, isDrawBoxActive, commitDrawnBox]);
+  }, [drawingStart, isDrawBoxActive, isManualSelectionActive, commitDrawnBox]);
 
   const handleSvgMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
     if (e.button === 1) {
@@ -513,7 +961,53 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
 
     if (e.button !== 0) return;
 
-    // If drawing box is active, initiate box creation
+    // Manual Selection direct drawing & editing on the existing Workbench canvas
+    if (isManualSelectionActive) {
+      const coords = getCanonicalFloatCoords(e);
+      if (!coords) return;
+
+      const hit = hitTestAnyBubbleAt(coords[0], coords[1]);
+      if (hit && hit.provenance === 'manual_selection') {
+        manualGestureRef.current = {
+          kind: 'move',
+          bubbleId: hit.id,
+          isEllipse: isParametricBubbleItem(hit),
+          initialBox: [...hit.box_2d] as NormalizedBox2D,
+          initialPolygon: hit.manualPolygon
+            ? hit.manualPolygon.map((p) => [...p] as [number, number])
+            : undefined,
+          startNorm: coords,
+          currentBox: [...hit.box_2d] as NormalizedBox2D,
+          currentPolygon: hit.manualPolygon,
+          didDrag: false,
+        };
+        attachManualWindowListeners();
+        return;
+      }
+
+      if (manualSelectionMode === 'box' || manualSelectionMode === 'bubble') {
+        manualGestureRef.current = {
+          kind: 'draw_box',
+          shape: manualSelectionMode,
+          startNorm: coords,
+          currentNorm: coords,
+          startClient: [e.clientX, e.clientY],
+          didDrag: false,
+        };
+      } else {
+        manualGestureRef.current = {
+          kind: 'draw_freehand',
+          mode: 'lasso',
+          points: [coords],
+          startClient: [e.clientX, e.clientY],
+          didDrag: false,
+        };
+      }
+      attachManualWindowListeners();
+      return;
+    }
+
+    // If legacy Add Bubble drawing box is active, initiate box creation
     if (isDrawBoxActive) {
       const coords = getCanonicalSourceCoords(e);
       if (coords) {
@@ -560,7 +1054,7 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
       });
     }
 
-    if (!isDrawBoxActive || !drawingStartRef.current) return;
+    if (isManualSelectionActive || !isDrawBoxActive || !drawingStartRef.current) return;
     if (coords) {
       drawingCurrentRef.current = coords;
       setDrawingCurrent(coords);
@@ -568,6 +1062,7 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
   };
 
   const handleSvgMouseUp = () => {
+    if (isManualSelectionActive) return;
     if (!isDrawBoxActive || !drawingStartRef.current) {
       drawingStartRef.current = null;
       drawingCurrentRef.current = null;
@@ -612,6 +1107,10 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
   };
 
   const effectiveShowBoxes = showBoxes && overlaySettings.boxesVisible;
+  const overlayMetrics = SELECTION_OVERLAY_METRICS[overlaySettings.selectionOverlaySize];
+  const zoomComp = useMemo(() => computeOverlayZoomCompensation(zoomLevel), [zoomLevel]);
+  const previewStrokeWidth = String(overlayMetrics.previewStrokePx / zoomComp.strokeDivisor);
+  const previewDashArray = `${overlayMetrics.flaggedDash[0] / zoomComp.strokeDivisor} ${overlayMetrics.flaggedDash[1] / zoomComp.strokeDivisor}`;
 
   // Reading order sequence links for layer rendering
   const sortedBubbles = useMemo(() => {
@@ -636,7 +1135,7 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
           if (e.button === 1) e.preventDefault();
         }}
         className={`flex-1 min-h-0 p-3 flex items-center justify-center relative overflow-hidden select-none ${
-          isDrawBoxActive
+          isManualSelectionActive || isDrawBoxActive
             ? 'cursor-crosshair'
             : isPanning
             ? 'cursor-grabbing'
@@ -700,13 +1199,22 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
               transformOrigin: 'center center',
               transition: isPanning ? 'none' : 'transform 100ms ease-out',
             }}
-            className="relative inline-flex items-center justify-center max-h-full max-w-full rounded-sm overflow-hidden select-none"
+            className="relative inline-flex items-center justify-center rounded-sm overflow-visible select-none"
           >
             {/* Layer 1: Manga Artwork Image */}
             {imageUrl ? (
               <img
+                ref={imgRef}
                 src={imageUrl}
                 alt={pageFileName || 'Chapter page scan'}
+                onLoad={(e) => {
+                  const img = e.currentTarget;
+                  if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+                    const nextSize = { width: img.naturalWidth, height: img.naturalHeight };
+                    imgNaturalRef.current = nextSize;
+                    setImgNaturalSize(nextSize);
+                  }
+                }}
                 onError={() => {
                   emitDiagnosticBoundary({
                     subsystem: 'rendering-ui',
@@ -719,7 +1227,11 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                     explanation: `Failed to render page image element on canvas (${pageFileName || 'unknown page'}).`,
                   });
                 }}
-                className="max-h-[calc(100vh-140px)] max-w-full w-auto h-auto object-contain select-none pointer-events-none block rounded-xs"
+                style={{
+                  maxWidth: Math.max(120, viewportSize.width - 24),
+                  maxHeight: Math.max(120, viewportSize.height - 24),
+                }}
+                className="w-auto h-auto select-none pointer-events-none block rounded-xs"
                 draggable={false}
               />
             ) : (
@@ -779,46 +1291,55 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                 </g>
               )}
 
-              {/* Layer 4: Bounding Boxes & Review Markers */}
+              {/* Layer 4: Selection Polygons, Bounding Boxes & Review Markers */}
               <g
                 style={{
                   opacity: effectiveShowBoxes ? 1 : 0,
-                  pointerEvents: isDrawBoxActive ? 'none' : (effectiveShowBoxes ? 'auto' : 'none'),
+                  pointerEvents:
+                    isDrawBoxActive || isManualSelectionActive
+                      ? 'none'
+                      : effectiveShowBoxes
+                        ? 'auto'
+                        : 'none',
                   transition: 'opacity 150ms ease',
                 }}
               >
                 {visualRegions.map((region) => {
+                  const primary = region.bubbles[0];
+                  const typerVisual = resolveTyperVisual(primary, typerSettings.typers);
                   const ymin = region.box_2d[0];
                   const xmin = region.box_2d[1];
                   const ymax = region.box_2d[2];
                   const xmax = region.box_2d[3];
 
-                  const width = Math.max(xmax - xmin, 16);
-                  const height = Math.max(ymax - ymin, 16);
+                  const width = Math.max(xmax - xmin, 0.5);
+                  const height = Math.max(ymax - ymin, 0.5);
                   const isSelected = region.isSelected;
                   const isFlagged = region.isFlagged;
+                  const hasPoly = Boolean(primary.manualPolygon && primary.manualPolygon.length >= 3);
+                  const isParametricEllipse = !hasPoly && primary.manualSelectionShape === 'bubble';
 
-                  let strokeColor = '#38bdf8';
-                  let strokeWidth = '1.5';
-                  let strokeDasharray = 'none';
-                  let fillColor = isSelected ? 'rgba(56, 189, 248, 0.08)' : 'rgba(56, 189, 248, 0.03)';
-
-                  if (isFlagged) {
-                    strokeColor = '#f59e0b';
-                    strokeWidth = isSelected ? '2.0' : '1.5';
-                    strokeDasharray = '5 3';
-                    fillColor = isSelected ? 'rgba(245, 158, 11, 0.18)' : 'rgba(245, 158, 11, 0.08)';
-                  } else if (isSelected) {
-                    strokeColor = '#38bdf8';
-                    strokeWidth = '2';
-                    fillColor = 'rgba(56, 189, 248, 0.12)';
-                  }
+                  const strokeColor = typerVisual.color;
+                  const baseStrokePx = isSelected ? overlayMetrics.selectedStrokePx : overlayMetrics.strokePx;
+                  const strokeWidth = String(baseStrokePx / zoomComp.strokeDivisor);
+                  const strokeOpacity = isSelected ? 1 : overlayMetrics.strokeOpacity;
+                  const strokeDasharray = isFlagged
+                    ? `${overlayMetrics.flaggedDash[0] / zoomComp.strokeDivisor} ${overlayMetrics.flaggedDash[1] / zoomComp.strokeDivisor}`
+                    : 'none';
+                  const fillColor = hexToRgba(
+                    typerVisual.color,
+                    isSelected
+                      ? overlayMetrics.selectedFillAlpha
+                      : isFlagged
+                        ? overlayMetrics.flaggedFillAlpha
+                        : overlayMetrics.fillAlpha
+                  );
 
                   return (
                     <g
                       key={`region-box-${region.regionKey}`}
                       onClick={(e) => {
-                        if (didMoveRef.current) return;
+                        if (didMoveRef.current || isManualSelectionActive) return;
                         if (e.button !== 0) return;
                         e.stopPropagation();
                         const currentSelIdx = region.bubbles.findIndex((b) => b.id === selectedBubbleId);
@@ -829,88 +1350,142 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                       }}
                       className="cursor-pointer group"
                     >
-                      <rect
-                        x={xmin}
-                        y={ymin}
-                        width={width}
-                        height={height}
-                        rx="3"
-                        stroke={strokeColor}
-                        strokeWidth={strokeWidth}
-                        strokeDasharray={strokeDasharray}
-                        vectorEffect="non-scaling-stroke"
-                        fill={fillColor}
-                        className="transition-all duration-150 group-hover:stroke-sky-300"
-                      />
-
-                      {/* Selection handles (Section 4.5) */}
-                      {isSelected && (
-                        <>
-                          <rect x={xmin - 3} y={ymin - 3} width="6" height="6" fill="#38bdf8" rx="1" vectorEffect="non-scaling-stroke" />
-                          <rect x={xmax - 3} y={ymin - 3} width="6" height="6" fill="#38bdf8" rx="1" vectorEffect="non-scaling-stroke" />
-                          <rect x={xmin - 3} y={ymax - 3} width="6" height="6" fill="#38bdf8" rx="1" vectorEffect="non-scaling-stroke" />
-                          <rect x={xmax - 3} y={ymax - 3} width="6" height="6" fill="#38bdf8" rx="1" vectorEffect="non-scaling-stroke" />
-                        </>
+                      {hasPoly ? (
+                        <polygon
+                          points={primary.manualPolygon!.map(([px, py]) => `${px},${py}`).join(' ')}
+                          stroke={strokeColor}
+                          strokeWidth={strokeWidth}
+                          strokeOpacity={strokeOpacity}
+                          strokeDasharray={strokeDasharray}
+                          strokeLinejoin="round"
+                          vectorEffect="non-scaling-stroke"
+                          fill={fillColor}
+                        />
+                      ) : isParametricEllipse ? (
+                        <ellipse
+                          cx={(xmin + xmax) / 2}
+                          cy={(ymin + ymax) / 2}
+                          rx={Math.max((xmax - xmin) / 2, 0.25)}
+                          ry={Math.max((ymax - ymin) / 2, 0.25)}
+                          stroke={strokeColor}
+                          strokeWidth={strokeWidth}
+                          strokeOpacity={strokeOpacity}
+                          strokeDasharray={strokeDasharray}
+                          vectorEffect="non-scaling-stroke"
+                          fill={fillColor}
+                        />
+                      ) : (
+                        <rect
+                          x={xmin}
+                          y={ymin}
+                          width={width}
+                          height={height}
+                          rx="0.5"
+                          stroke={strokeColor}
+                          strokeWidth={strokeWidth}
+                          strokeOpacity={strokeOpacity}
+                          strokeDasharray={strokeDasharray}
+                          vectorEffect="non-scaling-stroke"
+                          fill={fillColor}
+                        />
                       )}
                     </g>
                   );
                 })}
               </g>
 
-              {/* Drawing Preview Rectangle */}
-              {isDrawBoxActive && drawingStart && drawingCurrent && (
+              {/* Imperative RAF Live Drawing / Editing Previews (Manual Selection) */}
+              <rect
+                ref={previewRectRef}
+                style={{ display: 'none' }}
+                rx="0.5"
+                stroke={manualActiveTyperColor}
+                strokeWidth={previewStrokeWidth}
+                strokeDasharray={previewDashArray}
+                vectorEffect="non-scaling-stroke"
+                fill={hexToRgba(manualActiveTyperColor, overlayMetrics.selectedFillAlpha)}
+                pointerEvents="none"
+              />
+              <ellipse
+                ref={previewEllipseRef}
+                style={{ display: 'none' }}
+                stroke={manualActiveTyperColor}
+                strokeWidth={previewStrokeWidth}
+                strokeDasharray={previewDashArray}
+                vectorEffect="non-scaling-stroke"
+                fill={hexToRgba(manualActiveTyperColor, overlayMetrics.selectedFillAlpha)}
+                pointerEvents="none"
+              />
+              <polygon
+                ref={previewPolyRef}
+                style={{ display: 'none' }}
+                stroke={manualActiveTyperColor}
+                strokeWidth={previewStrokeWidth}
+                strokeDasharray={previewDashArray}
+                strokeLinejoin="round"
+                vectorEffect="non-scaling-stroke"
+                fill={hexToRgba(manualActiveTyperColor, overlayMetrics.selectedFillAlpha)}
+                pointerEvents="none"
+              />
+              <path
+                ref={previewFreehandRef}
+                style={{ display: 'none' }}
+                stroke={manualActiveTyperColor}
+                strokeWidth={previewStrokeWidth}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                vectorEffect="non-scaling-stroke"
+                fill={hexToRgba(manualActiveTyperColor, overlayMetrics.selectedFillAlpha)}
+                pointerEvents="none"
+              />
+
+              {/* Legacy Add-Bubble Drawing Preview Rectangle */}
+              {!isManualSelectionActive && isDrawBoxActive && drawingStart && drawingCurrent && (
                 <rect
                   x={Math.min(drawingStart.x, drawingCurrent.x)}
                   y={Math.min(drawingStart.y, drawingCurrent.y)}
                   width={Math.abs(drawingCurrent.x - drawingStart.x)}
                   height={Math.abs(drawingCurrent.y - drawingStart.y)}
-                  rx="3"
+                  rx="0.5"
                   stroke="#38bdf8"
-                  strokeWidth="2"
-                  strokeDasharray="4 4"
+                  strokeWidth={previewStrokeWidth}
+                  strokeDasharray={previewDashArray}
                   vectorEffect="non-scaling-stroke"
-                  fill="rgba(56, 189, 248, 0.15)"
+                  fill="rgba(56, 189, 248, 0.06)"
                 />
               )}
             </svg>
 
-            {/* Layer 5: Dedicated Non-Stretching Number Badge Overlay */}
+            {/* Layer 5: Non-Stretching Symbol + Number Badges & Interactive Resize Handles */}
             <div
               className="absolute inset-0 pointer-events-none select-none overflow-visible"
+              data-selection-overlay-size={overlaySettings.selectionOverlaySize}
               style={{
                 opacity: effectiveShowBoxes ? 1 : 0,
                 transition: 'opacity 150ms ease',
               }}
             >
               {visualRegions.map((region) => {
+                const primary = region.bubbles[0];
+                const typerVisual = resolveTyperVisual(primary, typerSettings.typers);
                 const isSelected = region.isSelected;
                 const isFlagged = region.isFlagged;
                 const labelText = region.label;
 
-                // Use primary box coordinates (normalized 0-1000)
                 const [ymin, xmin] = region.box_2d;
-
-                // Collision & edge detection:
                 const isNearTop = ymin < 40;
                 const isNearRight = xmin > 850;
-
-                // Zoom compensation factor: keeps badges compact, readable, and non-distorted across extreme zoom levels
-                const effectiveZoom = Math.max(25, zoomLevel);
-                const badgeZoomScale = Math.min(1.8, Math.max(0.65, 100 / effectiveZoom));
-
-                let badgeBg = '#38bdf8';
-                let badgeTextColor = '#050507';
-                let borderColor = 'rgba(255, 255, 255, 0.2)';
-
-                if (isFlagged) {
-                  badgeBg = '#f59e0b';
-                  badgeTextColor = '#050507';
-                  borderColor = 'rgba(255, 255, 255, 0.4)';
-                }
+                const badgeMetrics = overlayMetrics.badge;
+                const badgeZoomScale = zoomComp.badgeTransformScale;
+                const offset = badgeMetrics.offsetPx;
 
                 const transformStr = isNearTop
-                  ? (isNearRight ? `translate(-100%, 4px) scale(${badgeZoomScale})` : `translate(4px, 4px) scale(${badgeZoomScale})`)
-                  : (isNearRight ? `translate(-100%, -100%) translateY(-4px) scale(${badgeZoomScale})` : `translate(0, -100%) translateY(-4px) scale(${badgeZoomScale})`);
+                  ? (isNearRight
+                      ? `translate(-100%, ${offset}px) scale(${badgeZoomScale})`
+                      : `translate(${offset}px, ${offset}px) scale(${badgeZoomScale})`)
+                  : (isNearRight
+                      ? `translate(-100%, -100%) translateY(-${offset}px) scale(${badgeZoomScale})`
+                      : `translate(0, -100%) translateY(-${offset}px) scale(${badgeZoomScale})`);
                 const transformOriginStr = isNearTop
                   ? (isNearRight ? 'top right' : 'top left')
                   : (isNearRight ? 'bottom right' : 'bottom left');
@@ -918,6 +1493,7 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                 return (
                   <div
                     key={`badge-region-${region.regionKey}`}
+                    data-selection-badge="true"
                     onClick={(e) => {
                       if (didMoveRef.current) return;
                       if (e.button !== 0) return;
@@ -934,22 +1510,115 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                       left: `${xmin / 10}%`,
                       transform: transformStr,
                       transformOrigin: transformOriginStr,
-                      backgroundColor: badgeBg,
-                      color: badgeTextColor,
-                      borderColor,
-                      pointerEvents: isDrawBoxActive ? 'none' : (effectiveShowBoxes ? 'auto' : 'none'),
+                      padding: `${badgeMetrics.paddingY}px ${badgeMetrics.paddingX}px`,
+                      gap: `${badgeMetrics.gap}px`,
+                      borderRadius: `${badgeMetrics.borderRadius}px`,
+                      fontSize: `${badgeMetrics.fontSize}px`,
+                      lineHeight: 1,
+                      pointerEvents:
+                        isDrawBoxActive || isManualSelectionActive
+                          ? 'none'
+                          : effectiveShowBoxes
+                            ? 'auto'
+                            : 'none',
                     }}
-                    className={`cursor-pointer inline-flex items-center justify-center px-1.5 py-0.5 rounded-[3px] border shadow-md font-mono text-[10px] font-bold leading-none select-none tracking-tight transition-transform duration-100 ${
+                    className={`cursor-pointer inline-flex items-center bg-[#09090b]/95 border border-white/20 font-mono font-semibold text-zinc-100 select-none ${
                       isSelected
-                        ? 'ring-2 ring-white ring-offset-1 ring-offset-black scale-110 z-30'
-                        : 'hover:scale-110 hover:shadow-lg z-20'
+                        ? 'ring-1 ring-white/90 z-30'
+                        : 'z-20'
                     }`}
-                    title={`Balloon ${labelText} — Click to select`}
+                    title={`${labelText} — ${typerVisual.name}${typerVisual.symbol ? ` (${typerVisual.symbol})` : ''}`}
                   >
-                    {labelText}
+                    {typerVisual.isClassified && (
+                      <TyperSymbolBadge
+                        symbol={typerVisual.symbol}
+                        color={typerVisual.color}
+                        size="canvas"
+                        style={{
+                          minWidth: `${badgeMetrics.symbolMinWidth}px`,
+                          height: `${badgeMetrics.symbolHeight}px`,
+                          padding: `0 ${badgeMetrics.symbolPaddingX}px`,
+                          fontSize: `${badgeMetrics.symbolFontSize}px`,
+                          borderRadius: `${badgeMetrics.symbolBorderRadius}px`,
+                        }}
+                      />
+                    )}
+                    <span
+                      style={{ padding: `0 ${badgeMetrics.numberPaddingX}px` }}
+                      className="tabular-nums"
+                    >
+                      {labelText}
+                    </span>
+                    {isFlagged && (
+                      <span
+                        aria-label="Flagged"
+                        style={{
+                          width: `${badgeMetrics.flagDotPx}px`,
+                          height: `${badgeMetrics.flagDotPx}px`,
+                        }}
+                        className="rounded-full bg-amber-400 shrink-0"
+                      />
+                    )}
                   </div>
                 );
               })}
+
+              {/* Resize Handles for Active Manual Selection (Box, Bubble, Lasso) */}
+              {isManualSelectionActive &&
+                effectiveShowBoxes &&
+                selectedBubbleId &&
+                (() => {
+                  const selectedManual = visibleBubbles.find(
+                    (b) => b.id === selectedBubbleId && b.provenance === 'manual_selection'
+                  );
+                  if (!selectedManual) return null;
+                  const visual = resolveTyperVisual(selectedManual, typerSettings.typers);
+                  const availW = Math.max(120, viewportSize.width - 24);
+                  const availH = Math.max(120, viewportSize.height - 24);
+                  const baseImgScale = Math.min(
+                    1,
+                    availW / Math.max(1, imgNaturalSize.width),
+                    availH / Math.max(1, imgNaturalSize.height)
+                  );
+                  const surfaceW = imgNaturalSize.width * baseImgScale * (zoomLevel / 100);
+                  const surfaceH = imgNaturalSize.height * baseImgScale * (zoomLevel / 100);
+                  const renderedW = ((selectedManual.box_2d[3] - selectedManual.box_2d[1]) / 1000) * surfaceW;
+                  const renderedH = ((selectedManual.box_2d[2] - selectedManual.box_2d[0]) / 1000) * surfaceH;
+                  const visibleHandles =
+                    renderedW < 28 || renderedH < 28
+                      ? RESIZE_HANDLES.filter((h) => CORNER_HANDLE_IDS.has(h.id))
+                      : RESIZE_HANDLES;
+                  const handleScale = zoomComp.handleTransformScale;
+                  const handleMetrics = overlayMetrics.handle;
+
+                  return visibleHandles.map((h) => {
+                    const [hx, hy] = h.getPoint(selectedManual.box_2d);
+                    return (
+                      <div
+                        key={`handle-${selectedManual.id}-${h.id}`}
+                        data-manual-resize-handle={h.id}
+                        onMouseDown={(e) => startManualResizeGesture(selectedManual, h.id, e)}
+                        style={{
+                          position: 'absolute',
+                          left: `${hx / 10}%`,
+                          top: `${hy / 10}%`,
+                          width: `${handleMetrics.sizePx}px`,
+                          height: `${handleMetrics.sizePx}px`,
+                          borderWidth: `${handleMetrics.borderWidthPx}px`,
+                          borderStyle: 'solid',
+                          borderRadius: `${handleMetrics.borderRadiusPx}px`,
+                          transform: `translate(-50%, -50%) scale(${handleScale})`,
+                          cursor: h.cursor,
+                          backgroundColor: '#FFFFFF',
+                          borderColor: visual.color,
+                          pointerEvents: 'auto',
+                        }}
+                        className="z-40"
+                        title={`Resize (${h.id.toUpperCase()})`}
+                      />
+                    );
+                  });
+                })()}
             </div>
           </div>
         )}

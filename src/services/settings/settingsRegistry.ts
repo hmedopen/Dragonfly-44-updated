@@ -689,6 +689,28 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     category: 'workspace',
     validation: (val: boolean) => ({ valid: true, sanitizedValue: Boolean(val) }),
   },
+  'workspace.selection_overlay_size': {
+    setting_id: 'workspace.selection_overlay_size',
+    owner_system: 'workspace',
+    type: 'enum',
+    default_value: 'small',
+    allowed_values: ['small', 'medium', 'big'],
+    apply_mode: 'immediate',
+    scope: ['global'],
+    visibility: 'basic',
+    runtime_binding: 'Workspace.SelectionOverlaySize',
+    schema_version: '1.0',
+    reset_behavior: 'default',
+    label: 'Selection Outline & Badge Size',
+    description: 'Controls the visual thickness of selection outlines and the dimensions and typography of number badges on the canvas without changing coordinates or OCR.',
+    category: 'workspace',
+    validation: (val: string) => {
+      if (val === 'small' || val === 'medium' || val === 'big') {
+        return { valid: true, sanitizedValue: val };
+      }
+      return { valid: false, error: 'Size must be small, medium, or big', sanitizedValue: 'small' };
+    },
+  },
   'workspace.double_click_confirmation': {
     setting_id: 'workspace.double_click_confirmation',
     owner_system: 'workspace',
@@ -829,5 +851,72 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
       valid: true,
       sanitizedValue: typeof val === 'string' && val.trim().length > 0 ? val.trim() : 'dragonfly44_baseline_v1',
     }),
+  },
+
+  // ==========================================
+  // MANUAL SELECTION CONTROLS (ADDITIVE)
+  // ==========================================
+  'manual_selection.last_typer_id': {
+    setting_id: 'manual_selection.last_typer_id',
+    owner_system: 'workspace',
+    type: 'string',
+    default_value: 'speech_bubbles',
+    apply_mode: 'immediate',
+    scope: ['global'],
+    visibility: 'internal',
+    runtime_binding: 'ManualSelection.LastTyperId',
+    schema_version: '1.0',
+    reset_behavior: 'default',
+    label: 'Last Selected Manual Typer',
+    description: 'Remembers the active typer ID selected in the Manual Selection floating panel.',
+    category: 'workspace',
+    validation: (val: string) => ({
+      valid: true,
+      sanitizedValue: typeof val === 'string' && val.trim().length > 0 ? val.trim() : 'speech_bubbles',
+    }),
+  },
+  'manual_selection.last_selection_mode': {
+    setting_id: 'manual_selection.last_selection_mode',
+    owner_system: 'workspace',
+    type: 'enum',
+    default_value: 'box',
+    allowed_values: ['box', 'bubble', 'lasso'],
+    apply_mode: 'immediate',
+    scope: ['global'],
+    visibility: 'internal',
+    runtime_binding: 'ManualSelection.LastSelectionMode',
+    schema_version: '1.0',
+    reset_behavior: 'default',
+    label: 'Last Manual Selection Mode',
+    description: 'Remembers the active selection geometry tool (box, bubble, lasso).',
+    category: 'workspace',
+    validation: (val: string) => {
+      if (val === 'box' || val === 'bubble' || val === 'lasso') {
+        return { valid: true, sanitizedValue: val };
+      }
+      return { valid: false, error: 'Invalid selection mode', sanitizedValue: 'box' };
+    },
+  },
+  'manual_selection.ocr_language': {
+    setting_id: 'manual_selection.ocr_language',
+    owner_system: 'workspace',
+    type: 'enum',
+    default_value: 'ja',
+    allowed_values: ['en', 'ja', 'zh', 'ko'],
+    apply_mode: 'immediate',
+    scope: ['global', 'project', 'chapter'],
+    visibility: 'internal',
+    runtime_binding: 'ManualSelection.OcrLanguage',
+    schema_version: '1.0',
+    reset_behavior: 'default',
+    label: 'Manual Selection OCR Language',
+    description: 'Explicit local OCR model language route for Manual Selection extraction.',
+    category: 'workspace',
+    validation: (val: string) => {
+      if (val === 'en' || val === 'ja' || val === 'zh' || val === 'ko') {
+        return { valid: true, sanitizedValue: val };
+      }
+      return { valid: false, error: 'Invalid manual OCR language', sanitizedValue: 'ja' };
+    },
   },
 };

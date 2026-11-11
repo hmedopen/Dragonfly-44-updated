@@ -209,7 +209,7 @@ export function mergeScanWithExistingState(options: {
   // 1. Process matched bubbles
   for (const [oldId, pair] of matchedOldToNew) {
     const { existing, candidate } = pair;
-    const isManuallyEdited = Boolean(existing.isManuallyEdited);
+    const isManuallyEdited = Boolean(existing.isManuallyEdited || existing.provenance === 'manual_selection');
 
     // Typer preservation:
     // If user previously assigned or confirmed a typer, NEVER overwrite it!

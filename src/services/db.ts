@@ -60,131 +60,223 @@ const STORE_MEMORY_SETTINGS = 'memory_settings';
 export const STORE_TRAINING_REFERENCE_SETS = 'training_reference_sets';
 export const STORE_TRAINING_BLOBS = 'training_blobs';
 
+const REQUIRED_OBJECT_STORES = [
+  STORE_PAGE_BLOBS,
+  STORE_PAGE_BUBBLES,
+  STORE_PAGE_SCANS,
+  STORE_PROJECT_LORE,
+  STORE_CHAPTER_INTELLIGENCE,
+  STORE_PROJECTS,
+  STORE_CHAPTERS,
+  STORE_PAGES,
+  STORE_SNAPSHOTS,
+  STORE_MIGRATION_JOURNAL,
+  STORE_REVIEW_FINDINGS,
+  STORE_REVIEW_SNAPSHOTS,
+  STORE_REVIEW_AUDIT,
+  STORE_KNOWLEDGE_RECORDS,
+  STORE_KNOWLEDGE_REVISIONS,
+  STORE_KNOWLEDGE_CANDIDATES,
+  STORE_KNOWLEDGE_AUDIT,
+  STORE_KNOWLEDGE_QUARANTINE,
+  STORE_KNOWLEDGE_CONFLICTS,
+  STORE_KNOWLEDGE_IDEMPOTENCY,
+  STORE_MEMORY_SETTINGS,
+  STORE_TRAINING_REFERENCE_SETS,
+  STORE_TRAINING_BLOBS,
+] as const;
+
 let dbPromise: Promise<IDBDatabase> | null = null;
 
+function ensureSchemaStores(db: IDBDatabase): void {
+  // 1. Existing stores from v3
+  if (!db.objectStoreNames.contains(STORE_PAGE_BLOBS)) {
+    db.createObjectStore(STORE_PAGE_BLOBS);
+  }
+  if (!db.objectStoreNames.contains(STORE_PAGE_BUBBLES)) {
+    db.createObjectStore(STORE_PAGE_BUBBLES);
+  }
+  if (!db.objectStoreNames.contains(STORE_PAGE_SCANS)) {
+    db.createObjectStore(STORE_PAGE_SCANS);
+  }
+  if (!db.objectStoreNames.contains(STORE_PROJECT_LORE)) {
+    db.createObjectStore(STORE_PROJECT_LORE);
+  }
+
+  // 2. New v4 stores
+  if (!db.objectStoreNames.contains(STORE_CHAPTER_INTELLIGENCE)) {
+    db.createObjectStore(STORE_CHAPTER_INTELLIGENCE);
+  }
+  if (!db.objectStoreNames.contains(STORE_PROJECTS)) {
+    db.createObjectStore(STORE_PROJECTS, { keyPath: 'id' });
+  }
+  if (!db.objectStoreNames.contains(STORE_CHAPTERS)) {
+    const chapterStore = db.createObjectStore(STORE_CHAPTERS, { keyPath: 'id' });
+    chapterStore.createIndex('projectId', 'projectId', { unique: false });
+  }
+  if (!db.objectStoreNames.contains(STORE_PAGES)) {
+    const pageStore = db.createObjectStore(STORE_PAGES, { keyPath: 'id' });
+    pageStore.createIndex('chapterId', 'chapterId', { unique: false });
+    pageStore.createIndex('chapterAndIndex', ['chapterId', 'index'], { unique: false });
+  }
+  if (!db.objectStoreNames.contains(STORE_SNAPSHOTS)) {
+    const snapshotStore = db.createObjectStore(STORE_SNAPSHOTS, { keyPath: 'id' });
+    snapshotStore.createIndex('chapterId', 'chapterId', { unique: false });
+  }
+  if (!db.objectStoreNames.contains(STORE_MIGRATION_JOURNAL)) {
+    db.createObjectStore(STORE_MIGRATION_JOURNAL, { keyPath: 'key' });
+  }
+
+  // 3. New v6 Review & Quality Control stores (System #4)
+  if (!db.objectStoreNames.contains(STORE_REVIEW_FINDINGS)) {
+    const findingStore = db.createObjectStore(STORE_REVIEW_FINDINGS, { keyPath: 'findingId' });
+    findingStore.createIndex('pageId', 'affectedEntity.pageId', { unique: false });
+    findingStore.createIndex('bubbleId', 'affectedEntity.bubbleId', { unique: false });
+    findingStore.createIndex('domain', 'domain', { unique: false });
+    findingStore.createIndex('status', 'status', { unique: false });
+    findingStore.createIndex('issueCode', 'issueCode', { unique: false });
+  }
+  if (!db.objectStoreNames.contains(STORE_REVIEW_SNAPSHOTS)) {
+    const revSnapStore = db.createObjectStore(STORE_REVIEW_SNAPSHOTS, { keyPath: 'snapshotId' });
+    revSnapStore.createIndex('pageId', 'pageId', { unique: false });
+    revSnapStore.createIndex('chapterId', 'chapterId', { unique: false });
+  }
+  if (!db.objectStoreNames.contains(STORE_REVIEW_AUDIT)) {
+    const auditStore = db.createObjectStore(STORE_REVIEW_AUDIT, { keyPath: 'auditId' });
+    auditStore.createIndex('snapshotId', 'snapshotId', { unique: false });
+    auditStore.createIndex('findingId', 'findingId', { unique: false });
+    auditStore.createIndex('jobId', 'jobId', { unique: false });
+  }
+
+  // 4. New v7 Project Memory & AI Data Integrity stores (System #5)
+  if (!db.objectStoreNames.contains(STORE_KNOWLEDGE_RECORDS)) {
+    const recordStore = db.createObjectStore(STORE_KNOWLEDGE_RECORDS, { keyPath: 'record_id' });
+    recordStore.createIndex('projectId', 'project_id', { unique: false });
+    recordStore.createIndex('recordType', 'record_type', { unique: false });
+    recordStore.createIndex('canonicalKey', 'canonical_key', { unique: false });
+    recordStore.createIndex('status', 'status', { unique: false });
+  }
+  if (!db.objectStoreNames.contains(STORE_KNOWLEDGE_REVISIONS)) {
+    const revStore = db.createObjectStore(STORE_KNOWLEDGE_REVISIONS, { keyPath: 'revision_id' });
+    revStore.createIndex('recordId', 'record_id', { unique: false });
+    revStore.createIndex('projectId', 'project_id', { unique: false });
+  }
+  if (!db.objectStoreNames.contains(STORE_KNOWLEDGE_CANDIDATES)) {
+    const candStore = db.createObjectStore(STORE_KNOWLEDGE_CANDIDATES, { keyPath: 'candidate_id' });
+    candStore.createIndex('projectId', 'project_id', { unique: false });
+    candStore.createIndex('dedupeKey', 'dedupe_key', { unique: false });
+    candStore.createIndex('status', 'status', { unique: false });
+    candStore.createIndex('reviewState', 'review_state', { unique: false });
+  }
+  if (!db.objectStoreNames.contains(STORE_KNOWLEDGE_AUDIT)) {
+    const knowAuditStore = db.createObjectStore(STORE_KNOWLEDGE_AUDIT, { keyPath: 'event_id' });
+    knowAuditStore.createIndex('projectId', 'project_id', { unique: false });
+    knowAuditStore.createIndex('recordId', 'record_id', { unique: false });
+    knowAuditStore.createIndex('correlationId', 'correlation_id', { unique: false });
+    knowAuditStore.createIndex('timestamp', 'timestamp', { unique: false });
+  }
+  if (!db.objectStoreNames.contains(STORE_KNOWLEDGE_QUARANTINE)) {
+    const quarStore = db.createObjectStore(STORE_KNOWLEDGE_QUARANTINE, { keyPath: 'quarantine_id' });
+    quarStore.createIndex('projectId', 'project_id', { unique: false });
+    quarStore.createIndex('producer', 'producer', { unique: false });
+  }
+  if (!db.objectStoreNames.contains(STORE_KNOWLEDGE_CONFLICTS)) {
+    const confStore = db.createObjectStore(STORE_KNOWLEDGE_CONFLICTS, { keyPath: 'conflict_id' });
+    confStore.createIndex('projectId', 'project_id', { unique: false });
+    confStore.createIndex('canonicalKey', 'canonical_key', { unique: false });
+    confStore.createIndex('status', 'status', { unique: false });
+  }
+  if (!db.objectStoreNames.contains(STORE_KNOWLEDGE_IDEMPOTENCY)) {
+    db.createObjectStore(STORE_KNOWLEDGE_IDEMPOTENCY, { keyPath: 'key' });
+  }
+  if (!db.objectStoreNames.contains(STORE_MEMORY_SETTINGS)) {
+    db.createObjectStore(STORE_MEMORY_SETTINGS, { keyPath: 'project_id' });
+  }
+  if (!db.objectStoreNames.contains(STORE_TRAINING_REFERENCE_SETS)) {
+    const refStore = db.createObjectStore(STORE_TRAINING_REFERENCE_SETS, { keyPath: 'id' });
+    refStore.createIndex('enabled', 'enabled', { unique: false });
+    refStore.createIndex('priority', 'priority', { unique: false });
+  }
+  if (!db.objectStoreNames.contains(STORE_TRAINING_BLOBS)) {
+    db.createObjectStore(STORE_TRAINING_BLOBS);
+  }
+}
+
+function getMissingRequiredStores(db: IDBDatabase): string[] {
+  return REQUIRED_OBJECT_STORES.filter((storeName) => !db.objectStoreNames.contains(storeName));
+}
+
+function attachConnectionLifecycle(db: IDBDatabase): IDBDatabase {
+  db.onversionchange = () => {
+    dbPromise = null;
+    try {
+      if (typeof db.close === 'function') {
+        db.close();
+      }
+    } catch {
+      // Ignore already-closed connections
+    }
+  };
+  return db;
+}
+
+function safeCloseDatabase(db: IDBDatabase): void {
+  try {
+    db.onversionchange = null;
+    if (typeof db.close === 'function') {
+      db.close();
+    }
+  } catch {
+    // Ignore close errors
+  }
+}
+
+function openDatabaseConnection(version?: number): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request =
+      typeof version === 'number'
+        ? indexedDB.open(DB_NAME, version)
+        : indexedDB.open(DB_NAME);
+
+    request.onupgradeneeded = () => {
+      ensureSchemaStores(request.result);
+    };
+
+    request.onblocked = () => {
+      emitDiagnosticBoundary({
+        subsystem: 'data-storage',
+        component: 'IndexedDbDriver',
+        operation: 'openDatabase',
+        eventType: 'lifecycle',
+        severity: 'warning',
+        status: 'degraded',
+        payload: { dbName: DB_NAME, requestedVersion: version ?? 'current' },
+        explanation: `Opening IndexedDB "${DB_NAME}" is blocked by another active connection.`,
+      });
+    };
+
+    request.onsuccess = () => resolve(attachConnectionLifecycle(request.result));
+    request.onerror = () => reject(request.error);
+  });
+}
+
+/**
+ * Opens IndexedDB safely across fresh installs, v1..v8 migrations, and already-upgraded
+ * higher-version databases (e.g., v9 from an earlier build) without losing data or stores.
+ */
 export function getDatabase(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise;
 
-  dbPromise = new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-
-    request.onupgradeneeded = () => {
-      const db = request.result;
-
-      // 1. Existing stores from v3
-      if (!db.objectStoreNames.contains(STORE_PAGE_BLOBS)) {
-        db.createObjectStore(STORE_PAGE_BLOBS);
+  dbPromise = (async () => {
+    try {
+      const db = await openDatabaseConnection(DB_VERSION);
+      const missing = getMissingRequiredStores(db);
+      let resolvedDb = db;
+      if (missing.length > 0) {
+        const upgradeVersion = Math.max(DB_VERSION + 1, db.version + 1);
+        safeCloseDatabase(db);
+        resolvedDb = await openDatabaseConnection(upgradeVersion);
       }
-      if (!db.objectStoreNames.contains(STORE_PAGE_BUBBLES)) {
-        db.createObjectStore(STORE_PAGE_BUBBLES);
-      }
-      if (!db.objectStoreNames.contains(STORE_PAGE_SCANS)) {
-        db.createObjectStore(STORE_PAGE_SCANS);
-      }
-      if (!db.objectStoreNames.contains(STORE_PROJECT_LORE)) {
-        db.createObjectStore(STORE_PROJECT_LORE);
-      }
-
-      // 2. New v4 stores
-      if (!db.objectStoreNames.contains(STORE_CHAPTER_INTELLIGENCE)) {
-        db.createObjectStore(STORE_CHAPTER_INTELLIGENCE);
-      }
-      if (!db.objectStoreNames.contains(STORE_PROJECTS)) {
-        db.createObjectStore(STORE_PROJECTS, { keyPath: 'id' });
-      }
-      if (!db.objectStoreNames.contains(STORE_CHAPTERS)) {
-        const chapterStore = db.createObjectStore(STORE_CHAPTERS, { keyPath: 'id' });
-        chapterStore.createIndex('projectId', 'projectId', { unique: false });
-      }
-      if (!db.objectStoreNames.contains(STORE_PAGES)) {
-        const pageStore = db.createObjectStore(STORE_PAGES, { keyPath: 'id' });
-        pageStore.createIndex('chapterId', 'chapterId', { unique: false });
-        pageStore.createIndex('chapterAndIndex', ['chapterId', 'index'], { unique: false });
-      }
-      if (!db.objectStoreNames.contains(STORE_SNAPSHOTS)) {
-        const snapshotStore = db.createObjectStore(STORE_SNAPSHOTS, { keyPath: 'id' });
-        snapshotStore.createIndex('chapterId', 'chapterId', { unique: false });
-      }
-      if (!db.objectStoreNames.contains(STORE_MIGRATION_JOURNAL)) {
-        db.createObjectStore(STORE_MIGRATION_JOURNAL, { keyPath: 'key' });
-      }
-
-      // 3. New v6 Review & Quality Control stores (System #4)
-      if (!db.objectStoreNames.contains(STORE_REVIEW_FINDINGS)) {
-        const findingStore = db.createObjectStore(STORE_REVIEW_FINDINGS, { keyPath: 'findingId' });
-        findingStore.createIndex('pageId', 'affectedEntity.pageId', { unique: false });
-        findingStore.createIndex('bubbleId', 'affectedEntity.bubbleId', { unique: false });
-        findingStore.createIndex('domain', 'domain', { unique: false });
-        findingStore.createIndex('status', 'status', { unique: false });
-        findingStore.createIndex('issueCode', 'issueCode', { unique: false });
-      }
-      if (!db.objectStoreNames.contains(STORE_REVIEW_SNAPSHOTS)) {
-        const revSnapStore = db.createObjectStore(STORE_REVIEW_SNAPSHOTS, { keyPath: 'snapshotId' });
-        revSnapStore.createIndex('pageId', 'pageId', { unique: false });
-        revSnapStore.createIndex('chapterId', 'chapterId', { unique: false });
-      }
-      if (!db.objectStoreNames.contains(STORE_REVIEW_AUDIT)) {
-        const auditStore = db.createObjectStore(STORE_REVIEW_AUDIT, { keyPath: 'auditId' });
-        auditStore.createIndex('snapshotId', 'snapshotId', { unique: false });
-        auditStore.createIndex('findingId', 'findingId', { unique: false });
-        auditStore.createIndex('jobId', 'jobId', { unique: false });
-      }
-
-      // 4. New v7 Project Memory & AI Data Integrity stores (System #5)
-      if (!db.objectStoreNames.contains(STORE_KNOWLEDGE_RECORDS)) {
-        const recordStore = db.createObjectStore(STORE_KNOWLEDGE_RECORDS, { keyPath: 'record_id' });
-        recordStore.createIndex('projectId', 'project_id', { unique: false });
-        recordStore.createIndex('recordType', 'record_type', { unique: false });
-        recordStore.createIndex('canonicalKey', 'canonical_key', { unique: false });
-        recordStore.createIndex('status', 'status', { unique: false });
-      }
-      if (!db.objectStoreNames.contains(STORE_KNOWLEDGE_REVISIONS)) {
-        const revStore = db.createObjectStore(STORE_KNOWLEDGE_REVISIONS, { keyPath: 'revision_id' });
-        revStore.createIndex('recordId', 'record_id', { unique: false });
-        revStore.createIndex('projectId', 'project_id', { unique: false });
-      }
-      if (!db.objectStoreNames.contains(STORE_KNOWLEDGE_CANDIDATES)) {
-        const candStore = db.createObjectStore(STORE_KNOWLEDGE_CANDIDATES, { keyPath: 'candidate_id' });
-        candStore.createIndex('projectId', 'project_id', { unique: false });
-        candStore.createIndex('dedupeKey', 'dedupe_key', { unique: false });
-        candStore.createIndex('status', 'status', { unique: false });
-        candStore.createIndex('reviewState', 'review_state', { unique: false });
-      }
-      if (!db.objectStoreNames.contains(STORE_KNOWLEDGE_AUDIT)) {
-        const knowAuditStore = db.createObjectStore(STORE_KNOWLEDGE_AUDIT, { keyPath: 'event_id' });
-        knowAuditStore.createIndex('projectId', 'project_id', { unique: false });
-        knowAuditStore.createIndex('recordId', 'record_id', { unique: false });
-        knowAuditStore.createIndex('correlationId', 'correlation_id', { unique: false });
-        knowAuditStore.createIndex('timestamp', 'timestamp', { unique: false });
-      }
-      if (!db.objectStoreNames.contains(STORE_KNOWLEDGE_QUARANTINE)) {
-        const quarStore = db.createObjectStore(STORE_KNOWLEDGE_QUARANTINE, { keyPath: 'quarantine_id' });
-        quarStore.createIndex('projectId', 'project_id', { unique: false });
-        quarStore.createIndex('producer', 'producer', { unique: false });
-      }
-      if (!db.objectStoreNames.contains(STORE_KNOWLEDGE_CONFLICTS)) {
-        const confStore = db.createObjectStore(STORE_KNOWLEDGE_CONFLICTS, { keyPath: 'conflict_id' });
-        confStore.createIndex('projectId', 'project_id', { unique: false });
-        confStore.createIndex('canonicalKey', 'canonical_key', { unique: false });
-        confStore.createIndex('status', 'status', { unique: false });
-      }
-      if (!db.objectStoreNames.contains(STORE_KNOWLEDGE_IDEMPOTENCY)) {
-        db.createObjectStore(STORE_KNOWLEDGE_IDEMPOTENCY, { keyPath: 'key' });
-      }
-      if (!db.objectStoreNames.contains(STORE_MEMORY_SETTINGS)) {
-        db.createObjectStore(STORE_MEMORY_SETTINGS, { keyPath: 'project_id' });
-      }
-      if (!db.objectStoreNames.contains(STORE_TRAINING_REFERENCE_SETS)) {
-        const refStore = db.createObjectStore(STORE_TRAINING_REFERENCE_SETS, { keyPath: 'id' });
-        refStore.createIndex('enabled', 'enabled', { unique: false });
-        refStore.createIndex('priority', 'priority', { unique: false });
-      }
-      if (!db.objectStoreNames.contains(STORE_TRAINING_BLOBS)) {
-        db.createObjectStore(STORE_TRAINING_BLOBS);
-      }
-    };
-
-    request.onsuccess = () => {
       emitDiagnosticBoundary({
         subsystem: 'data-storage',
         component: 'IndexedDbDriver',
@@ -192,13 +284,59 @@ export function getDatabase(): Promise<IDBDatabase> {
         eventType: 'lifecycle',
         severity: 'healthy',
         status: 'succeeded',
-        payload: { dbName: DB_NAME, version: request.result.version, storeCount: request.result.objectStoreNames.length },
-        explanation: `Opened IndexedDB "${DB_NAME}" v${request.result.version} (${request.result.objectStoreNames.length} stores).`,
+        payload: {
+          dbName: DB_NAME,
+          version: resolvedDb.version,
+          storeCount: resolvedDb.objectStoreNames.length,
+        },
+        explanation: `Opened IndexedDB "${DB_NAME}" v${resolvedDb.version} (${resolvedDb.objectStoreNames.length} stores).`,
       });
-      resolve(request.result);
-    };
+      return resolvedDb;
+    } catch (err: any) {
+      if (err?.name === 'VersionError') {
+        try {
+          // Database on disk already has a higher schema version; open at its current version cleanly.
+          const existingDb = await openDatabaseConnection();
+          const missing = getMissingRequiredStores(existingDb);
+          let resolvedDb = existingDb;
+          if (missing.length > 0) {
+            const repairVersion = Math.max(DB_VERSION + 1, existingDb.version + 1);
+            safeCloseDatabase(existingDb);
+            resolvedDb = await openDatabaseConnection(repairVersion);
+          }
+          emitDiagnosticBoundary({
+            subsystem: 'data-storage',
+            component: 'IndexedDbDriver',
+            operation: 'openDatabase',
+            eventType: 'lifecycle',
+            severity: 'healthy',
+            status: 'succeeded',
+            payload: {
+              dbName: DB_NAME,
+              version: resolvedDb.version,
+              expectedVersion: DB_VERSION,
+              storeCount: resolvedDb.objectStoreNames.length,
+              repairedStores: missing,
+            },
+            explanation: `Opened higher-version IndexedDB "${DB_NAME}" v${resolvedDb.version} cleanly (minimum schema v${DB_VERSION}).`,
+          });
+          return resolvedDb;
+        } catch (recoveryErr: any) {
+          dbPromise = null;
+          emitDiagnosticBoundary({
+            subsystem: 'data-storage',
+            component: 'IndexedDbDriver',
+            operation: 'openDatabase',
+            eventType: 'error',
+            severity: 'critical',
+            status: 'failed',
+            explanation: `Failed to recover higher-version IndexedDB "${DB_NAME}": ${recoveryErr?.message || 'Unknown DB error'}.`,
+            error: recoveryErr,
+          });
+          throw recoveryErr;
+        }
+      }
 
-    request.onerror = () => {
       dbPromise = null;
       emitDiagnosticBoundary({
         subsystem: 'data-storage',
@@ -207,12 +345,12 @@ export function getDatabase(): Promise<IDBDatabase> {
         eventType: 'error',
         severity: 'critical',
         status: 'failed',
-        explanation: `Failed to open IndexedDB "${DB_NAME}": ${request.error?.message || 'Unknown DB error'}.`,
-        error: request.error,
+        explanation: `Failed to open IndexedDB "${DB_NAME}": ${err?.message || 'Unknown DB error'}.`,
+        error: err,
       });
-      reject(request.error);
-    };
-  });
+      throw err;
+    }
+  })();
 
   return dbPromise;
 }
@@ -334,6 +472,15 @@ export async function getPageBubbles(pageId: string): Promise<BubbleItem[]> {
           confidence: b.confidence,
           isManuallyEdited: b.isManuallyEdited || false,
           updatedAt: b.updatedAt || Date.now(),
+          ...(b.provenance !== undefined ? { provenance: b.provenance } : {}),
+          ...(b.manualSelectionShape !== undefined ? { manualSelectionShape: b.manualSelectionShape } : {}),
+          ...(Array.isArray(b.manualPolygon) ? { manualPolygon: b.manualPolygon } : {}),
+          ...(b.manualColorSnapshot !== undefined ? { manualColorSnapshot: b.manualColorSnapshot } : {}),
+          ...(b.manualExtractionStatus !== undefined ? { manualExtractionStatus: b.manualExtractionStatus } : {}),
+          ...(b.manualExtractionError !== undefined ? { manualExtractionError: b.manualExtractionError } : {}),
+          ...(b.manualExtractedGeometrySignature !== undefined ? { manualExtractedGeometrySignature: b.manualExtractedGeometrySignature } : {}),
+          ...(b.manualTranslationStatus !== undefined ? { manualTranslationStatus: b.manualTranslationStatus } : {}),
+          ...(b.manualTranslationError !== undefined ? { manualTranslationError: b.manualTranslationError } : {}),
         };
       });
 

@@ -58,6 +58,15 @@ export interface BubbleItem {
   confidence?: number;            // 0.0 - 1.0 detection confidence
   isManuallyEdited?: boolean;     // Guards against AI overwrite
   updatedAt?: number;
+  provenance?: 'auto_scan' | 'manual_selection';
+  manualSelectionShape?: 'box' | 'bubble' | 'lasso';
+  manualPolygon?: Array<[number, number]>;
+  manualColorSnapshot?: string;
+  manualExtractionStatus?: 'created' | 'ocr_pending' | 'ocr_running' | 'ocr_success' | 'ocr_partial' | 'ocr_failed' | 'manual_text';
+  manualExtractionError?: string | null;
+  manualExtractedGeometrySignature?: string;
+  manualTranslationStatus?: 'untranslated' | 'translating' | 'translated' | 'translation_failed';
+  manualTranslationError?: string | null;
 }
 
 export const BUBBLE_TYPE_CONFIG: Record<

@@ -1,13 +1,7 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState } from 'react';
 import { focusRegistry } from '../../lib/focusRegistry';
-import { 
-  X, 
-  Minus, 
-  Square, 
-  CornerDownLeft, 
-  Delete,
-  GripHorizontal
-} from 'lucide-react';
+import { CornerDownLeft, Delete } from 'lucide-react';
+import { FloatingWindow } from './FloatingWindow';
 
 interface VirtualKeyboardProps {
   isOpen: boolean;
@@ -95,88 +89,9 @@ export const VirtualKeyboard: React.FC<VirtualKeyboardProps> = ({
   onClose,
   onInsertChar,
 }) => {
-  // Load persisted geometry
-  const [geometry, setGeometry] = useState(() => {
-    try {
-      const saved = localStorage.getItem('dragonfly44_keyboard_geom');
-      if (saved) return JSON.parse(saved);
-    } catch {}
-    return { x: 300, y: 340, width: 620, height: 320 };
-  });
-
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
-  const [isResizing, setIsResizing] = useState(false);
-  const [resizeStart, setResizeStart] = useState({ x: 0, y: 0, width: 620, height: 320 });
-  const [isMinimized, setIsMinimized] = useState(false);
   const [isShiftActive, setIsShiftActive] = useState(false);
 
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  // Persist geometry changes
-  useEffect(() => {
-    localStorage.setItem('dragonfly44_keyboard_geom', JSON.stringify(geometry));
-  }, [geometry]);
-
-  // Window drag handlers
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (isDragging) {
-        setGeometry((prev: any) => ({
-          ...prev,
-          x: Math.max(10, Math.min(window.innerWidth - 300, e.clientX - dragOffset.x)),
-          y: Math.max(10, Math.min(window.innerHeight - 80, e.clientY - dragOffset.y)),
-        }));
-      } else if (isResizing) {
-        const deltaX = e.clientX - resizeStart.x;
-        const deltaY = e.clientY - resizeStart.y;
-        setGeometry((prev: any) => ({
-          ...prev,
-          width: Math.max(480, Math.min(window.innerWidth - prev.x - 20, resizeStart.width + deltaX)),
-          height: Math.max(220, Math.min(window.innerHeight - prev.y - 20, resizeStart.height + deltaY)),
-        }));
-      }
-    };
-
-    const handleMouseUp = () => {
-      setIsDragging(false);
-      setIsResizing(false);
-    };
-
-    if (isDragging || isResizing) {
-      window.addEventListener('mousemove', handleMouseMove);
-      window.addEventListener('mouseup', handleMouseUp);
-    }
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [isDragging, isResizing, dragOffset, resizeStart]);
-
-  if (!isOpen) return null;
-
-  const handleHeaderMouseDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
-    setDragOffset({
-      x: e.clientX - geometry.x,
-      y: e.clientY - geometry.y,
-    });
-  };
-
-  const handleResizeMouseDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsResizing(true);
-    setResizeStart({
-      x: e.clientX,
-      y: e.clientY,
-      width: geometry.width,
-      height: geometry.height,
-    });
-  };
-
-  // Critical: onMouseDown calls preventDefault to never steal focus
+  // Critical: key buttons call onMouseDown e.preventDefault() so active textarea focus stays intact
   const handleKeyClick = (char: string) => {
     focusRegistry.insertCharacter(char);
     onInsertChar?.(char);
@@ -187,211 +102,166 @@ export const VirtualKeyboard: React.FC<VirtualKeyboardProps> = ({
   };
 
   return (
-    <div
-      ref={containerRef}
-      style={{
-        left: `${geometry.x}px`,
-        top: `${geometry.y}px`,
-        width: `${geometry.width}px`,
-      }}
-      className="fixed z-50 flex flex-col rounded-xl border border-white/[0.14] bg-[#0c0c11]/95 backdrop-blur-md shadow-2xl select-none overflow-hidden animate-in fade-in duration-150"
+    <FloatingWindow
+      isOpen={isOpen}
+      title="Arabic 101 Virtual Keyboard"
+      storageKey="dragonfly44_keyboard_geom"
+      defaultGeometry={{ x: 300, y: 340, width: 620, height: 320 }}
+      minWidth={480}
+      minHeight={230}
+      minimizedWidth={340}
+      closeTitle="Close (Ctrl+K)"
+      onClose={onClose}
     >
-      {/* 1. Header Drag Bar */}
-      <div
-        onMouseDown={handleHeaderMouseDown}
-        className="h-9 px-3 bg-[#08080b] border-b border-white/[0.08] flex items-center justify-between cursor-move shrink-0"
-      >
-        <div className="flex items-center gap-2">
-          <GripHorizontal className="w-3.5 h-3.5 text-zinc-500" />
-          <span className="font-mono text-xs font-semibold text-zinc-200 tracking-wider uppercase">
-            Arabic 101 Virtual Keyboard
-          </span>
+      <div className="flex-1 min-h-0 p-2.5 flex flex-col justify-between gap-1.5 overflow-hidden text-xs">
+        {/* Tashkeel & Scanlation Punctuation Strip */}
+        <div className="flex items-center gap-1 overflow-x-auto pb-1 custom-scrollbar">
+          {TASHKEEL_ROW.map((item) => (
+            <button
+              key={item.name}
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                handleKeyClick(item.char);
+              }}
+              title={item.name}
+              className="px-2 py-1 rounded bg-zinc-900 hover:bg-zinc-800 text-amber-300 border border-white/[0.08] font-mono text-xs shrink-0 cursor-pointer active:scale-95"
+            >
+              {item.label}
+            </button>
+          ))}
         </div>
 
-        <div className="flex items-center gap-1.5" onMouseDown={(e) => e.stopPropagation()}>
-          <button
-            type="button"
-            onClick={() => setIsMinimized((prev) => !prev)}
-            className="p-1 rounded text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors cursor-pointer"
-            title={isMinimized ? 'Expand' : 'Minimize'}
-          >
-            {isMinimized ? <Square className="w-3 h-3" /> : <Minus className="w-3 h-3" />}
-          </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1 rounded text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors cursor-pointer"
-            title="Close (Ctrl+K)"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </div>
-
-      {/* 2. Keyboard Body */}
-      {!isMinimized && (
-        <div
-          style={{ height: `${geometry.height - 36}px` }}
-          className="p-2.5 flex flex-col justify-between gap-1.5 overflow-hidden text-xs relative"
-        >
-          {/* Tashkeel & Scanlation Punctuation Strip */}
-          <div className="flex items-center gap-1 overflow-x-auto pb-1 custom-scrollbar">
-            {TASHKEEL_ROW.map((item) => (
+        {/* Row 1 */}
+        <div className="flex items-center gap-1">
+          {ROW_1.map((item) => {
+            const displayChar = isShiftActive ? item.shift : item.key;
+            return (
               <button
-                key={item.name}
+                key={item.key}
                 type="button"
                 onMouseDown={(e) => {
                   e.preventDefault();
-                  handleKeyClick(item.char);
+                  handleKeyClick(displayChar);
                 }}
-                title={item.name}
-                className="px-2 py-1 rounded bg-zinc-900/90 hover:bg-zinc-800 text-amber-300 border border-white/[0.08] font-mono text-xs transition-colors shrink-0 cursor-pointer active:scale-95"
+                className="flex-1 py-1.5 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-100 border border-white/[0.06] font-sans font-medium text-xs cursor-pointer active:scale-95 text-center"
               >
-                {item.label}
+                {displayChar}
               </button>
-            ))}
-          </div>
-
-          {/* Row 1 */}
-          <div className="flex items-center gap-1">
-            {ROW_1.map((item) => {
-              const displayChar = isShiftActive ? item.shift : item.key;
-              return (
-                <button
-                  key={item.key}
-                  type="button"
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    handleKeyClick(displayChar);
-                  }}
-                  className="flex-1 py-1.5 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-100 border border-white/[0.06] font-sans font-medium text-xs transition-colors cursor-pointer active:scale-95 text-center"
-                >
-                  {displayChar}
-                </button>
-              );
-            })}
-            <button
-              type="button"
-              onMouseDown={(e) => {
-                e.preventDefault();
-                handleBackspace();
-              }}
-              className="px-3 py-1.5 rounded bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 border border-white/[0.08] font-mono text-xs flex items-center justify-center gap-1 cursor-pointer active:scale-95"
-              title="Backspace"
-            >
-              <Delete className="w-3 h-3" />
-            </button>
-          </div>
-
-          {/* Row 2 */}
-          <div className="flex items-center gap-1">
-            {ROW_2.map((item) => {
-              const displayChar = isShiftActive ? item.shift : item.key;
-              return (
-                <button
-                  key={item.key}
-                  type="button"
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    handleKeyClick(displayChar);
-                  }}
-                  className="flex-1 py-1.5 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-100 border border-white/[0.06] font-sans font-medium text-xs transition-colors cursor-pointer active:scale-95 text-center"
-                >
-                  {displayChar}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Row 3 */}
-          <div className="flex items-center gap-1">
-            {ROW_3.map((item) => {
-              const displayChar = isShiftActive ? item.shift : item.key;
-              return (
-                <button
-                  key={item.key}
-                  type="button"
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    handleKeyClick(displayChar);
-                  }}
-                  className="flex-1 py-1.5 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-100 border border-white/[0.06] font-sans font-medium text-xs transition-colors cursor-pointer active:scale-95 text-center"
-                >
-                  {displayChar}
-                </button>
-              );
-            })}
-            <button
-              type="button"
-              onMouseDown={(e) => {
-                e.preventDefault();
-                handleKeyClick('\n');
-              }}
-              className="px-3 py-1.5 rounded bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 border border-white/[0.08] font-mono text-xs flex items-center justify-center cursor-pointer active:scale-95"
-              title="Enter"
-            >
-              <CornerDownLeft className="w-3 h-3" />
-            </button>
-          </div>
-
-          {/* Row 4 */}
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onMouseDown={(e) => {
-                e.preventDefault();
-                setIsShiftActive((prev) => !prev);
-              }}
-              className={`px-3 py-1.5 rounded font-mono text-xs transition-colors cursor-pointer ${
-                isShiftActive
-                  ? 'bg-amber-500 text-zinc-950 font-bold border border-amber-400'
-                  : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-white/[0.08]'
-              }`}
-            >
-              Shift
-            </button>
-            {ROW_4.map((item) => {
-              const displayChar = isShiftActive ? item.shift : item.key;
-              return (
-                <button
-                  key={item.key}
-                  type="button"
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    handleKeyClick(displayChar);
-                  }}
-                  className="flex-1 py-1.5 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-100 border border-white/[0.06] font-sans font-medium text-xs transition-colors cursor-pointer active:scale-95 text-center"
-                >
-                  {displayChar}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Bottom Bar: Spacebar */}
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onMouseDown={(e) => {
-                e.preventDefault();
-                handleKeyClick(' ');
-              }}
-              className="w-full py-1.5 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-white/[0.08] font-mono text-xs transition-colors cursor-pointer text-center active:scale-[0.99]"
-            >
-              SPACEBAR
-            </button>
-          </div>
-
-          {/* Resizable Corner Grip Handle */}
-          <div
-            onMouseDown={handleResizeMouseDown}
-            className="absolute bottom-0 right-0 w-3.5 h-3.5 cursor-se-resize flex items-center justify-center opacity-60 hover:opacity-100"
-            title="Drag to resize"
+            );
+          })}
+          <button
+            type="button"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              handleBackspace();
+            }}
+            className="px-3 py-1.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-white/[0.08] font-mono text-xs flex items-center justify-center gap-1 cursor-pointer active:scale-95"
+            title="Backspace"
           >
-            <div className="w-2 h-2 border-r-2 border-b-2 border-zinc-500" />
-          </div>
+            <Delete className="w-3 h-3" />
+          </button>
         </div>
-      )}
-    </div>
+
+        {/* Row 2 */}
+        <div className="flex items-center gap-1">
+          {ROW_2.map((item) => {
+            const displayChar = isShiftActive ? item.shift : item.key;
+            return (
+              <button
+                key={item.key}
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  handleKeyClick(displayChar);
+                }}
+                className="flex-1 py-1.5 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-100 border border-white/[0.06] font-sans font-medium text-xs cursor-pointer active:scale-95 text-center"
+              >
+                {displayChar}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Row 3 */}
+        <div className="flex items-center gap-1">
+          {ROW_3.map((item) => {
+            const displayChar = isShiftActive ? item.shift : item.key;
+            return (
+              <button
+                key={item.key}
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  handleKeyClick(displayChar);
+                }}
+                className="flex-1 py-1.5 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-100 border border-white/[0.06] font-sans font-medium text-xs cursor-pointer active:scale-95 text-center"
+              >
+                {displayChar}
+              </button>
+            );
+          })}
+          <button
+            type="button"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              handleKeyClick('\n');
+            }}
+            className="px-3 py-1.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-white/[0.08] font-mono text-xs flex items-center justify-center cursor-pointer active:scale-95"
+            title="Enter"
+          >
+            <CornerDownLeft className="w-3 h-3" />
+          </button>
+        </div>
+
+        {/* Row 4 */}
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              setIsShiftActive((prev) => !prev);
+            }}
+            className={`px-3 py-1.5 rounded font-mono text-xs cursor-pointer ${
+              isShiftActive
+                ? 'bg-amber-500 text-zinc-950 font-bold border border-amber-400'
+                : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-white/[0.08]'
+            }`}
+          >
+            Shift
+          </button>
+          {ROW_4.map((item) => {
+            const displayChar = isShiftActive ? item.shift : item.key;
+            return (
+              <button
+                key={item.key}
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  handleKeyClick(displayChar);
+                }}
+                className="flex-1 py-1.5 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-100 border border-white/[0.06] font-sans font-medium text-xs cursor-pointer active:scale-95 text-center"
+              >
+                {displayChar}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Bottom Bar: Spacebar */}
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              handleKeyClick(' ');
+            }}
+            className="w-full py-1.5 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-white/[0.08] font-mono text-xs cursor-pointer text-center active:scale-[0.99]"
+          >
+            SPACEBAR
+          </button>
+        </div>
+      </div>
+    </FloatingWindow>
   );
 };

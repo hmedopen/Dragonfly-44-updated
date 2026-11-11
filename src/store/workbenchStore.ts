@@ -10,7 +10,9 @@ import type {
   HumanizerIntensity,
   OrthographyMode
 } from '../types/workbench';
-import { loadTyperSettings, resolveCanonicalTyper } from '../types/typers';
+import { loadTyperSettings, resolveCanonicalTyper, resolveTyperVisual } from '../types/typers';
+import { computeGeometrySignature } from '../features/manual-selection/selection/geometry';
+import type { SelectionMode, NormalizedBox2D, NormalizedPolygon } from '../features/manual-selection/types/selection';
 import { getPageBubbles, savePageBubbles, getProjectLore, updateReviewFindingStatus } from '../services/db';
 import { getChapterIntelligence } from '../services/intelligence';
 import { projectMemory } from '../services/projectMemory';
@@ -42,6 +44,9 @@ interface WorkbenchState {
   // Tool & Drawer toggles
   isSettingsOpen: boolean;
   isKeyboardOpen: boolean;
+  isManualSelectionOpen: boolean;
+  manualSelectionMode: SelectionMode;
+  manualSelectedTyperId: string;
   isTypeRModalOpen: boolean;
   isDrawBoxActive: boolean;
   isUtilityRailExpanded: boolean;
@@ -71,6 +76,10 @@ interface WorkbenchState {
   toggleSettings: () => void;
   setIsKeyboardOpen: (open: boolean) => void;
   toggleKeyboard: () => void;
+  setIsManualSelectionOpen: (open: boolean) => void;
+  toggleManualSelection: () => void;
+  setManualSelectionMode: (mode: SelectionMode) => void;
+  setManualSelectedTyperId: (typerId: string) => void;
   setIsTypeRModalOpen: (open: boolean) => void;
   toggleTypeRModal: () => void;
   setIsDrawBoxActive: (active: boolean) => void;
@@ -83,7 +92,27 @@ interface WorkbenchState {
 
   // Bubble manipulation actions (with edit protection & flag lifecycle)
   loadPageBubbles: (pageId: string) => Promise<void>;
+  setPageBubblesDirect: (pageId: string, bubbles: BubbleItem[], persist?: boolean) => void;
   addManualBubble: (pageId: string, initialBox?: [number, number, number, number]) => void;
+  addManualSelectionRecord: (
+    pageId: string,
+    input: {
+      shape: SelectionMode;
+      box_2d: NormalizedBox2D;
+      polygon?: NormalizedPolygon;
+      typerId?: string;
+    }
+  ) => BubbleItem;
+  updateManualSelectionGeometry: (
+    pageId: string,
+    bubbleId: string,
+    next: { box_2d: NormalizedBox2D; polygon?: NormalizedPolygon }
+  ) => void;
+  clearManualSelections: (
+    scope: 'page' | 'chapter',
+    pageId: string | null,
+    chapterPageIds: string[]
+  ) => Promise<number>;
   updateBubble: (pageId: string, bubbleId: string, patch: Partial<BubbleItem>) => void;
   deleteBubble: (pageId: string, bubbleId: string) => void;
   reorderBubbles: (pageId: string, startIndex: number, endIndex: number) => void;
@@ -167,6 +196,13 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   // Modals & Panels
   isSettingsOpen: false,
   isKeyboardOpen: false,
+  isManualSelectionOpen: false,
+  manualSelectionMode: (() => {
+    const val = settingsService.getEffectiveValue<string>('manual_selection.last_selection_mode').value;
+    return val === 'bubble' || val === 'lasso' ? val : 'box';
+  })(),
+  manualSelectedTyperId:
+    settingsService.getEffectiveValue<string>('manual_selection.last_typer_id').value || 'speech_bubbles',
   isTypeRModalOpen: false,
   isDrawBoxActive: false,
   isUtilityRailExpanded: false,
@@ -194,17 +230,25 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
 
     // Hydrate Project Lore and Chapter Intelligence
     if (folderId && folderId !== 'folder-drafts') {
-      getProjectLore(folderId).then((lore) => {
-        set({ projectLore: lore });
-      });
+      getProjectLore(folderId)
+        .then((lore) => {
+          set({ projectLore: lore });
+        })
+        .catch((err) => {
+          console.warn('[WorkbenchStore] Failed to hydrate project lore:', err);
+        });
       get().loadMemoryCandidates(folderId);
     } else {
       set({ projectLore: null, memoryCandidates: [], memoryConflicts: [] });
     }
 
-    getChapterIntelligence(chapterId).then((intel: ChapterIntelligence | null) => {
-      set({ chapterIntelligence: intel });
-    });
+    getChapterIntelligence(chapterId)
+      .then((intel: ChapterIntelligence | null) => {
+        set({ chapterIntelligence: intel });
+      })
+      .catch((err) => {
+        console.warn('[WorkbenchStore] Failed to hydrate chapter intelligence:', err);
+      });
   },
 
   setActiveChapterId: (chapterId) => set({ activeChapterId: chapterId }),
@@ -220,6 +264,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
       selectedBubbleId: null,
       isSettingsOpen: false,
       isKeyboardOpen: false,
+      isManualSelectionOpen: false,
       isTypeRModalOpen: false,
     }),
 
@@ -227,6 +272,27 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   toggleSettings: () => set((s) => ({ isSettingsOpen: !s.isSettingsOpen })),
   setIsKeyboardOpen: (open) => set({ isKeyboardOpen: open }),
   toggleKeyboard: () => set((s) => ({ isKeyboardOpen: !s.isKeyboardOpen })),
+  setIsManualSelectionOpen: (open) =>
+    set({
+      isManualSelectionOpen: open,
+      ...(open ? { isDrawBoxActive: false } : {}),
+    }),
+  toggleManualSelection: () =>
+    set((s) => {
+      const next = !s.isManualSelectionOpen;
+      return {
+        isManualSelectionOpen: next,
+        ...(next ? { isDrawBoxActive: false } : {}),
+      };
+    }),
+  setManualSelectionMode: (mode) => {
+    settingsService.setSettingValue('manual_selection.last_selection_mode', mode, { scope: 'global' });
+    set({ manualSelectionMode: mode });
+  },
+  setManualSelectedTyperId: (typerId) => {
+    settingsService.setSettingValue('manual_selection.last_typer_id', typerId, { scope: 'global' });
+    set({ manualSelectedTyperId: typerId });
+  },
   setIsTypeRModalOpen: (open) => set({ isTypeRModalOpen: open }),
   toggleTypeRModal: () => set((s) => ({ isTypeRModalOpen: !s.isTypeRModalOpen })),
   setIsDrawBoxActive: (active) => set({ isDrawBoxActive: active }),
@@ -262,6 +328,20 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     }
   },
 
+  setPageBubblesDirect: (pageId: string, bubbles: BubbleItem[], persist = true) => {
+    set((s) => ({
+      bubblesByPage: {
+        ...s.bubblesByPage,
+        [pageId]: bubbles,
+      },
+    }));
+    if (persist) {
+      savePageBubbles(pageId, bubbles).catch((err) =>
+        console.error('[WorkbenchStore] Failed to persist page bubbles to IDB', err)
+      );
+    }
+  },
+
   addManualBubble: (pageId: string, initialBox?: [number, number, number, number]) => {
     const state = get();
     const existing = state.bubblesByPage[pageId] || [];
@@ -274,6 +354,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     );
     const initialType = defaultSpeechTyper ? defaultSpeechTyper.id : (typerSettings.typers[0]?.id || 'none');
     const initialPrefix = defaultSpeechTyper ? defaultSpeechTyper.prefix : (typerSettings.typers[0]?.prefix || '');
+    const visual = resolveTyperVisual({ type: initialType, typerPrefix: initialPrefix }, typerSettings.typers);
 
     const newBubble: BubbleItem = {
       id: `bubble-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
@@ -283,6 +364,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
       box_2d: initialBox || [350, 250, 550, 650],
       type: initialType,
       typerPrefix: initialPrefix,
+      manualColorSnapshot: visual.isClassified ? visual.color : undefined,
       sourceText: '',
       originalSourceText: '',
       translatedText: '',
@@ -293,6 +375,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     };
 
     const updated = [...existing, newBubble];
+    const pageUndo = (state.bubbleUndoStack[pageId] || []).slice(-39);
 
     set((s) => ({
       bubblesByPage: {
@@ -300,6 +383,14 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
         [pageId]: updated,
       },
       selectedBubbleId: newBubble.id,
+      bubbleUndoStack: {
+        ...s.bubbleUndoStack,
+        [pageId]: [...pageUndo, existing],
+      },
+      bubbleRedoStack: {
+        ...s.bubbleRedoStack,
+        [pageId]: [],
+      },
     }));
 
     savePageBubbles(pageId, updated).catch((err) =>
@@ -307,27 +398,241 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     );
   },
 
+  addManualSelectionRecord: (pageId, input) => {
+    const state = get();
+    const existing = state.bubblesByPage[pageId] || [];
+    const maxIndex = existing.reduce((max, b) => Math.max(max, b.index || 0), 0);
+    const nextIndex = maxIndex + 1;
+
+    const typerSettings = loadTyperSettings();
+    const targetTyperId = input.typerId || state.manualSelectedTyperId;
+    const matchedTyper =
+      typerSettings.typers.find((t) => t.id === targetTyperId) ||
+      typerSettings.typers.find((t) => t.id === 'speech_bubbles') ||
+      typerSettings.typers[0];
+
+    const initialType = matchedTyper ? matchedTyper.id : 'none';
+    const initialPrefix = matchedTyper ? matchedTyper.prefix : '';
+    const visual = resolveTyperVisual(
+      { type: initialType, typerPrefix: initialPrefix, manualColorSnapshot: matchedTyper?.color },
+      typerSettings.typers
+    );
+
+    const newBubble: BubbleItem = {
+      id: `manual-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      pageId,
+      chapterId: state.activeChapterId || undefined,
+      index: nextIndex,
+      box_2d: input.box_2d,
+      type: initialType,
+      typerPrefix: initialPrefix,
+      sourceText: '',
+      originalSourceText: '',
+      translatedText: '',
+      rawTranslatedText: '',
+      reviewFlags: [],
+      isManuallyEdited: false,
+      updatedAt: Date.now(),
+      provenance: 'manual_selection',
+      manualSelectionShape: input.shape,
+      ...(input.polygon && input.polygon.length >= 3 ? { manualPolygon: input.polygon } : {}),
+      manualColorSnapshot: visual.isClassified ? visual.color : undefined,
+      manualExtractionStatus: 'created',
+      manualExtractionError: null,
+      manualTranslationStatus: 'untranslated',
+      manualTranslationError: null,
+    };
+
+    const updated = [...existing, newBubble];
+    const pageUndo = (state.bubbleUndoStack[pageId] || []).slice(-39);
+
+    set((s) => ({
+      bubblesByPage: {
+        ...s.bubblesByPage,
+        [pageId]: updated,
+      },
+      selectedBubbleId: newBubble.id,
+      bubbleUndoStack: {
+        ...s.bubbleUndoStack,
+        [pageId]: [...pageUndo, existing],
+      },
+      bubbleRedoStack: {
+        ...s.bubbleRedoStack,
+        [pageId]: [],
+      },
+    }));
+
+    savePageBubbles(pageId, updated).catch((err) =>
+      console.error('[WorkbenchStore] Failed to save manual selection record to IDB', err)
+    );
+
+    return newBubble;
+  },
+
+  updateManualSelectionGeometry: (pageId, bubbleId, next) => {
+    const state = get();
+    const existing = state.bubblesByPage[pageId] || [];
+    const target = existing.find((b) => b.id === bubbleId);
+    if (!target) return;
+
+    const newSig = computeGeometrySignature(next.box_2d, next.polygon);
+    const prevSig = computeGeometrySignature(target.box_2d, target.manualPolygon);
+    if (newSig === prevSig) return;
+
+    const pageUndo = (state.bubbleUndoStack[pageId] || []).slice(-39);
+    const updated = existing.map((b) => {
+      if (b.id !== bubbleId) return b;
+      const geometryChangedAfterExtract =
+        Boolean(b.manualExtractedGeometrySignature) &&
+        b.manualExtractedGeometrySignature !== newSig;
+      return {
+        ...b,
+        box_2d: next.box_2d,
+        ...(next.polygon ? { manualPolygon: next.polygon } : {}),
+        ...(geometryChangedAfterExtract && b.manualExtractionStatus !== 'manual_text'
+          ? { manualExtractionStatus: 'ocr_pending' as const }
+          : {}),
+        updatedAt: Date.now(),
+      };
+    });
+
+    set((s) => ({
+      bubblesByPage: {
+        ...s.bubblesByPage,
+        [pageId]: updated,
+      },
+      bubbleUndoStack: {
+        ...s.bubbleUndoStack,
+        [pageId]: [...pageUndo, existing],
+      },
+      bubbleRedoStack: {
+        ...s.bubbleRedoStack,
+        [pageId]: [],
+      },
+    }));
+
+    savePageBubbles(pageId, updated).catch((err) =>
+      console.error('[WorkbenchStore] Failed to persist updated selection geometry to IDB', err)
+    );
+  },
+
+  clearManualSelections: async (scope, pageId, chapterPageIds) => {
+    const state = get();
+    if (scope === 'page') {
+      if (!pageId) return 0;
+      const existing = state.bubblesByPage[pageId] || [];
+      const manualCount = existing.filter((b) => b.provenance === 'manual_selection').length;
+      if (manualCount === 0) return 0;
+
+      const surviving = existing
+        .filter((b) => b.provenance !== 'manual_selection')
+        .map((b, idx) => ({ ...b, index: idx + 1 }));
+      const selectedRemoved = Boolean(
+        state.selectedBubbleId &&
+          existing.some(
+            (b) => b.id === state.selectedBubbleId && b.provenance === 'manual_selection'
+          )
+      );
+      const pageUndo = (state.bubbleUndoStack[pageId] || []).slice(-39);
+
+      set((s) => ({
+        bubblesByPage: {
+          ...s.bubblesByPage,
+          [pageId]: surviving,
+        },
+        selectedBubbleId: selectedRemoved ? null : s.selectedBubbleId,
+        bubbleUndoStack: {
+          ...s.bubbleUndoStack,
+          [pageId]: [...pageUndo, existing],
+        },
+        bubbleRedoStack: {
+          ...s.bubbleRedoStack,
+          [pageId]: [],
+        },
+      }));
+
+      await savePageBubbles(pageId, surviving);
+      return manualCount;
+    }
+
+    // Chapter scope: only delete records with provenance === 'manual_selection' per page
+    let totalCleared = 0;
+    const nextBubblesByPage: Record<string, BubbleItem[]> = { ...state.bubblesByPage };
+    const nextUndoStack: Record<string, BubbleItem[][]> = { ...state.bubbleUndoStack };
+    const nextRedoStack: Record<string, BubbleItem[][]> = { ...state.bubbleRedoStack };
+    let clearSelected = false;
+
+    for (const pid of chapterPageIds) {
+      const existing = nextBubblesByPage[pid] ?? (await getPageBubbles(pid));
+      const manualCount = existing.filter((b) => b.provenance === 'manual_selection').length;
+      if (manualCount === 0) continue;
+
+      totalCleared += manualCount;
+      const surviving = existing
+        .filter((b) => b.provenance !== 'manual_selection')
+        .map((b, idx) => ({ ...b, index: idx + 1 }));
+      if (
+        state.selectedBubbleId &&
+        existing.some((b) => b.id === state.selectedBubbleId && b.provenance === 'manual_selection')
+      ) {
+        clearSelected = true;
+      }
+
+      nextUndoStack[pid] = [...(nextUndoStack[pid] || []).slice(-39), existing];
+      nextRedoStack[pid] = [];
+      nextBubblesByPage[pid] = surviving;
+      await savePageBubbles(pid, surviving);
+    }
+
+    if (totalCleared > 0) {
+      set((s) => ({
+        bubblesByPage: nextBubblesByPage,
+        bubbleUndoStack: nextUndoStack,
+        bubbleRedoStack: nextRedoStack,
+        selectedBubbleId: clearSelected ? null : s.selectedBubbleId,
+      }));
+    }
+
+    return totalCleared;
+  },
+
   updateBubble: (pageId: string, bubbleId: string, patch: Partial<BubbleItem>) => {
     const state = get();
     const existing = state.bubblesByPage[pageId] || [];
 
-    let updatedPatch = { ...patch };
+    let updatedPatch: Partial<BubbleItem> = { ...patch };
 
     // Mark as manually edited if source or translation text is modified
     if (patch.sourceText !== undefined || patch.translatedText !== undefined) {
       updatedPatch.isManuallyEdited = true;
+      if (patch.sourceText !== undefined) {
+        const targetItem = existing.find((b) => b.id === bubbleId);
+        if (targetItem?.provenance === 'manual_selection' && patch.manualExtractionStatus === undefined) {
+          updatedPatch.manualExtractionStatus = 'manual_text';
+        }
+      }
     }
     updatedPatch.updatedAt = Date.now();
 
-    // Canonical typer prefix synchronization
+    // Canonical typer prefix & shared color snapshot synchronization
+    let pushTypeUndo = false;
     if (patch.type && patch.typerPrefix === undefined) {
+      pushTypeUndo = true;
       if (patch.type === 'none') {
         updatedPatch.typerPrefix = '';
+        updatedPatch.manualColorSnapshot = undefined;
       } else {
         const typerSettings = loadTyperSettings();
         const resolved = resolveCanonicalTyper(patch.type, typerSettings.typers);
+        const visual = resolveTyperVisual(
+          { type: resolved.id, typerPrefix: resolved.prefix },
+          typerSettings.typers
+        );
         updatedPatch.type = resolved.id;
         updatedPatch.typerPrefix = resolved.prefix;
+        if (visual.isClassified) {
+          updatedPatch.manualColorSnapshot = visual.color;
+        }
       }
     }
 
@@ -340,12 +645,27 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
       return { ...b, ...updatedPatch, translationHistory: history };
     });
 
-    set((s) => ({
-      bubblesByPage: {
-        ...s.bubblesByPage,
-        [pageId]: updated,
-      },
-    }));
+    set((s) => {
+      const pageUndo = (s.bubbleUndoStack[pageId] || []).slice(-39);
+      return {
+        bubblesByPage: {
+          ...s.bubblesByPage,
+          [pageId]: updated,
+        },
+        ...(pushTypeUndo
+          ? {
+              bubbleUndoStack: {
+                ...s.bubbleUndoStack,
+                [pageId]: [...pageUndo, existing],
+              },
+              bubbleRedoStack: {
+                ...s.bubbleRedoStack,
+                [pageId]: [],
+              },
+            }
+          : {}),
+      };
+    });
 
     savePageBubbles(pageId, updated).catch((err) =>
       console.error('[WorkbenchStore] Failed to update bubble in IDB', err)
@@ -355,8 +675,11 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   deleteBubble: (pageId: string, bubbleId: string) => {
     const state = get();
     const existing = state.bubblesByPage[pageId] || [];
+    if (!existing.some((b) => b.id === bubbleId)) return;
+
     const filtered = existing.filter((b) => b.id !== bubbleId);
     const reindexed = filtered.map((b, idx) => ({ ...b, index: idx + 1 }));
+    const pageUndo = (state.bubbleUndoStack[pageId] || []).slice(-39);
 
     set((s) => ({
       bubblesByPage: {
@@ -364,6 +687,14 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
         [pageId]: reindexed,
       },
       selectedBubbleId: s.selectedBubbleId === bubbleId ? null : s.selectedBubbleId,
+      bubbleUndoStack: {
+        ...s.bubbleUndoStack,
+        [pageId]: [...pageUndo, existing],
+      },
+      bubbleRedoStack: {
+        ...s.bubbleRedoStack,
+        [pageId]: [],
+      },
     }));
 
     savePageBubbles(pageId, reindexed).catch((err) =>
