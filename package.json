@@ -15,6 +15,7 @@
     "test:diagnostics": "node --import ./src/test/localOcr/tsResolveHook.mjs --test src/dev/system-diagnostics/test/*.test.ts",
     "test:local-ocr": "node --import ./src/test/localOcr/tsResolveHook.mjs --test src/test/localOcr/*.test.ts",
     "test:manual-selection": "node --import ./src/test/localOcr/tsResolveHook.mjs --test src/features/manual-selection/tests/*.test.ts",
+    "test:chapter-snatch": "node --import ./src/test/localOcr/tsResolveHook.mjs --test src/features/chapter-snatch/tests/*.test.ts",
     "smoke:local-ocr": "node --import ./src/test/localOcr/tsResolveHook.mjs src/test/localOcr/smokeTest.mjs",
     "validate:local-ocr": "node --import ./src/test/localOcr/tsResolveHook.mjs src/test/localOcr/multilingualValidation.mjs",
     "preview": "vite preview"

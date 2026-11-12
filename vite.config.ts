@@ -43,8 +43,60 @@ function onnxRuntimeWasmPlugin(): Plugin {
   }
 }
 
+function chapterSnatchBackendPlugin(): Plugin {
+  return {
+    name: 'folio-chapter-snatch-backend',
+    configureServer(server) {
+      server.middlewares.use(async (req, res, next) => {
+        if (!req.url || !req.url.startsWith('/api/chapter-snatch/')) {
+          return next()
+        }
+        // @ts-ignore
+        const { fetchMetadata, downloadPageImage } = await import('./electron/chapterSnatchBackend.cjs')
+        const urlObj = new URL(req.url, `http://${req.headers.host || '127.0.0.1:5173'}`)
+        if (urlObj.pathname === '/api/chapter-snatch/metadata') {
+          const targetUrl = urlObj.searchParams.get('url')
+          if (!targetUrl) {
+            res.writeHead(400, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ error: 'Missing "url" parameter.' }))
+            return
+          }
+          try {
+            const data = await fetchMetadata(targetUrl)
+            res.writeHead(200, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify(data))
+          } catch (err: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ error: err?.message || 'Failed to fetch chapter metadata.' }))
+          }
+          return
+        }
+        if (urlObj.pathname === '/api/chapter-snatch/download-page') {
+          const imageUrl = urlObj.searchParams.get('url')
+          const referer = urlObj.searchParams.get('referer') || undefined
+          if (!imageUrl) {
+            res.writeHead(400, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ error: 'Missing "url" parameter.' }))
+            return
+          }
+          try {
+            const data = await downloadPageImage(imageUrl, referer)
+            res.writeHead(200, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify(data))
+          } catch (err: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ error: err?.message || 'Failed to download page image.' }))
+          }
+          return
+        }
+        next()
+      })
+    },
+  }
+}
+
 // https://vite.dev/config/
 export default defineConfig({
   base: './',
-  plugins: [react(), tailwindcss(), onnxRuntimeWasmPlugin()],
+  plugins: [react(), tailwindcss(), onnxRuntimeWasmPlugin(), chapterSnatchBackendPlugin()],
 })

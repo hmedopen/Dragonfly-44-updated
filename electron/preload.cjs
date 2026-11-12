@@ -33,6 +33,12 @@ const localModelsBridge = {
   },
 };
 
+const chapterSnatchBridge = {
+  fetchMetadata: (url) => ipcRenderer.invoke('chapterSnatch:fetchMetadata', url),
+  downloadPageImage: (imageUrl, referer) => ipcRenderer.invoke('chapterSnatch:downloadPageImage', { imageUrl, referer }),
+  saveZip: (payload) => ipcRenderer.invoke('chapterSnatch:saveZip', payload),
+};
+
 const appBridge = {
   platform: process.platform,
   version: '1.0.0',
@@ -40,6 +46,7 @@ const appBridge = {
   trainingStudio: trainingStudioBridge,
   diagnostics: diagnosticsBridge,
   localModels: localModelsBridge,
+  chapterSnatch: chapterSnatchBridge,
 };
 
 contextBridge.exposeInMainWorld('folioScript', appBridge);

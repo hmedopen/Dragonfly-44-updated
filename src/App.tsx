@@ -10,10 +10,11 @@ import { isTrainingStudioEnabled } from './lib/training/env';
 import { useWorkbenchStore } from './store/workbenchStore';
 import { initialFolders } from './mockData';
 import type { Folder, Chapter, PageMetadata } from './types';
-import { Sparkles, Activity, Sliders, Stethoscope } from 'lucide-react';
+import { Sparkles, Activity, Sliders, Stethoscope, Download } from 'lucide-react';
 import { pickImageFiles, ingestImageFiles, formatDraftName } from './services/fileIngestion';
 import { deletePageBlob, runIdempotentStorageMigration } from './services/db';
 import { isSystemDiagnosticsEnabled } from './lib/diagnosticTap';
+import { ChapterSnatchModal } from './features/chapter-snatch/components/ChapterSnatchModal';
 
 type DevDiagnosticStudioComponent = React.ComponentType<{
   isOpen: boolean;
@@ -92,6 +93,7 @@ export function App() {
   const [isGlobalSettingsOpen, setIsGlobalSettingsOpen] = useState(false);
   const [isBenchmarkOpen, setIsBenchmarkOpen] = useState(false);
   const [isTrainingStudioOpen, setIsTrainingStudioOpen] = useState(false);
+  const [isChapterSnatchOpen, setIsChapterSnatchOpen] = useState(false);
   const diagnosticsEnabled = isSystemDiagnosticsEnabled() && hasDiagnosticStudioModule;
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
   const [DevDiagnosticsHost, setDevDiagnosticsHost] = useState<DevDiagnosticStudioComponent | null>(null);
@@ -604,6 +606,16 @@ export function App() {
 
                 <button
                   type="button"
+                  onClick={() => setIsChapterSnatchOpen(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-mono text-zinc-300 hover:text-white bg-zinc-900/80 hover:bg-zinc-800 border border-white/[0.08] transition-colors cursor-pointer"
+                  title="Chapter Snatch"
+                >
+                  <Download className="w-3.5 h-3.5 text-zinc-300" />
+                  <span>Chapter Snatch</span>
+                </button>
+
+                <button
+                  type="button"
                   onClick={() => setIsGlobalSettingsOpen(true)}
                   className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-800/80 border border-white/[0.08] transition-colors cursor-pointer"
                   title="Settings (Ctrl+,)"
@@ -679,6 +691,19 @@ export function App() {
           <TrainingStudioModal
             isOpen={isTrainingStudioOpen}
             onClose={() => setIsTrainingStudioOpen(false)}
+          />
+
+          {/* Chapter Snatch Modal */}
+          <ChapterSnatchModal
+            isOpen={isChapterSnatchOpen}
+            onClose={() => setIsChapterSnatchOpen(false)}
+            activeFolder={activeFolder}
+            folders={folders}
+            setFolders={setFolders}
+            openChapter={openChapter}
+            showToast={showToast}
+            setActiveFolderId={setActiveFolderId}
+            setSelectedChapterId={setSelectedChapterId}
           />
         </div>
       )}

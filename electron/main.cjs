@@ -5,6 +5,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { createModelManager } = require('./modelManager.cjs');
 const { registerLocalModelIpcHandlers } = require('./localModelIpc.cjs');
+const { registerChapterSnatchIpc } = require('./chapterSnatchIpc.cjs');
 
 app.name = 'Folio Script';
 
@@ -252,6 +253,9 @@ if (isDev) {
 
 // Allowlisted Local OCR Model Management IPC Handlers
 registerLocalModelIpcHandlers(ipcMain, getModelManager);
+
+// Chapter Snatch IPC Handlers (MangaDex, Asura Scans, Native ZIP Export)
+registerChapterSnatchIpc(ipcMain, () => mainWindow);
 
 app.whenReady().then(() => {
   createWindow();
