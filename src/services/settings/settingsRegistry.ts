@@ -632,7 +632,7 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     default_value: false,
     apply_mode: 'immediate',
     scope: ['global', 'project'],
-    visibility: 'advanced',
+    visibility: 'internal',
     runtime_binding: 'Workspace.OverlayReadingOrderVisible',
     schema_version: '1.0',
     reset_behavior: 'default',
@@ -693,7 +693,7 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     setting_id: 'workspace.selection_overlay_size',
     owner_system: 'workspace',
     type: 'enum',
-    default_value: 'small',
+    default_value: 'medium',
     allowed_values: ['small', 'medium', 'big'],
     apply_mode: 'immediate',
     scope: ['global'],
@@ -701,8 +701,30 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     runtime_binding: 'Workspace.SelectionOverlaySize',
     schema_version: '1.0',
     reset_behavior: 'default',
-    label: 'Selection Outline & Badge Size',
-    description: 'Controls the visual thickness of selection outlines and the dimensions and typography of number badges on the canvas without changing coordinates or OCR.',
+    label: 'Selection Outline Size',
+    description: 'Controls the visual thickness and clarity of selection bounding outlines, drawing previews, and resize handles without changing coordinates or OCR.',
+    category: 'workspace',
+    validation: (val: string) => {
+      if (val === 'small' || val === 'medium' || val === 'big') {
+        return { valid: true, sanitizedValue: val };
+      }
+      return { valid: false, error: 'Size must be small, medium, or big', sanitizedValue: 'medium' };
+    },
+  },
+  'workspace.badge_size': {
+    setting_id: 'workspace.badge_size',
+    owner_system: 'workspace',
+    type: 'enum',
+    default_value: 'small',
+    allowed_values: ['small', 'medium', 'big'],
+    apply_mode: 'immediate',
+    scope: ['global'],
+    visibility: 'basic',
+    runtime_binding: 'Workspace.BadgeSize',
+    schema_version: '1.0',
+    reset_behavior: 'default',
+    label: 'Badge Size',
+    description: 'Controls dialogue number badge dimensions, symbol tags, and typography on the canvas.',
     category: 'workspace',
     validation: (val: string) => {
       if (val === 'small' || val === 'medium' || val === 'big') {

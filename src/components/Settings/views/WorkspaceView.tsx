@@ -118,18 +118,18 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           />
         </SettingRow>
 
-        {/* Selection Outline & Badge Size */}
+        {/* Selection Outline Size */}
         <SettingRow
-          label="Selection Outline & Badge Size"
-          description="Controls the visual thickness of selection outlines, number badge dimensions, and badge typography without changing coordinates or OCR."
+          label="Selection Outline Size"
+          description="Controls the visual thickness of selection bounding outlines, drawing previews, and resize handles without changing coordinates or OCR."
         >
           <div
             role="group"
-            aria-label="Selection Outline & Badge Size"
+            aria-label="Selection Outline Size"
             className="flex items-center gap-1 bg-[#09090c] border border-white/[0.08] rounded p-0.5 text-xs font-mono"
           >
             {(['small', 'medium', 'big'] as const).map((sizeOption) => {
-              const currentSize = getVal<string>('workspace.selection_overlay_size') || 'small';
+              const currentSize = getVal<string>('workspace.selection_overlay_size') || 'medium';
               const active = currentSize === sizeOption;
               return (
                 <button
@@ -137,6 +137,38 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                   type="button"
                   aria-pressed={active}
                   onClick={() => setVal('workspace.selection_overlay_size', sizeOption)}
+                  className={`px-3 py-1 rounded transition-colors cursor-pointer capitalize ${
+                    active
+                      ? 'bg-white/[0.12] text-white font-medium'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  {sizeOption}
+                </button>
+              );
+            })}
+          </div>
+        </SettingRow>
+
+        {/* Badge Size */}
+        <SettingRow
+          label="Badge Size"
+          description="Controls dialogue number badge dimensions, symbol tags, and typography on the canvas."
+        >
+          <div
+            role="group"
+            aria-label="Badge Size"
+            className="flex items-center gap-1 bg-[#09090c] border border-white/[0.08] rounded p-0.5 text-xs font-mono"
+          >
+            {(['small', 'medium', 'big'] as const).map((sizeOption) => {
+              const currentSize = getVal<string>('workspace.badge_size') || 'small';
+              const active = currentSize === sizeOption;
+              return (
+                <button
+                  key={sizeOption}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => setVal('workspace.badge_size', sizeOption)}
                   className={`px-3 py-1 rounded transition-colors cursor-pointer capitalize ${
                     active
                       ? 'bg-white/[0.12] text-white font-medium'
@@ -160,19 +192,6 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
             ariaLabel="Review Flag Markers"
             checked={Boolean(getVal<boolean>('workspace.overlay_review_markers_visible'))}
             onChange={(checked) => setVal('workspace.overlay_review_markers_visible', checked)}
-          />
-        </SettingRow>
-
-        {/* Reading Order Flow Arrows */}
-        <SettingRow
-          label="Reading Order Flow Arrows"
-          description="Visualizes directed vectors between consecutive dialogue bubbles reflecting current reading flow."
-        >
-          <SettingsSwitch
-            id="workspace.overlay_reading_order_visible"
-            ariaLabel="Reading Order Flow Arrows"
-            checked={Boolean(getVal<boolean>('workspace.overlay_reading_order_visible'))}
-            onChange={(checked) => setVal('workspace.overlay_reading_order_visible', checked)}
           />
         </SettingRow>
 

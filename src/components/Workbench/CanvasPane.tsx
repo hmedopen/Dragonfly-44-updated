@@ -27,9 +27,12 @@ import {
 } from '../../features/manual-selection/selection/geometry';
 import {
   computeOverlayZoomCompensation,
-  normalizeSelectionOverlaySize,
-  SELECTION_OVERLAY_METRICS,
-  type SelectionOverlaySize,
+  normalizeSelectionOutlineSize,
+  normalizeBadgeSize,
+  SELECTION_OUTLINE_METRICS,
+  BADGE_METRICS,
+  type SelectionOutlineSize,
+  type BadgeSize,
 } from '../../features/manual-selection/selection/overlaySizing';
 import type {
   NormalizedBox2D,
@@ -246,12 +249,14 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
     void settingsRevision;
     return {
       boxesVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_boxes_visible', { projectId }).value,
-      readingOrderVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_reading_order_visible', { projectId }).value,
       panelsVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_panels_visible', { projectId }).value,
       reviewMarkersVisible: settingsService.getEffectiveValue<boolean>('workspace.overlay_review_markers_visible', { projectId }).value,
       coordinateDiagnostics: settingsService.getEffectiveValue<boolean>('workspace.coordinate_diagnostics', { projectId }).value,
-      selectionOverlaySize: normalizeSelectionOverlaySize(
-        settingsService.getEffectiveValue<SelectionOverlaySize>('workspace.selection_overlay_size', { projectId }).value
+      selectionOutlineSize: normalizeSelectionOutlineSize(
+        settingsService.getEffectiveValue<SelectionOutlineSize>('workspace.selection_overlay_size', { projectId }).value
+      ),
+      badgeSize: normalizeBadgeSize(
+        settingsService.getEffectiveValue<BadgeSize>('workspace.badge_size', { projectId }).value
       ),
       includeSFX: settingsService.getEffectiveValue<boolean>('scanning.include_sfx', { projectId }).value,
     };
@@ -1107,15 +1112,11 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
   };
 
   const effectiveShowBoxes = showBoxes && overlaySettings.boxesVisible;
-  const overlayMetrics = SELECTION_OVERLAY_METRICS[overlaySettings.selectionOverlaySize];
+  const outlineMetrics = SELECTION_OUTLINE_METRICS[overlaySettings.selectionOutlineSize];
+  const badgeMetrics = BADGE_METRICS[overlaySettings.badgeSize];
   const zoomComp = useMemo(() => computeOverlayZoomCompensation(zoomLevel), [zoomLevel]);
-  const previewStrokeWidth = String(overlayMetrics.previewStrokePx / zoomComp.strokeDivisor);
-  const previewDashArray = `${overlayMetrics.flaggedDash[0] / zoomComp.strokeDivisor} ${overlayMetrics.flaggedDash[1] / zoomComp.strokeDivisor}`;
-
-  // Reading order sequence links for layer rendering
-  const sortedBubbles = useMemo(() => {
-    return [...visibleBubbles].sort((a, b) => a.index - b.index);
-  }, [visibleBubbles]);
+  const previewStrokeWidth = String(outlineMetrics.previewStrokePx / zoomComp.strokeDivisor);
+  const previewDashArray = `${outlineMetrics.flaggedDash[0] / zoomComp.strokeDivisor} ${outlineMetrics.flaggedDash[1] / zoomComp.strokeDivisor}`;
 
   return (
     <div
@@ -1265,31 +1266,7 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
               onMouseUp={handleSvgMouseUp}
               className="absolute inset-0 w-full h-full pointer-events-auto"
             >
-              {/* Layer 3: Reading Order Flow Vector Connectors (when enabled) */}
-              {overlaySettings.readingOrderVisible && sortedBubbles.length > 1 && (
-                <g className="reading-order-layer pointer-events-none opacity-60">
-                  {sortedBubbles.slice(0, -1).map((b, idx) => {
-                    const next = sortedBubbles[idx + 1];
-                    const x1 = (b.box_2d[1] + b.box_2d[3]) / 2;
-                    const y1 = (b.box_2d[0] + b.box_2d[2]) / 2;
-                    const x2 = (next.box_2d[1] + next.box_2d[3]) / 2;
-                    const y2 = (next.box_2d[0] + next.box_2d[2]) / 2;
-                    return (
-                      <line
-                        key={`order-${b.id}-${next.id}`}
-                        x1={x1}
-                        y1={y1}
-                        x2={x2}
-                        y2={y2}
-                        stroke="#f59e0b"
-                        strokeWidth="2"
-                        strokeDasharray="4 3"
-                        vectorEffect="non-scaling-stroke"
-                      />
-                    );
-                  })}
-                </g>
-              )}
+              {/* Layer 3: Reading Order Flow Vector Connectors — removed */}
 
               {/* Layer 4: Selection Polygons, Bounding Boxes & Review Markers */}
               <g
@@ -1320,19 +1297,19 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                   const isParametricEllipse = !hasPoly && primary.manualSelectionShape === 'bubble';
 
                   const strokeColor = typerVisual.color;
-                  const baseStrokePx = isSelected ? overlayMetrics.selectedStrokePx : overlayMetrics.strokePx;
+                  const baseStrokePx = isSelected ? outlineMetrics.selectedStrokePx : outlineMetrics.strokePx;
                   const strokeWidth = String(baseStrokePx / zoomComp.strokeDivisor);
-                  const strokeOpacity = isSelected ? 1 : overlayMetrics.strokeOpacity;
+                  const strokeOpacity = isSelected ? 1 : outlineMetrics.strokeOpacity;
                   const strokeDasharray = isFlagged
-                    ? `${overlayMetrics.flaggedDash[0] / zoomComp.strokeDivisor} ${overlayMetrics.flaggedDash[1] / zoomComp.strokeDivisor}`
+                    ? `${outlineMetrics.flaggedDash[0] / zoomComp.strokeDivisor} ${outlineMetrics.flaggedDash[1] / zoomComp.strokeDivisor}`
                     : 'none';
                   const fillColor = hexToRgba(
                     typerVisual.color,
                     isSelected
-                      ? overlayMetrics.selectedFillAlpha
+                      ? outlineMetrics.selectedFillAlpha
                       : isFlagged
-                        ? overlayMetrics.flaggedFillAlpha
-                        : overlayMetrics.fillAlpha
+                        ? outlineMetrics.flaggedFillAlpha
+                        : outlineMetrics.fillAlpha
                   );
 
                   return (
@@ -1403,7 +1380,7 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                 strokeWidth={previewStrokeWidth}
                 strokeDasharray={previewDashArray}
                 vectorEffect="non-scaling-stroke"
-                fill={hexToRgba(manualActiveTyperColor, overlayMetrics.selectedFillAlpha)}
+                fill={hexToRgba(manualActiveTyperColor, outlineMetrics.selectedFillAlpha)}
                 pointerEvents="none"
               />
               <ellipse
@@ -1413,7 +1390,7 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                 strokeWidth={previewStrokeWidth}
                 strokeDasharray={previewDashArray}
                 vectorEffect="non-scaling-stroke"
-                fill={hexToRgba(manualActiveTyperColor, overlayMetrics.selectedFillAlpha)}
+                fill={hexToRgba(manualActiveTyperColor, outlineMetrics.selectedFillAlpha)}
                 pointerEvents="none"
               />
               <polygon
@@ -1424,7 +1401,7 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                 strokeDasharray={previewDashArray}
                 strokeLinejoin="round"
                 vectorEffect="non-scaling-stroke"
-                fill={hexToRgba(manualActiveTyperColor, overlayMetrics.selectedFillAlpha)}
+                fill={hexToRgba(manualActiveTyperColor, outlineMetrics.selectedFillAlpha)}
                 pointerEvents="none"
               />
               <path
@@ -1435,7 +1412,7 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                 strokeLinecap="round"
                 strokeLinejoin="round"
                 vectorEffect="non-scaling-stroke"
-                fill={hexToRgba(manualActiveTyperColor, overlayMetrics.selectedFillAlpha)}
+                fill={hexToRgba(manualActiveTyperColor, outlineMetrics.selectedFillAlpha)}
                 pointerEvents="none"
               />
 
@@ -1459,7 +1436,8 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
             {/* Layer 5: Non-Stretching Symbol + Number Badges & Interactive Resize Handles */}
             <div
               className="absolute inset-0 pointer-events-none select-none overflow-visible"
-              data-selection-overlay-size={overlaySettings.selectionOverlaySize}
+              data-selection-outline-size={overlaySettings.selectionOutlineSize}
+              data-selection-badge-size={overlaySettings.badgeSize}
               style={{
                 opacity: effectiveShowBoxes ? 1 : 0,
                 transition: 'opacity 150ms ease',
@@ -1475,7 +1453,6 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                 const [ymin, xmin] = region.box_2d;
                 const isNearTop = ymin < 40;
                 const isNearRight = xmin > 850;
-                const badgeMetrics = overlayMetrics.badge;
                 const badgeZoomScale = zoomComp.badgeTransformScale;
                 const offset = badgeMetrics.offsetPx;
 
@@ -1589,7 +1566,7 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                       ? RESIZE_HANDLES.filter((h) => CORNER_HANDLE_IDS.has(h.id))
                       : RESIZE_HANDLES;
                   const handleScale = zoomComp.handleTransformScale;
-                  const handleMetrics = overlayMetrics.handle;
+                  const handleMetrics = outlineMetrics.handle;
 
                   return visibleHandles.map((h) => {
                     const [hx, hy] = h.getPoint(selectedManual.box_2d);

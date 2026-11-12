@@ -3,8 +3,14 @@ import assert from 'node:assert/strict';
 import {
   computeOverlayZoomCompensation,
   DEFAULT_SELECTION_OVERLAY_SIZE,
+  DEFAULT_SELECTION_OUTLINE_SIZE,
+  DEFAULT_BADGE_SIZE,
   normalizeSelectionOverlaySize,
+  normalizeSelectionOutlineSize,
+  normalizeBadgeSize,
   SELECTION_OVERLAY_METRICS,
+  SELECTION_OUTLINE_METRICS,
+  BADGE_METRICS,
 } from '../selection/overlaySizing.ts';
 import { SETTINGS_REGISTRY } from '../../../services/settings/settingsRegistry.ts';
 import {
@@ -14,31 +20,51 @@ import {
 } from '../../../types/typers.ts';
 import { toggleTyperPin } from '../symbols/useTyperSettings.ts';
 
-test('Selection overlay size defaults to Small and orders Small < Medium < Big below legacy size', () => {
-  assert.equal(DEFAULT_SELECTION_OVERLAY_SIZE, 'small');
-  assert.equal(normalizeSelectionOverlaySize('unknown'), 'small');
-  assert.equal(normalizeSelectionOverlaySize('medium'), 'medium');
-  assert.equal(normalizeSelectionOverlaySize('big'), 'big');
+test('Selection outline size defaults to Medium and badge size defaults to Small (former Big)', () => {
+  assert.equal(DEFAULT_SELECTION_OVERLAY_SIZE, 'medium');
+  assert.equal(DEFAULT_SELECTION_OUTLINE_SIZE, 'medium');
+  assert.equal(DEFAULT_BADGE_SIZE, 'small');
+  assert.equal(normalizeSelectionOverlaySize('unknown'), 'medium');
+  assert.equal(normalizeSelectionOutlineSize('unknown'), 'medium');
+  assert.equal(normalizeBadgeSize('unknown'), 'small');
+  assert.equal(normalizeBadgeSize('medium'), 'medium');
+  assert.equal(normalizeBadgeSize('big'), 'big');
 
-  const reg = SETTINGS_REGISTRY['workspace.selection_overlay_size'];
-  assert.ok(reg, 'workspace.selection_overlay_size must be registered');
-  assert.equal(reg.default_value, 'small');
-  assert.deepEqual(reg.allowed_values, ['small', 'medium', 'big']);
-  assert.equal(reg.category, 'workspace');
-  assert.equal(reg.validation?.('medium').valid, true);
-  assert.equal(reg.validation?.('xl').valid, false);
-  assert.equal(reg.validation?.('xl').sanitizedValue, 'small');
+  const regOutline = SETTINGS_REGISTRY['workspace.selection_overlay_size'];
+  assert.ok(regOutline, 'workspace.selection_overlay_size must be registered');
+  assert.equal(regOutline.default_value, 'medium');
+  assert.deepEqual(regOutline.allowed_values, ['small', 'medium', 'big']);
+  assert.equal(regOutline.category, 'workspace');
+  assert.equal(regOutline.validation?.('medium').valid, true);
+  assert.equal(regOutline.validation?.('xl').valid, false);
+  assert.equal(regOutline.validation?.('xl').sanitizedValue, 'medium');
 
-  const s = SELECTION_OVERLAY_METRICS.small;
-  const m = SELECTION_OVERLAY_METRICS.medium;
-  const b = SELECTION_OVERLAY_METRICS.big;
+  const regBadge = SETTINGS_REGISTRY['workspace.badge_size'];
+  assert.ok(regBadge, 'workspace.badge_size must be registered');
+  assert.equal(regBadge.default_value, 'small');
+  assert.deepEqual(regBadge.allowed_values, ['small', 'medium', 'big']);
+  assert.equal(regBadge.category, 'workspace');
+  assert.equal(regBadge.validation?.('small').valid, true);
+  assert.equal(regBadge.validation?.('invalid').valid, false);
+  assert.equal(regBadge.validation?.('invalid').sanitizedValue, 'small');
 
-  assert.ok(s.strokePx < m.strokePx && m.strokePx < b.strokePx);
-  assert.ok(s.selectedStrokePx < m.selectedStrokePx && m.selectedStrokePx < b.selectedStrokePx);
-  assert.ok(s.badge.fontSize < m.badge.fontSize && m.badge.fontSize < b.badge.fontSize);
-  assert.ok(s.badge.symbolHeight < m.badge.symbolHeight && m.badge.symbolHeight < b.badge.symbolHeight);
-  // Legacy badge had 20px symbol height (24px total). Even Big must remain much smaller.
-  assert.ok(b.badge.symbolHeight <= 14);
+  const sOutline = SELECTION_OUTLINE_METRICS.small;
+  const mOutline = SELECTION_OUTLINE_METRICS.medium;
+  const bOutline = SELECTION_OUTLINE_METRICS.big;
+
+  assert.ok(sOutline.strokePx < mOutline.strokePx && mOutline.strokePx < bOutline.strokePx);
+  assert.ok(sOutline.selectedStrokePx < mOutline.selectedStrokePx && mOutline.selectedStrokePx < bOutline.selectedStrokePx);
+
+  const sBadge = BADGE_METRICS.small;
+  const mBadge = BADGE_METRICS.medium;
+  const bBadge = BADGE_METRICS.big;
+
+  assert.ok(sBadge.fontSize < mBadge.fontSize && mBadge.fontSize < bBadge.fontSize);
+  assert.ok(sBadge.symbolHeight < mBadge.symbolHeight && mBadge.symbolHeight < bBadge.symbolHeight);
+  // Big badge stays well under legacy 20px symbol height
+  assert.ok(bBadge.symbolHeight <= 18);
+  assert.equal(SELECTION_OVERLAY_METRICS.medium.strokePx, mOutline.strokePx);
+  assert.equal(SELECTION_OVERLAY_METRICS.medium.badge.fontSize, mBadge.fontSize);
 });
 
 test('Zoom compensation holds screen footprint constant from 100% to 1000% without mutating coordinates', () => {

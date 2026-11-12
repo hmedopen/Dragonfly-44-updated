@@ -44,7 +44,7 @@ export const SETTINGS_NAV_ITEMS: NavItemConfig[] = [
     id: 'workspace',
     label: 'Workspace',
     icon: <Layers className="w-4 h-4 shrink-0" />,
-    tagline: 'Canvas scale, overlays, reading order, typers',
+    tagline: 'Canvas scale, overlays, outline & badge sizing, typers',
   },
   {
     id: 'translate',
