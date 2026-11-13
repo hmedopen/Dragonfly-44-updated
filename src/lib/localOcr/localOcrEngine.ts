@@ -309,7 +309,10 @@ export class LocalOcrEngineService {
     options.signal?.addEventListener('abort', onPreStartAbort, { once: true });
 
     const executeActiveTask = async (): Promise<LocalOcrScanResult> => {
-      const route = resolveOcrLanguageRoute(options.languageHint, options.sampleText);
+      const route = resolveOcrLanguageRoute(options.languageHint, {
+        sampleText: options.sampleText,
+        readingConvention: options.readingConvention,
+      });
       if (route.routeId === null || route.effectiveLanguage === null) {
         throw new LanguageRouteError(route);
       }

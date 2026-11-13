@@ -674,6 +674,8 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
         const b = visibleBubbles[i];
         if (b.manualPolygon && b.manualPolygon.length >= 3) {
           if (isPointInPolygon(nx, ny, b.manualPolygon)) return b;
+        } else if (b.ocrPolygon && b.ocrPolygon.length >= 3) {
+          if (isPointInPolygon(nx, ny, b.ocrPolygon)) return b;
         } else if (b.manualSelectionShape === 'bubble') {
           if (isPointInEllipse(nx, ny, b.box_2d, 0.5)) return b;
         } else if (isPointInBox(nx, ny, b.box_2d, 0.5)) {
@@ -1293,7 +1295,12 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                   const height = Math.max(ymax - ymin, 0.5);
                   const isSelected = region.isSelected;
                   const isFlagged = region.isFlagged;
-                  const hasPoly = Boolean(primary.manualPolygon && primary.manualPolygon.length >= 3);
+                  const activePolygon = (primary.manualPolygon && primary.manualPolygon.length >= 3)
+                    ? primary.manualPolygon
+                    : (primary.ocrPolygon && primary.ocrPolygon.length >= 3)
+                      ? primary.ocrPolygon
+                      : null;
+                  const hasPoly = Boolean(activePolygon);
                   const isParametricEllipse = !hasPoly && primary.manualSelectionShape === 'bubble';
 
                   const strokeColor = typerVisual.color;
@@ -1329,7 +1336,7 @@ export const CanvasPane: React.FC<CanvasPaneProps> = ({
                     >
                       {hasPoly ? (
                         <polygon
-                          points={primary.manualPolygon!.map(([px, py]) => `${px},${py}`).join(' ')}
+                          points={activePolygon!.map(([px, py]) => `${px},${py}`).join(' ')}
                           stroke={strokeColor}
                           strokeWidth={strokeWidth}
                           strokeOpacity={strokeOpacity}

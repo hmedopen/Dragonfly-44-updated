@@ -247,6 +247,19 @@ test('Scan Page: successful hybrid keeps reliable local OCR, verifies ambiguous/
       },
       flags: ['OCR_AMBIGUOUS'],
     }),
+    makeTextRegion({
+      regionId: 'text_sfx-1',
+      geometry: { coordinateSpace: 'normalized_1000', box_2d: [600, 400, 740, 580] },
+      rawOCR: 'CLANG!',
+      confidence: {
+        imageQuality: 0.96,
+        regionDetection: 0.9,
+        ocr: 0.92,
+        association: 0.9,
+        readingOrder: 0.9,
+        classification: 0.85,
+      },
+    }),
   ];
 
   const result = await scanPageWithGemini({
@@ -292,20 +305,24 @@ test('Scan Page: successful hybrid keeps reliable local OCR, verifies ambiguous/
       },
       runGeminiContextPass: async ({ candidates }): Promise<ValidatedHybridContextOutput> => {
         capturedCandidates = candidates;
+        const gateCand = candidates.find((c) => c.localOCR.includes('gate'))!;
+        const whaCand = candidates.find((c) => c.localOCR.includes('Wha'))!;
+        const clangCand = candidates.find((c) => c.localOCR.includes('CLANG'))!;
+
         return {
           pageContext: 'Two characters sprint through a corridor.',
           readingConventionCandidate: 'manga_rtl',
           panels: [{ panelId: 'p-1', box_2d: [40, 40, 960, 960] }],
           regionDecisions: [
             {
-              regionId: candidates[0].regionId,
+              regionId: gateCand.regionId,
               action: 'keep',
               primaryClass: 'dialogue',
               sourceLanguage: 'en',
               speakerCandidate: 'Kai',
             },
             {
-              regionId: candidates[1].regionId,
+              regionId: whaCand.regionId,
               action: 'verify',
               verifiedOCR: 'What?!',
               ocrAlternatives: ['Wha..?', 'What?!'],
@@ -313,17 +330,15 @@ test('Scan Page: successful hybrid keeps reliable local OCR, verifies ambiguous/
               sourceLanguage: 'en',
               isAmbiguous: false,
             },
-          ],
-          additionalRegions: [
             {
-              regionId: 'missed-sfx-1',
-              box_2d: [600, 400, 740, 580],
-              rawOCR: 'CLANG!',
+              regionId: clangCand.regionId,
+              action: 'keep',
               primaryClass: 'sfx',
               sourceLanguage: 'en',
               isVertical: false,
             },
           ],
+          additionalRegions: [],
           detectedCharacters: [{ nameOriginal: 'Kai', nameArabic: 'كاي', gender: 'male' }],
           detectedGlossaryTerms: [],
           detectedRelationships: [],
@@ -337,14 +352,16 @@ test('Scan Page: successful hybrid keeps reliable local OCR, verifies ambiguous/
   assert.equal(fullGeminiFallbackCalls, 0);
   // All candidates were resolved cleanly by Gemini context -> redundant crop retry skipped!
   assert.equal(cropRetryCalls, 0);
-  assert.equal(capturedCandidates[0].needsVerification, false);
-  assert.equal(capturedCandidates[1].needsVerification, true);
+  assert.equal(capturedCandidates.find((c) => c.localOCR.includes('gate'))!.needsVerification, false);
+  assert.equal(capturedCandidates.find((c) => c.localOCR.includes('Wha'))!.needsVerification, true);
 
   assert.equal(result.bubbles.length, 3);
   assert.deepEqual(result.bubbles[0].box_2d, [80, 620, 220, 900]);
   assert.equal(result.bubbles[0].sourceText, 'Run before the gate closes!');
   assert.equal(result.bubbles[0].sourceLanguage, 'en');
-  assert.equal(result.bubbles[1].sourceText, 'What?!');
+  // Local OCR verbatim text is preserved immutable; verifiedOCR is placed in alternatives
+  assert.equal(result.bubbles[1].sourceText, 'Wha..?');
+  assert.ok(result.bubbles[1].ocrAlternatives?.includes('What?!'));
   assert.equal(result.bubbles[1].type, 'thought_bubbles');
   assert.equal(result.bubbles[2].sourceText, 'CLANG!');
   assert.equal(result.bubbles[2].type, 'sfx');
@@ -357,9 +374,9 @@ test('Scan Page: successful hybrid keeps reliable local OCR, verifies ambiguous/
 });
 
 // ---------------------------------------------------------------------------
-// 2. Local OCR Fallback Paths (Failure, Provider Missing, Prod Ineligibility)
+// 2. Local OCR Failure Reporting and Selective Permitted Fallback
 // ---------------------------------------------------------------------------
-test('Scan Page: falls back cleanly to Gemini when local OCR fails or models are ineligible in production', async () => {
+test('Scan Page: reports local OCR failure clearly without silent fallback, or falls back when explicitly permitted', async () => {
   const makeFallbackScan = (pageId: string): PageScanResult => ({
     scanId: 'fallback-1',
     pageId,
@@ -395,7 +412,7 @@ test('Scan Page: falls back cleanly to Gemini when local OCR fails or models are
     version: 1,
   });
 
-  // Case A: Local OCR inference error -> Gemini fallback
+  // Case A1: Local OCR inference error without allowGeminiFallback -> reports clear failure, never silent Gemini OCR
   const storageA = createMemoryStorage();
   const resA = await scanPageWithGemini({
     pageId: 'page-fb-err',
@@ -408,11 +425,9 @@ test('Scan Page: falls back cleanly to Gemini when local OCR fails or models are
       ...storageA.deps,
       batchTranslateBubbles: async ({ bubbles }) => ({
         success: true,
-        translationMap: new Map(
-          bubbles.map((b) => [b.id, { rawText: b.sourceText, humanizedText: `حوار: ${b.sourceText}` }])
-        ),
-        requestedCount: 1,
-        translatedCount: 1,
+        translationMap: new Map(),
+        requestedCount: 0,
+        translatedCount: 0,
       }),
     },
     hybridDeps: {
@@ -425,8 +440,28 @@ test('Scan Page: falls back cleanly to Gemini when local OCR fails or models are
       runGeminiFullFallback: async () => makeFallbackScan('page-fb-err'),
     },
   });
-  assert.equal(resA.ocrSource, 'gemini_fallback');
-  assert.equal(resA.bubbles[0].sourceText, 'Fallback dialogue works!');
+  assert.equal(resA.ocrSource, 'hybrid');
+  assert.equal(resA.scanResult.status, 'failed');
+  assert.ok(resA.scanResult.issues.some((issue) => issue.flag === 'STAGE_UNAVAILABLE'));
+
+  // Case A2: Explicit allowGeminiFallback falls back cleanly when requested
+  const resFallback = await scanMangaPageHybridWithMeta({
+    pageId: 'page-fb-err-optin',
+    apiKey: 'AIza-key',
+    sourceLanguageHint: 'en',
+    allowGeminiFallback: true,
+    hybridDeps: {
+      getPageBlob: async () => createDummyBlob(),
+      extractImageDimensions: async () => ({ width: 1000, height: 1500 }),
+      getModelProvider: () => makeFakeModelProvider(),
+      runLocalOcr: async () => {
+        throw new Error('Simulated ORT WASM init failure');
+      },
+      runGeminiFullFallback: async () => makeFallbackScan('page-fb-err-optin'),
+    },
+  });
+  assert.equal(resFallback.meta.ocrSource, 'gemini_fallback');
+  assert.equal(resFallback.meta.fallbackReason, 'local_ocr_failed');
 
   // Case B: Production build eligibility restriction (`state: 'unsupported'`, `activationPermitted: false`)
   let localOcrCalled = false;
@@ -460,8 +495,9 @@ test('Scan Page: falls back cleanly to Gemini when local OCR fails or models are
     },
   });
   assert.equal(localOcrCalled, false);
-  assert.equal(prodOutcome.meta.ocrSource, 'gemini_fallback');
+  assert.equal(prodOutcome.scanResult.status, 'failed');
   assert.equal(prodOutcome.meta.fallbackReason, 'model_ineligible_production');
+  assert.ok(prodOutcome.scanResult.issues.some((i) => i.reason.includes('Licensing restriction')));
 
   // Verify manifest policy itself still rejects dev_only in production
   const detEntry = getModelManifestEntry('comic-detector-v4-s-int8')!;
@@ -582,51 +618,75 @@ test('Recovery: preserves local OCR text when Gemini context fails, and preserve
 // 4. Language Routing (`auto` Safeguard, Priority & Mixed Language)
 // ---------------------------------------------------------------------------
 test('Language routing: honors en/ko/ja/zh project setting, preserves auto refusal safeguard, handles mixed script without discarding text', async () => {
-  // 'auto' with NO evidence -> MUST refuse guessing & fall back to Gemini without invoking local OCR
+  // 'auto' on fresh page resolves using reading convention prior (e.g. manga_rtl -> ja_zh_ppocrv6_manga)
   let localInvoked = false;
-  const autoNoEvidence = await scanMangaPageHybridWithMeta({
-    pageId: 'page-auto-empty',
+  const autoOutcome = await scanMangaPageHybridWithMeta({
+    pageId: 'page-auto-fresh',
     apiKey: 'AIza-key',
     sourceLanguageHint: 'auto',
+    readingConvention: 'manga_rtl',
     hybridDeps: {
       getPageBlob: async () => createDummyBlob(),
       extractImageDimensions: async () => ({ width: 1000, height: 1500 }),
       getModelProvider: () => makeFakeModelProvider(),
       runLocalOcr: async () => {
         localInvoked = true;
-        throw new Error('Auto without evidence must not invoke local OCR');
+        return {
+          scanId: 'local-auto-1',
+          pageId: 'page-auto-fresh',
+          sourceDimensions: { width: 1000, height: 1500 },
+          readingConvention: 'manga_rtl',
+          languageHint: 'auto',
+          resolvedRoute: 'ja_zh_ppocrv6_manga',
+          status: 'complete',
+          textRegions: [
+            makeTextRegion({
+              regionId: 'r1',
+              rawOCR: 'テスト',
+              sourceLanguage: 'ja',
+            }),
+          ],
+          bubbleRegions: [],
+          lineSegments: [],
+          tiles: [],
+          modelsUsed: {
+            detectorModelId: 'comic-detector-v4-s-int8',
+            detectorRevision: 'rev1',
+            ocrModelId: 'ppocr-v6-manga-v0.3',
+            ocrRevision: 'rev1',
+            routeId: 'ja_zh_ppocrv6_manga',
+            ocrRuntimeUsed: 'ort_web_adapter',
+            executionProvider: 'wasm',
+            simdEnabled: true,
+            threadsUsed: 1,
+          },
+          timings: { initMs: 1, decodeMs: 1, detectorMs: 1, ocrMs: 1, postprocessMs: 0, totalMs: 4, tileCount: 1, cropCount: 0, measuredMemoryBytes: null },
+          partialFailures: [],
+          warnings: [],
+          toCanonicalPageScanResult: () => ({} as any),
+        };
       },
-      runGeminiFullFallback: async () => ({
-        scanId: 'fb',
-        pageId: 'page-auto-empty',
-        sourceImageId: 'page-auto-empty',
-        sourceDimensions: { width: 1000, height: 1500 },
-        readingConvention: 'manga_rtl',
-        status: 'complete',
-        panels: [],
-        regions: [],
-        issues: [],
-        transformLedger: {
-          transformId: 'tf',
-          sourceImageId: 'page-auto-empty',
-          sourceWidth: 1000,
-          sourceHeight: 1500,
-          workingWidth: 1000,
-          workingHeight: 1500,
-          scaleX: 1,
-          scaleY: 1,
-          rotation: 0,
-          cropOriginX: 0,
-          cropOriginY: 0,
-          coordinateSpace: 'normalized_1000',
-        },
-        createdAt: Date.now(),
-        version: 1,
-      }),
     },
   });
-  assert.equal(localInvoked, false);
-  assert.equal(autoNoEvidence.meta.fallbackReason, 'language_route_refused');
+  assert.equal(localInvoked, true);
+  assert.equal(autoOutcome.meta.resolvedRoute, 'ja_zh_ppocrv6_manga');
+
+  // Unsupported language hint must refuse cleanly without falling back
+  const badHintOutcome = await scanMangaPageHybridWithMeta({
+    pageId: 'page-bad-hint',
+    apiKey: 'AIza-key',
+    sourceLanguageHint: 'unsupported_lang',
+    hybridDeps: {
+      getPageBlob: async () => createDummyBlob(),
+      extractImageDimensions: async () => ({ width: 1000, height: 1500 }),
+      getModelProvider: () => makeFakeModelProvider(),
+      runLocalOcr: async () => {
+        throw new Error('Must not run on unsupported hint');
+      },
+    },
+  });
+  assert.equal(badHintOutcome.scanResult.status, 'failed');
+  assert.equal(badHintOutcome.meta.fallbackReason, 'language_route_refused');
 
   // Mixed script inside explicit Korean route -> flagged for verification & never discarded!
   const mixedRegion = makeTextRegion({
@@ -742,7 +802,8 @@ test('Duplicate prevention: suppresses overlapping local fragments & overlapping
     },
   });
 
-  assert.equal(outcome.scanResult.regions.length, 2);
+  assert.equal(outcome.scanResult.regions.length, 1);
+  assert.equal(outcome.meta.addedRegionCount, 0);
   assert.ok(outcome.scanResult.regions.every((r) => r.regionId.startsWith('page-dup-test__')));
 });
 

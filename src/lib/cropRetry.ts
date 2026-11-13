@@ -241,13 +241,25 @@ export async function performTargetedCropRetries(options: {
           newFlags.push('TEXT_CLIPPED');
         }
 
+        const updatedAlternatives = [...(existing.ocrAlternatives || [])];
+        if (ocrResult.rawOCR && ocrResult.rawOCR !== existing.rawOCR && !updatedAlternatives.includes(ocrResult.rawOCR)) {
+          updatedAlternatives.push(ocrResult.rawOCR);
+        }
+        if (Array.isArray(ocrResult.ocrAlternatives)) {
+          for (const alt of ocrResult.ocrAlternatives) {
+            if (alt && alt !== existing.rawOCR && !updatedAlternatives.includes(alt)) {
+              updatedAlternatives.push(alt);
+            }
+          }
+        }
+
         updatedRegions[targetIdx] = {
           ...existing,
-          rawOCR: ocrResult.rawOCR || existing.rawOCR,
-          ocrAlternatives: ocrResult.ocrAlternatives,
+          rawOCR: existing.rawOCR,
+          ocrAlternatives: updatedAlternatives,
           confidence: {
             ...existing.confidence,
-            ocr: ocrResult.isAmbiguous ? 0.70 : 0.95,
+            ocr: ocrResult.isAmbiguous ? 0.70 : Math.max(existing.confidence?.ocr ?? 0, 0.95),
           },
           flags: newFlags,
         };

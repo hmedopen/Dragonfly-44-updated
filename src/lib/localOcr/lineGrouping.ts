@@ -1,6 +1,7 @@
 import type { OcrLineSegment, ScanIssueFlag, TextRegion } from '../../types/scanning.ts';
 import type { AssociatedTextCandidate, RawOcrLineDetection } from '../../types/localOcr.ts';
 import {
+  computeConvexHull,
   originalPixelsToNormalized1000,
   pixelPolygonToPixelBox,
 } from './coordinateMapping.ts';
@@ -116,9 +117,12 @@ export interface GroupLinesOptions {
 }
 
 /**
- * Groups line-level OCR detections belonging to each text-bearing candidate
- * into one logical TextRegion per candidate (preserving lineSegments[]).
- * Preserves punctuation-only text and uncertain classifications without dropping.
+ * Groups line-level OCR detections belonging to visual speech bubbles or logical text blocks
+ * into cohesive TextRegions (preserving lineSegments[] and individual line polygons).
+ * - Multiple lines/candidates inside one speech bubble become one logical group.
+ * - Text in separate speech bubbles remains separate.
+ * - Text outside bubbles forms valid logical groups without being discarded.
+ * - Physical bubble boundaries never replace tight text geometry.
  */
 export function groupLinesToTextRegions(
   candidates: AssociatedTextCandidate[],
@@ -135,29 +139,101 @@ export function groupLinesToTextRegions(
   const textRegions: TextRegion[] = [];
   const allLineSegments: OcrLineSegment[] = [];
 
-  for (let idx = 0; idx < candidates.length; idx++) {
-    const cand = candidates[idx];
-    const rawLines = linesByCandidate.get(cand.candidateId) || [];
+  // 1. Cluster candidates by speech bubble association, or cluster unassociated nearby text lines
+  interface CandidateCluster {
+    clusterId: string;
+    associatedBubbleId: string | null;
+    candidates: AssociatedTextCandidate[];
+  }
+
+  const clusters: CandidateCluster[] = [];
+  const bubbleClusterMap = new Map<string, CandidateCluster>();
+
+  for (const cand of candidates) {
+    if (cand.associatedBubbleId) {
+      let cluster = bubbleClusterMap.get(cand.associatedBubbleId);
+      if (!cluster) {
+        cluster = {
+          clusterId: cand.candidateId,
+          associatedBubbleId: cand.associatedBubbleId,
+          candidates: [],
+        };
+        bubbleClusterMap.set(cand.associatedBubbleId, cluster);
+        clusters.push(cluster);
+      }
+      cluster.candidates.push(cand);
+    } else {
+      // Check if this unassociated candidate can merge with an existing unassociated cluster (e.g. multi-line title/narration)
+      let mergedWithCluster = false;
+      const [cy1, cx1, cy2, cx2] = cand.pixelBox;
+      const candH = Math.max(1, cy2 - cy1);
+      const candW = Math.max(1, cx2 - cx1);
+
+      for (const cl of clusters) {
+        if (cl.associatedBubbleId !== null) continue;
+        // Check spatial proximity with member candidates in unassociated cluster
+        for (const member of cl.candidates) {
+          const [my1, mx1, my2, mx2] = member.pixelBox;
+          const memberH = Math.max(1, my2 - my1);
+          const memberW = Math.max(1, mx2 - mx1);
+          const xOverlap = Math.max(0, Math.min(cx2, mx2) - Math.max(cx1, mx1));
+          const yGap = Math.max(0, Math.max(cy1, my1) - Math.min(cy2, my2));
+          const minW = Math.min(candW, memberW);
+          const maxLineH = Math.max(candH, memberH);
+
+          // Lines share substantial horizontal alignment and have vertical spacing <= 1.2 line heights
+          if (xOverlap / Math.max(1, minW) >= 0.5 && yGap <= maxLineH * 1.2) {
+            cl.candidates.push(cand);
+            mergedWithCluster = true;
+            break;
+          }
+        }
+        if (mergedWithCluster) break;
+      }
+
+      if (!mergedWithCluster) {
+        clusters.push({
+          clusterId: cand.candidateId,
+          associatedBubbleId: null,
+          candidates: [cand],
+        });
+      }
+    }
+  }
+
+  // 2. Process each cluster into one logical TextRegion
+  for (let idx = 0; idx < clusters.length; idx++) {
+    const cluster = clusters[idx];
+    const clusterCandidates = cluster.candidates;
+
+    // Collect all raw lines from all candidates in this cluster
+    const rawLines: RawOcrLineDetection[] = [];
+    for (const cand of clusterCandidates) {
+      const cLines = linesByCandidate.get(cand.candidateId) || [];
+      rawLines.push(...cLines);
+    }
 
     const verticalVotes = rawLines.filter((l) => l.isVertical).length;
     const isVertical =
       rawLines.length > 0
         ? verticalVotes > rawLines.length / 2
-        : (cand.pixelBox[2] - cand.pixelBox[0]) >
-          (cand.pixelBox[3] - cand.pixelBox[1]) * 1.4 && (language === 'ja' || language === 'zh');
+        : clusterCandidates.some((c) => (c.pixelBox[2] - c.pixelBox[0]) > (c.pixelBox[3] - c.pixelBox[1]) * 1.4) &&
+          (language === 'ja' || language === 'zh');
 
     const orderedLines = orderOcrLines(rawLines, isVertical);
 
     const lineSegments: OcrLineSegment[] = orderedLines.map((line) => {
+      const normPolygon: Array<[number, number]> = line.pixelPolygon.map(([px, py]) => [
+        Math.max(0, Math.min(1000, Math.round((px / Math.max(1, sourceWidth)) * 1000))),
+        Math.max(0, Math.min(1000, Math.round((py / Math.max(1, sourceHeight)) * 1000))),
+      ]);
+
       const seg: OcrLineSegment = {
         lineId: line.lineId,
         geometry: {
           coordinateSpace: 'normalized_1000',
           box_2d: line.normalizedBox,
-          polygon: line.pixelPolygon.map(([px, py]) => [
-            Math.max(0, Math.min(1000, Math.round((px / Math.max(1, sourceWidth)) * 1000))),
-            Math.max(0, Math.min(1000, Math.round((py / Math.max(1, sourceHeight)) * 1000))),
-          ]),
+          polygon: normPolygon,
         },
         text: line.text,
         recognitionConfidence: line.rawRecognitionScore,
@@ -173,68 +249,112 @@ export function groupLinesToTextRegions(
       language
     );
 
-    // Derive combined text geometry from OCR lines if available, else candidate text box
-    let combinedNormBox = cand.normalizedBox;
+    // Derive tight text bounding box from OCR lines if available, else candidate union
+    let combinedNormBox: [number, number, number, number];
     if (orderedLines.length > 0) {
       const allVertices = orderedLines.flatMap((l) => l.pixelPolygon);
       const pixelUnion = pixelPolygonToPixelBox(allVertices, sourceWidth, sourceHeight);
       combinedNormBox = originalPixelsToNormalized1000(pixelUnion, sourceWidth, sourceHeight, 1);
+    } else {
+      let minY = 1000;
+      let minX = 1000;
+      let maxY = 0;
+      let maxX = 0;
+      for (const c of clusterCandidates) {
+        if (c.normalizedBox[0] < minY) minY = c.normalizedBox[0];
+        if (c.normalizedBox[1] < minX) minX = c.normalizedBox[1];
+        if (c.normalizedBox[2] > maxY) maxY = c.normalizedBox[2];
+        if (c.normalizedBox[3] > maxX) maxX = c.normalizedBox[3];
+      }
+      combinedNormBox = [minY, minX, maxY, maxX];
     }
 
-    // Actual raw score aggregation (never synthetic 0.95)
+    // Derive tight aggregate polygon from line polygons via convex hull
+    let aggregatePolygon: Array<[number, number]> | undefined;
+    if (lineSegments.length > 0) {
+      const allNormPoints = lineSegments.flatMap((l) => l.geometry.polygon || []);
+      if (allNormPoints.length >= 3) {
+        const hull = computeConvexHull(allNormPoints);
+        if (hull.length >= 3) {
+          aggregatePolygon = hull;
+        }
+      }
+    }
+    if (!aggregatePolygon) {
+      // Fallback: 4-point quad from tight combined text bounding box
+      const [ymin, xmin, ymax, xmax] = combinedNormBox;
+      aggregatePolygon = [
+        [xmin, ymin],
+        [xmax, ymin],
+        [xmax, ymax],
+        [xmin, ymax],
+      ];
+    }
+
+    // Actual raw score aggregation
     const rawOcrScore =
       orderedLines.length > 0
         ? orderedLines.reduce((sum, l) => sum + l.rawRecognitionScore, 0) / orderedLines.length
         : 0;
 
-    const flags: ScanIssueFlag[] = [...cand.flags];
-    if (orderedLines.length === 0 || joinedText.trim().length === 0) {
-      if (!flags.includes('OCR_AMBIGUOUS')) {
-        flags.push('OCR_AMBIGUOUS');
+    const clusterFlags: ScanIssueFlag[] = [];
+    for (const c of clusterCandidates) {
+      for (const f of c.flags) {
+        if (!clusterFlags.includes(f)) clusterFlags.push(f);
       }
-    } else if (rawOcrScore < lowConfidenceThreshold && !flags.includes('OCR_AMBIGUOUS')) {
-      flags.push('OCR_AMBIGUOUS');
+    }
+    if (orderedLines.length === 0 || joinedText.trim().length === 0) {
+      if (!clusterFlags.includes('OCR_AMBIGUOUS')) {
+        clusterFlags.push('OCR_AMBIGUOUS');
+      }
+    } else if (rawOcrScore < lowConfidenceThreshold && !clusterFlags.includes('OCR_AMBIGUOUS')) {
+      clusterFlags.push('OCR_AMBIGUOUS');
     }
 
-    const primaryClass = cand.kind === 'text_bubble' ? 'dialogue' : 'unknown';
+    const isBubble = cluster.associatedBubbleId !== null || clusterCandidates.some((c) => c.kind === 'text_bubble');
+    const primaryClass = isBubble ? 'dialogue' : 'unknown';
+
+    const maxCandScore = Math.max(...clusterCandidates.map((c) => c.rawScore));
+    const meanAssocConfidence =
+      clusterCandidates.reduce((s, c) => s + c.associationConfidence, 0) / clusterCandidates.length;
 
     textRegions.push({
-      regionId: cand.candidateId,
+      regionId: cluster.clusterId,
       geometry: {
         coordinateSpace: 'normalized_1000',
         box_2d: combinedNormBox,
+        polygon: aggregatePolygon,
       },
       rawOCR: joinedText,
       normalizedText: joinedText,
       lineSegments,
       confidence: {
         imageQuality: 1,
-        regionDetection: cand.rawScore,
+        regionDetection: maxCandScore,
         ocr: rawOcrScore,
-        association: cand.associationConfidence,
+        association: meanAssocConfidence,
         readingOrder: 1,
-        classification: cand.kind === 'text_bubble' ? cand.rawScore : 0.5,
+        classification: isBubble ? maxCandScore : 0.5,
       },
       classification: {
         primaryClass,
-        confidence: cand.kind === 'text_bubble' ? cand.rawScore : 0.5,
+        confidence: isBubble ? maxCandScore : 0.5,
         needsReview:
-          flags.length > 0 ||
-          cand.boundaryUncertain ||
-          cand.kind === 'text_free',
-        evidence:
-          cand.kind === 'text_bubble'
-            ? 'Detected inside speech bubble by comic geometry detector'
-            : 'Detected outside speech bubble (text_free); functional class preserved as unknown pending review',
+          clusterFlags.length > 0 ||
+          clusterCandidates.some((c) => c.boundaryUncertain) ||
+          !isBubble,
+        evidence: isBubble
+          ? 'Detected inside speech bubble by comic geometry detector'
+          : 'Detected outside speech bubble (text_free); functional class preserved as unknown pending review',
       },
       associations: {
-        bubbleId: cand.associatedBubbleId,
+        bubbleId: cluster.associatedBubbleId,
       },
       order: {
         sequenceIndex: idx + 1,
         confidence: 1,
       },
-      flags,
+      flags: clusterFlags,
       sourceLanguage: language,
       isVertical,
       isManuallyEdited: false,

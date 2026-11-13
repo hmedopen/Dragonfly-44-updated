@@ -62,18 +62,34 @@ export function detectScriptSignal(text: string): DetectedScript {
   return 'unknown';
 }
 
+export interface LanguageRouteOptions {
+  sampleText?: string;
+  sourceLanguagePrior?: string | null;
+  readingConvention?: string | null;
+  allowDefaultFallback?: boolean;
+}
+
 /**
  * Resolves OCR model route for English, Korean, Japanese, Chinese, or automatic requests.
  * - Explicit hints ('en', 'ko', 'ja', 'zh') always win and are never overridden by sampleText.
  * - 'auto' inspects sampleText when available and supports mixed Hangul+Latin as Korean.
- * - 'auto' NEVER silently falls back to Japanese/Chinese when sampleText is absent, empty, or Han-only;
- *   instead it returns an explicit undetermined/ambiguous result requiring an explicit languageHint.
+ * - Fresh pages with 'auto' utilize project priors, reading convention priors, or safe multi-script baseline.
  * - Unsupported hints return an explicit 'unsupported' result rather than silently falling back.
  */
 export function resolveOcrLanguageRoute(
   languageHint: OcrLanguageHint | string | undefined | null,
-  sampleText?: string
+  sampleTextOrOptions?: string | LanguageRouteOptions
 ): ResolvedLanguageRoute {
+  const options: LanguageRouteOptions =
+    typeof sampleTextOrOptions === 'string'
+      ? { sampleText: sampleTextOrOptions }
+      : sampleTextOrOptions || {};
+
+  const sampleText = options.sampleText;
+  const sourceLanguagePrior = options.sourceLanguagePrior;
+  const readingConvention = options.readingConvention;
+  const allowDefaultFallback = Boolean(options.allowDefaultFallback);
+
   switch (languageHint) {
     case 'en':
       return {
@@ -124,7 +140,8 @@ export function resolveOcrLanguageRoute(
         requiresExplicitLanguageHint: false,
       };
     case 'auto': {
-      const script = sampleText ? detectScriptSignal(sampleText) : 'unknown';
+      // 1. If sample text is provided, detect Unicode script signal
+      const script = sampleText && sampleText.trim().length > 0 ? detectScriptSignal(sampleText) : 'unknown';
       if (script === 'hangul') {
         return {
           status: 'resolved',
@@ -167,6 +184,46 @@ export function resolveOcrLanguageRoute(
         };
       }
       if (script === 'han_only') {
+        if (sourceLanguagePrior === 'zh' || sourceLanguagePrior === 'ja') {
+          return {
+            status: 'resolved',
+            hintKind: 'auto',
+            routeId: 'ja_zh_ppocrv6_manga',
+            ocrModelId: ROUTE_TO_MODEL_ID.ja_zh_ppocrv6_manga,
+            effectiveLanguage: sourceLanguagePrior,
+            detectedScript: script,
+            routingReason: `Han-only text resolved using project prior language "${sourceLanguagePrior}" -> PP-OCRv6 Manga v0.3 FP32`,
+            isAmbiguousAutoRoute: false,
+            requiresExplicitLanguageHint: false,
+          };
+        }
+        if (readingConvention === 'webtoon_v') {
+          return {
+            status: 'resolved',
+            hintKind: 'auto',
+            routeId: 'ja_zh_ppocrv6_manga',
+            ocrModelId: ROUTE_TO_MODEL_ID.ja_zh_ppocrv6_manga,
+            effectiveLanguage: 'zh',
+            detectedScript: script,
+            routingReason: 'Han-only text resolved as Chinese Manhua from webtoon reading convention -> PP-OCRv6 Manga v0.3 FP32',
+            isAmbiguousAutoRoute: false,
+            requiresExplicitLanguageHint: false,
+          };
+        }
+        if (allowDefaultFallback) {
+          return {
+            status: 'resolved',
+            hintKind: 'auto',
+            routeId: 'ja_zh_ppocrv6_manga',
+            ocrModelId: ROUTE_TO_MODEL_ID.ja_zh_ppocrv6_manga,
+            effectiveLanguage: 'ja',
+            detectedScript: script,
+            routingReason:
+              'Han-only text resolved deliberately via shared CJK Manga model (ja_zh_ppocrv6_manga)',
+            isAmbiguousAutoRoute: false,
+            requiresExplicitLanguageHint: false,
+          };
+        }
         return {
           status: 'ambiguous',
           hintKind: 'auto',
@@ -181,6 +238,45 @@ export function resolveOcrLanguageRoute(
         };
       }
       if (script === 'mixed') {
+        if (HANGUL_RE.test(sampleText || '')) {
+          return {
+            status: 'resolved',
+            hintKind: 'auto',
+            routeId: 'ko_ppocrv5_mobile',
+            ocrModelId: ROUTE_TO_MODEL_ID.ko_ppocrv5_mobile,
+            effectiveLanguage: 'ko',
+            detectedScript: 'hangul',
+            routingReason: 'Mixed script with Hangul resolved to Korean -> PP-OCRv5 mobile Korean',
+            isAmbiguousAutoRoute: false,
+            requiresExplicitLanguageHint: false,
+          };
+        }
+        if (KANA_RE.test(sampleText || '')) {
+          return {
+            status: 'resolved',
+            hintKind: 'auto',
+            routeId: 'ja_zh_ppocrv6_manga',
+            ocrModelId: ROUTE_TO_MODEL_ID.ja_zh_ppocrv6_manga,
+            effectiveLanguage: 'ja',
+            detectedScript: 'kana',
+            routingReason: 'Mixed script with Kana resolved to Japanese -> PP-OCRv6 Manga v0.3 FP32',
+            isAmbiguousAutoRoute: false,
+            requiresExplicitLanguageHint: false,
+          };
+        }
+        if (allowDefaultFallback) {
+          return {
+            status: 'resolved',
+            hintKind: 'auto',
+            routeId: 'ja_zh_ppocrv6_manga',
+            ocrModelId: ROUTE_TO_MODEL_ID.ja_zh_ppocrv6_manga,
+            effectiveLanguage: 'ja',
+            detectedScript: script,
+            routingReason: 'Mixed script without dominant signal routed to multi-script baseline -> PP-OCRv6 Manga v0.3 FP32',
+            isAmbiguousAutoRoute: false,
+            requiresExplicitLanguageHint: false,
+          };
+        }
         return {
           status: 'ambiguous',
           hintKind: 'auto',
@@ -194,6 +290,107 @@ export function resolveOcrLanguageRoute(
           requiresExplicitLanguageHint: true,
         };
       }
+
+      // 2. Fresh page with NO sample text (script === 'unknown'):
+      // Check project-level source-language setting prior
+      const cleanPrior = (sourceLanguagePrior || '').trim().toLowerCase();
+      if (cleanPrior === 'en') {
+        return {
+          status: 'resolved',
+          hintKind: 'auto',
+          routeId: 'en_ppocrv6_small',
+          ocrModelId: ROUTE_TO_MODEL_ID.en_ppocrv6_small,
+          effectiveLanguage: 'en',
+          detectedScript: null,
+          routingReason: 'Automatic language routing resolved from project setting prior: en -> PP-OCRv6 small',
+          isAmbiguousAutoRoute: false,
+          requiresExplicitLanguageHint: false,
+        };
+      }
+      if (cleanPrior === 'ko') {
+        return {
+          status: 'resolved',
+          hintKind: 'auto',
+          routeId: 'ko_ppocrv5_mobile',
+          ocrModelId: ROUTE_TO_MODEL_ID.ko_ppocrv5_mobile,
+          effectiveLanguage: 'ko',
+          detectedScript: null,
+          routingReason: 'Automatic language routing resolved from project setting prior: ko -> PP-OCRv5 mobile Korean',
+          isAmbiguousAutoRoute: false,
+          requiresExplicitLanguageHint: false,
+        };
+      }
+      if (cleanPrior === 'ja' || cleanPrior === 'zh') {
+        return {
+          status: 'resolved',
+          hintKind: 'auto',
+          routeId: 'ja_zh_ppocrv6_manga',
+          ocrModelId: ROUTE_TO_MODEL_ID.ja_zh_ppocrv6_manga,
+          effectiveLanguage: cleanPrior as 'ja' | 'zh',
+          detectedScript: null,
+          routingReason: `Automatic language routing resolved from project setting prior: ${cleanPrior} -> PP-OCRv6 Manga v0.3 FP32`,
+          isAmbiguousAutoRoute: false,
+          requiresExplicitLanguageHint: false,
+        };
+      }
+
+      // Check reading convention prior for fresh pages
+      if (readingConvention === 'webtoon_v') {
+        return {
+          status: 'resolved',
+          hintKind: 'auto',
+          routeId: 'ko_ppocrv5_mobile',
+          ocrModelId: ROUTE_TO_MODEL_ID.ko_ppocrv5_mobile,
+          effectiveLanguage: 'ko',
+          detectedScript: null,
+          routingReason: 'Automatic language routing inferred Korean from vertical webtoon reading convention prior -> PP-OCRv5 mobile Korean',
+          isAmbiguousAutoRoute: false,
+          requiresExplicitLanguageHint: false,
+        };
+      }
+      if (readingConvention === 'manga_rtl') {
+        return {
+          status: 'resolved',
+          hintKind: 'auto',
+          routeId: 'ja_zh_ppocrv6_manga',
+          ocrModelId: ROUTE_TO_MODEL_ID.ja_zh_ppocrv6_manga,
+          effectiveLanguage: 'ja',
+          detectedScript: null,
+          routingReason: 'Automatic language routing inferred Japanese from RTL manga reading convention prior -> PP-OCRv6 Manga v0.3 FP32',
+          isAmbiguousAutoRoute: false,
+          requiresExplicitLanguageHint: false,
+        };
+      }
+      if (readingConvention === 'ltr') {
+        return {
+          status: 'resolved',
+          hintKind: 'auto',
+          routeId: 'en_ppocrv6_small',
+          ocrModelId: ROUTE_TO_MODEL_ID.en_ppocrv6_small,
+          effectiveLanguage: 'en',
+          detectedScript: null,
+          routingReason: 'Automatic language routing inferred English from LTR comic reading convention prior -> PP-OCRv6 small',
+          isAmbiguousAutoRoute: false,
+          requiresExplicitLanguageHint: false,
+        };
+      }
+
+      // 3. Fallback when completely unconstrained and allowDefaultFallback is true
+      if (allowDefaultFallback) {
+        return {
+          status: 'resolved',
+          hintKind: 'auto',
+          routeId: 'ja_zh_ppocrv6_manga',
+          ocrModelId: ROUTE_TO_MODEL_ID.ja_zh_ppocrv6_manga,
+          effectiveLanguage: 'ja',
+          detectedScript: 'unknown',
+          routingReason:
+            'Automatic route without prior evidence resolved to multi-script Manga baseline (ja_zh_ppocrv6_manga)',
+          isAmbiguousAutoRoute: false,
+          requiresExplicitLanguageHint: false,
+        };
+      }
+
       return {
         status: 'undetermined',
         hintKind: 'auto',

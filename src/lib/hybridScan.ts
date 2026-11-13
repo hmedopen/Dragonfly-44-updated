@@ -172,6 +172,8 @@ export interface ScanMangaPageHybridOptions extends ScanMangaPageOptions {
   sampleTextForAutoRoute?: string;
   /** Optional diagnostic correlation ID from outer orchestrator. */
   correlationId?: string;
+  /** Optional flag to allow fallback to Gemini OCR (default false: local OCR is sole authority). */
+  allowGeminiFallback?: boolean;
   /** Optional injectable dependencies for tests. */
   hybridDeps?: HybridScanDependencies;
 }
@@ -843,46 +845,137 @@ export async function scanMangaPageHybridWithMeta(
   const runFallback = async (
     fallbackReason: HybridFallbackReason,
     resolvedRoute: OcrRouteId | null,
-    effectiveLanguage: 'en' | 'ko' | 'ja' | 'zh' | null
+    effectiveLanguage: 'en' | 'ko' | 'ja' | 'zh' | null,
+    errorMessage?: string,
+    remedy?: string
   ): Promise<HybridScanOutcome> => {
     if (signal?.aborted) throw createAbortError();
+
+    const finalError =
+      errorMessage || warnings[warnings.length - 1] || `Local OCR failed (${fallbackReason}).`;
+    const defaultRemedy =
+      fallbackReason === 'model_ineligible_production'
+        ? 'Licensing restriction: One or more local OCR models have non-commercial or unverified dataset provenance and cannot be distributed in production builds. Run in development mode with personal cache or install approved models.'
+        : fallbackReason === 'model_not_installed'
+        ? 'Open Settings > Local Models to install required detection and recognition models.'
+        : fallbackReason === 'provider_unavailable'
+        ? 'Ensure local model asset bridge is active in Electron runtime.'
+        : fallbackReason === 'language_route_refused'
+        ? 'Set the source language explicitly in project settings.'
+        : fallbackReason === 'local_ocr_empty'
+        ? 'Verify that the page image contains legible text.'
+        : 'Check the image format or restart the local OCR worker.';
+
+    const finalRemedy = remedy || defaultRemedy;
+
+    if (options.allowGeminiFallback === true) {
+      emitDiagnosticBoundary({
+        subsystem: 'scanning-ocr',
+        component: 'HybridScanner',
+        operation: 'fallbackDecision',
+        eventType: 'decision',
+        severity: 'warning',
+        status: 'degraded',
+        correlationId,
+        identifiers: { pageId, routeId: resolvedRoute || undefined },
+        payload: { fallbackReason, resolvedRoute, effectiveLanguage, warnings },
+        explanation: `Explicit Gemini full scan fallback selected (${fallbackReason}).`,
+      });
+      const fallbackResult = await execGeminiFallback({
+        pageId,
+        apiKey,
+        selectedModel,
+        readingConvention,
+        includeSFX,
+        sourceLanguageHint,
+        enableTargetedRetries,
+        maxRetries,
+        ocrConfidenceThreshold,
+        correlationId,
+        signal,
+      });
+      return {
+        scanResult: fallbackResult,
+        meta: {
+          ocrSource: 'gemini_fallback',
+          resolvedRoute,
+          effectiveLanguage,
+          fallbackReason,
+          warnings: [...warnings, finalError],
+          localCandidateCount: 0,
+          keptCandidateCount: 0,
+          verifiedCandidateCount: 0,
+          addedRegionCount: fallbackResult.regions.length,
+          droppedCandidateCount: 0,
+          geminiContextFailed: false,
+          cropRetryCount: 0,
+        },
+      };
+    }
+
     emitDiagnosticBoundary({
       subsystem: 'scanning-ocr',
       component: 'HybridScanner',
-      operation: 'fallbackDecision',
-      eventType: 'decision',
-      severity: 'warning',
-      status: 'degraded',
+      operation: 'localOcrFailure',
+      eventType: 'failure',
+      severity: 'error',
+      status: 'failed',
       correlationId,
       identifiers: { pageId, routeId: resolvedRoute || undefined },
-      payload: { fallbackReason, resolvedRoute, effectiveLanguage, warnings },
-      explanation: `Gemini full scan fallback selected (${fallbackReason}).`,
+      payload: { fallbackReason, resolvedRoute, effectiveLanguage, warnings, finalError, finalRemedy },
+      explanation: `Local OCR failed (${fallbackReason}): ${finalError}`,
     });
-    const fallbackResult = await execGeminiFallback({
+
+    const issues: ScanIssue[] = [
+      {
+        issueId: `issue-${pageId}-${fallbackReason}`,
+        flag: 'STAGE_UNAVAILABLE',
+        severity: 'error',
+        affectedRegionIds: [],
+        reason: `${finalError} Remedy: ${finalRemedy}`,
+        retryable: fallbackReason !== 'model_ineligible_production',
+      },
+    ];
+
+    const failedResult: PageScanResult = {
+      scanId: `scan-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       pageId,
-      apiKey,
-      selectedModel,
-      readingConvention,
-      includeSFX,
-      sourceLanguageHint,
-      enableTargetedRetries,
-      maxRetries,
-      ocrConfidenceThreshold,
-      correlationId,
-      signal,
-    });
+      sourceImageId: pageId,
+      sourceDimensions: { width: 0, height: 0 },
+      readingConvention:
+        typeof readingConvention === 'string' && readingConvention !== 'auto'
+          ? (readingConvention as ReadingConvention)
+          : 'ltr',
+      status: fallbackReason === 'local_ocr_empty' ? 'complete' : 'failed',
+      panels: [],
+      bubbleRegions: [],
+      regions: [],
+      issues,
+      transformLedger: createTransformRecord({
+        sourceImageId: pageId,
+        sourceWidth: 0,
+        sourceHeight: 0,
+      }),
+      visualContext: '',
+      detectedGlossaryTerms: [],
+      detectedCharacters: [],
+      detectedRelationships: [],
+      createdAt: Date.now(),
+      version: 1,
+    };
+
     return {
-      scanResult: fallbackResult,
+      scanResult: failedResult,
       meta: {
-        ocrSource: 'gemini_fallback',
+        ocrSource: 'hybrid',
         resolvedRoute,
         effectiveLanguage,
         fallbackReason,
-        warnings,
+        warnings: [...warnings, finalError],
         localCandidateCount: 0,
         keptCandidateCount: 0,
         verifiedCandidateCount: 0,
-        addedRegionCount: fallbackResult.regions.length,
+        addedRegionCount: 0,
         droppedCandidateCount: 0,
         geminiContextFailed: false,
         cropRetryCount: 0,
@@ -892,10 +985,14 @@ export async function scanMangaPageHybridWithMeta(
 
   // 1. Check language routing BEFORE launching local OCR; never bypass 'auto' safeguard
   const normalizedHint = (sourceLanguageHint || 'auto').trim() || 'auto';
-  const route = resolveOcrLanguageRoute(normalizedHint, sampleTextForAutoRoute);
+  const route = resolveOcrLanguageRoute(normalizedHint, {
+    sampleText: sampleTextForAutoRoute,
+    readingConvention,
+    allowDefaultFallback: true,
+  });
   if (route.status !== 'resolved' || route.routeId === null || route.effectiveLanguage === null) {
     warnings.push(route.routingReason);
-    return runFallback('language_route_refused', null, null);
+    return runFallback('language_route_refused', null, null, route.routingReason);
   }
 
   // 2. Check model eligibility (production block on dev_only_*) & installed status
@@ -1122,24 +1219,9 @@ export async function scanMangaPageHybridWithMeta(
     const localCleanText = normalizeExtractedDialogue(region.rawOCR);
     const hasLocalText = isMeaningfulLinguisticContent(localCleanText);
 
-    if (dec?.action === 'drop') {
-      const overlapsKept = finalRegions.some((kept) => {
-        const iou = calculateBoxIoU(region.geometry.box_2d, kept.geometry.box_2d);
-        const ioMin = computeIntersectionOverMinArea(region.geometry.box_2d, kept.geometry.box_2d);
-        return iou >= 0.35 || (ioMin >= 0.7 && areDuplicateTexts(localCleanText, kept.rawOCR));
-      });
-      const isStrongDistinctLocal =
-        hasLocalText &&
-        !overlapsKept &&
-        region.confidence.ocr >= 0.78 &&
-        normalizeComparableText(localCleanText).length >= 3 &&
-        !(dec.primaryClass === 'sfx' && !includeSFX);
-
-      if (!isStrongDistinctLocal) {
-        droppedByContextCount++;
-        continue;
-      }
-    }
+    // Contract: Gemini must NEVER drop local OCR regions.
+    // When Gemini proposes 'drop', preserve the region and flag it for user review.
+    const isFlaggedDrop = dec?.action === 'drop';
 
     const primaryClass: GenericTextClass =
       dec?.primaryClass || (kind === 'text_bubble' ? 'dialogue' : 'environmental_text');
@@ -1151,26 +1233,18 @@ export async function scanMangaPageHybridWithMeta(
       continue;
     }
 
-    let finalText = localCleanText;
+    // Local OCR text is verbatim and immutable. Gemini may propose alternatives, but never overwrite.
+    const finalText = localCleanText;
     const alternatives = [...(region.ocrAlternatives || [])];
     let usedVerifiedText = false;
 
-    if (
-      dec &&
-      (dec.action === 'verify' || !hasLocalText) &&
-      dec.verifiedOCR &&
-      isMeaningfulLinguisticContent(dec.verifiedOCR)
-    ) {
+    if (dec?.verifiedOCR && isMeaningfulLinguisticContent(dec.verifiedOCR)) {
       const verifiedClean = normalizeExtractedDialogue(dec.verifiedOCR);
-      if (hasLocalText && localCleanText !== verifiedClean && !alternatives.includes(localCleanText)) {
-        alternatives.unshift(localCleanText);
+      if (verifiedClean && verifiedClean !== finalText && !alternatives.includes(verifiedClean)) {
+        alternatives.push(verifiedClean);
       }
-      finalText = verifiedClean;
       usedVerifiedText = true;
       verifiedCandidateCount++;
-    } else if (!hasLocalText) {
-      droppedByContextCount++;
-      continue;
     }
 
     if (dec?.ocrAlternatives?.length) {
@@ -1182,16 +1256,13 @@ export async function scanMangaPageHybridWithMeta(
       }
     }
 
-    // Preserve local OCR normalized geometry; refine ONLY when local box was flagged uncertain/clipped
-    let box_2d = region.geometry.box_2d;
-    if (
-      dec?.refinedBox2d &&
-      (region.flags.includes('REGION_BOUNDARY_UNCERTAIN') || region.flags.includes('TEXT_CLIPPED'))
-    ) {
-      box_2d = clampBox(dec.refinedBox2d, 1000, 10);
-    }
+    // Local OCR coordinates and polygons are strictly immutable.
+    const box_2d = region.geometry.box_2d;
 
     const updatedFlags: ScanIssueFlag[] = [...region.flags];
+    if (isFlaggedDrop && !updatedFlags.includes('CLASSIFICATION_AMBIGUOUS')) {
+      updatedFlags.push('CLASSIFICATION_AMBIGUOUS');
+    }
     if (usedVerifiedText && dec?.isAmbiguous === false) {
       const ambIdx = updatedFlags.indexOf('OCR_AMBIGUOUS');
       if (ambIdx >= 0) updatedFlags.splice(ambIdx, 1);
@@ -1233,7 +1304,7 @@ export async function scanMangaPageHybridWithMeta(
       classification: {
         primaryClass,
         confidence: primaryClass === 'unknown' ? 0.55 : 0.9,
-        needsReview: Boolean(primaryClass === 'unknown' || dec?.isAmbiguous),
+        needsReview: Boolean(primaryClass === 'unknown' || dec?.isAmbiguous || isFlaggedDrop),
         evidence: dec?.visualEvidence || region.classification.evidence,
       },
       associations: {
@@ -1246,75 +1317,14 @@ export async function scanMangaPageHybridWithMeta(
     keptCandidateCount++;
   }
 
-  // 9. Add genuinely missed regions (e.g. handwritten SFX when enabled, missed captions)
+  // 9. Gemini must never create OCR regions. Local OCR is the sole authority for region extraction.
   let addedRegionCount = 0;
-  for (let i = 0; i < geminiContext.additionalRegions.length; i++) {
-    const extra = geminiContext.additionalRegions[i];
-    const cleanExtraText = normalizeExtractedDialogue(extra.rawOCR);
-    if (!isMeaningfulLinguisticContent(cleanExtraText)) continue;
-    if (!includeSFX && extra.primaryClass === 'sfx') continue;
-
-    const extraBox = clampBox(extra.box_2d, 1000, 10);
-    const overlapsExisting = finalRegions.some((kept) => {
-      const iou = calculateBoxIoU(extraBox, kept.geometry.box_2d);
-      const ioMin = computeIntersectionOverMinArea(extraBox, kept.geometry.box_2d);
-      if (iou >= 0.35 || ioMin >= 0.7) return true;
-      return iou >= 0.15 && areDuplicateTexts(cleanExtraText, kept.rawOCR);
-    });
-    if (overlapsExisting) continue;
-
-    const flags: ScanIssueFlag[] = [];
-    if (extra.isAmbiguous) flags.push('OCR_AMBIGUOUS');
-    if (extra.isClipped) flags.push('TEXT_CLIPPED');
-
-    const extraRegionId = buildUniquePageRegionId(
-      pageId,
-      extra.regionId || `missed-${i + 1}`,
-      finalRegions.length + 1,
-      seenRegionIds
-    );
-
-    finalRegions.push({
-      regionId: extraRegionId,
-      geometry: {
-        coordinateSpace: 'normalized_1000',
-        box_2d: extraBox,
-      },
-      rawOCR: cleanExtraText,
-      normalizedText: cleanExtraText,
-      ocrAlternatives: (extra.ocrAlternatives || []).map(normalizeExtractedDialogue),
-      sourceLanguage: inferHybridRegionLanguage(
-        extra.sourceLanguage,
-        cleanExtraText,
-        route.effectiveLanguage,
-        normalizedHint
-      ),
-      isVertical: extra.isVertical,
-      confidence: {
-        imageQuality: dimensions.width >= 1000 && dimensions.height >= 1400 ? 0.95 : 0.8,
-        regionDetection: 0.88,
-        ocr: extra.isAmbiguous ? 0.65 : 0.9,
-        association: 0.88,
-        readingOrder: 0.88,
-        classification: extra.primaryClass === 'unknown' ? 0.5 : 0.9,
-      },
-      classification: {
-        primaryClass: extra.primaryClass,
-        confidence: extra.primaryClass === 'unknown' ? 0.5 : 0.9,
-        needsReview: Boolean(extra.primaryClass === 'unknown' || extra.isAmbiguous),
-        evidence: extra.visualEvidence,
-      },
-      associations: {
-        speakerCandidate: extra.speakerCandidate,
-      },
-      order: {
-        sequenceIndex: finalRegions.length + 1,
-        confidence: 0.88,
-      },
-      flags,
-      isManuallyEdited: false,
-    });
-    addedRegionCount++;
+  if (geminiContext.additionalRegions.length > 0) {
+    for (const extra of geminiContext.additionalRegions) {
+      if (isMeaningfulLinguisticContent(extra.rawOCR)) {
+        warnings.push(`Context stage noted potential unextracted text: "${extra.rawOCR}". Local OCR owns extraction.`);
+      }
+    }
   }
 
   // Edge guard: if every local candidate was dropped (for reasons other than SFX opt-out)

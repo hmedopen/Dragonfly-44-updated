@@ -167,3 +167,63 @@ export function computePaddedPixelCrop(
     height: Math.max(1, bottom - y),
   };
 }
+
+/**
+ * Computes Andrew's monotone chain 2D convex hull for a set of points.
+ * Guarantees a clean, non-self-intersecting closed polygon.
+ */
+export function computeConvexHull(
+  points: Array<[number, number]>
+): Array<[number, number]> {
+  if (points.length <= 2) return [...points];
+
+  // Remove duplicates and sort primarily by X, secondarily by Y
+  const uniqueMap = new Map<string, [number, number]>();
+  for (const p of points) {
+    uniqueMap.set(`${p[0]},${p[1]}`, p);
+  }
+  const sorted = Array.from(uniqueMap.values()).sort((a, b) =>
+    a[0] === b[0] ? a[1] - b[1] : a[0] - b[0]
+  );
+
+  if (sorted.length <= 2) return sorted;
+
+  const cross = (o: [number, number], a: [number, number], b: [number, number]) =>
+    (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+
+  const lower: Array<[number, number]> = [];
+  for (const p of sorted) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) {
+      lower.pop();
+    }
+    lower.push(p);
+  }
+
+  const upper: Array<[number, number]> = [];
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const p = sorted[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) {
+      upper.pop();
+    }
+    upper.push(p);
+  }
+
+  lower.pop();
+  upper.pop();
+  return [...lower, ...upper];
+}
+
+/**
+ * Normalizes pixel polygon vertices to Folio Script's canonical 0-1000 coordinate space.
+ */
+export function pixelPolygonToNormalized1000(
+  polygon: Array<[number, number]>,
+  sourceWidth: number,
+  sourceHeight: number
+): Array<[number, number]> {
+  if (sourceWidth <= 0 || sourceHeight <= 0) return [...polygon];
+  return polygon.map(([px, py]) => [
+    Math.max(0, Math.min(1000, Math.round((px / sourceWidth) * 1000))),
+    Math.max(0, Math.min(1000, Math.round((py / sourceHeight) * 1000))),
+  ]);
+}

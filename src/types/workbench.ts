@@ -58,6 +58,20 @@ export interface BubbleItem {
   confidence?: number;            // 0.0 - 1.0 detection confidence
   isManuallyEdited?: boolean;     // Guards against AI overwrite
   updatedAt?: number;
+  ocrAlternatives?: string[];     // Alternative OCR readings/proposals without overwriting verbatim sourceText
+  ocrPolygon?: Array<[number, number]>; // Tight polygon surrounding recognized text
+  lineSegments?: Array<{
+    lineId: string;
+    geometry: {
+      coordinateSpace: 'normalized_1000';
+      box_2d: [number, number, number, number];
+      polygon?: Array<[number, number]>;
+    };
+    text: string;
+    recognitionConfidence: number;
+    detectionConfidence?: number;
+    isVertical?: boolean;
+  }>;
   provenance?: 'auto_scan' | 'manual_selection';
   manualSelectionShape?: 'box' | 'bubble' | 'lasso';
   manualPolygon?: Array<[number, number]>;
