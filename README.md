@@ -39,3 +39,8 @@ npm run build
 # Package Windows desktop executable
 npm run package:exe
 ```
+
+## Note
+
+yeaaah babyy.
+
