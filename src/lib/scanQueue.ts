@@ -108,6 +108,10 @@ export class ScanQueueManager {
     return Array.from(this.partialPageIds);
   }
 
+  public isScanningActive(): boolean {
+    return this.isProcessing || this.queue.length > 0;
+  }
+
   /**
    * Enqueues pages for processing.
    * Resolves the parallel vs sequential conflict: Chapter pages are sorted by natural page index

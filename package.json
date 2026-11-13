@@ -18,6 +18,8 @@
     "test:chapter-snatch": "node --import ./src/test/localOcr/tsResolveHook.mjs --test src/features/chapter-snatch/tests/*.test.ts",
     "smoke:local-ocr": "node --import ./src/test/localOcr/tsResolveHook.mjs src/test/localOcr/smokeTest.mjs",
     "validate:local-ocr": "node --import ./src/test/localOcr/tsResolveHook.mjs src/test/localOcr/multilingualValidation.mjs",
+    "test:phase3": "node --import ./src/test/localOcr/tsResolveHook.mjs --test src/test/phase3EndToEnd.test.ts",
+    "test:e2e": "node --import ./src/test/localOcr/tsResolveHook.mjs --test src/test/hybridScanIntegration.test.ts src/test/visualInterpretation.test.ts src/test/phase3EndToEnd.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

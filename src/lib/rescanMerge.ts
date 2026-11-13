@@ -13,6 +13,7 @@
 import type { BubbleItem } from '../types/workbench';
 import type { TextRegion, PageScanResult } from '../types/scanning';
 import type { TyperSettings } from '../types/typers';
+import { resolveCanonicalTyper } from '../types/typers';
 import { calculateBoxIoU, calculateCentroidDistance, computeBoxArea } from './coordinateTransforms';
 import { defaultTyperForClass } from './scanAdapter';
 
@@ -219,6 +220,10 @@ export function mergeScanWithExistingState(options: {
     const hadUserTyper = existing.type && existing.type !== 'none';
     if (isManuallyEdited || hadUserTyper) {
       preservedUserTypers++;
+    } else if (candidate.interpretation?.typerId && candidate.interpretation.typerId !== 'none') {
+      const canonical = resolveCanonicalTyper(candidate.interpretation.typerId, typerSettings.typers);
+      effectiveType = canonical.id;
+      effectivePrefix = candidate.interpretation.typerPrefix || canonical.prefix;
     } else {
       // Not user set: assign default for detected class
       const def = defaultTyperForClass(candidate.classification.primaryClass, typerSettings.typers);
@@ -243,10 +248,15 @@ export function mergeScanWithExistingState(options: {
     // If user explicitly created or moved this box, keep user's box
     const box_2d = isManuallyEdited ? existing.box_2d : candidate.geometry.box_2d;
 
+    const effectiveIndex = isManuallyEdited
+      ? (existing.index || candidate.order?.sequenceIndex || 1)
+      : (candidate.order?.sequenceIndex || existing.index || 1);
+
     const mergedBubble: BubbleItem = {
       ...existing,
       id: oldId, // Retain stable identity
       pageId: newScan.pageId,
+      index: effectiveIndex,
       box_2d,
       ocrPolygon: isManuallyEdited ? existing.ocrPolygon : (candidate.geometry.polygon || existing.ocrPolygon),
       ocrAlternatives: candidate.ocrAlternatives || existing.ocrAlternatives,

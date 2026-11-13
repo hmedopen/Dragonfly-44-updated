@@ -167,6 +167,8 @@ export const LEGACY_TYPER_ALIAS_MAP: Record<string, string> = {
   scream: 'shouting',
   box: 'square_bubbles',
   thought: 'thought_bubbles',
+  thoughts: 'thought_bubbles',
+  narration: 'square_bubbles',
   in_art: 'outside_text',
 };
 
