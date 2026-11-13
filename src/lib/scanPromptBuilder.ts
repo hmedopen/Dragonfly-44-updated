@@ -11,6 +11,7 @@
  */
 
 import type { ReadingConvention } from '../types/scanning';
+import { DEFAULT_TYPERS, type CustomTyperConfig } from '../types/typers';
 
 export interface ScanPromptOptions {
   readingConvention?: ReadingConvention;
@@ -107,14 +108,27 @@ export interface HybridContextPromptOptions {
   readingConvention?: ReadingConvention;
   includeSFX?: boolean;
   sourceLanguageHint?: string;
+  configuredTypers?: CustomTyperConfig[];
 }
 
 export function buildHybridContextPrompt(options: HybridContextPromptOptions = {}): string {
-  const { readingConvention = 'auto', includeSFX = true, sourceLanguageHint = 'auto' } = options;
+  const {
+    readingConvention = 'auto',
+    includeSFX = true,
+    sourceLanguageHint = 'auto',
+    configuredTypers = DEFAULT_TYPERS,
+  } = options;
   const languageNote =
     sourceLanguageHint && sourceLanguageHint !== 'auto'
       ? `Primary expected source language hint: "${sourceLanguageHint}". Still preserve mixed-language text accurately whenever multiple scripts appear.`
       : 'Detect the source language per region accurately (en, ko, ja, zh, or mixed).';
+
+  const typersList = (configuredTypers && configuredTypers.length > 0 ? configuredTypers : DEFAULT_TYPERS)
+    .map(
+      (t) =>
+        `   * id: "${t.id}" | prefix: "${t.prefix}" | name: "${t.name}" | description: ${t.instructions}`
+    )
+    .join('\n');
 
   return `
 ROLE & MISSION:
@@ -122,33 +136,56 @@ You are Folio Script's visual Manga Contextual Interpretation & Targeted Verific
 A local OCR engine has ALREADY detected candidate text regions with normalized [ymin, xmin, ymax, xmax] bounding boxes (0-1000 scale) and extracted primary OCR text for this page.
 Do NOT repeat full-page OCR blindly when local OCR text is reliable.
 
+AUTHORITY BOUNDARIES:
+- Local OCR is the authoritative source for text detection, coordinates, line geometry, and tight text polygons.
+- You must NEVER create new OCR regions, delete OCR regions, or rewrite recognized text.
+- You must NEVER alter, resize, rotate, or reposition bounding boxes or polygons.
+- You own visual interpretation: reading order between existing groups, typer symbol assignment, semantic classification, speaker identification, and scene context.
+
 RESPONSIBILITIES:
 1. PAGE & PANEL STRUCTURE:
    - Identify comic panels with normalized boxes [ymin, xmin, ymax, xmax] (0-1000 integer scale).
    - Identify reading convention (${readingConvention === 'auto' ? 'Manga Right-to-Left, Webtoon Top-to-Bottom, or Western Left-to-Right' : readingConvention}).
    - Summarize the visual scene ('pageContext') and extract visible characters, glossary terms, and speaker-addressee relationships.
 
-2. PER-CANDIDATE CLASSIFICATION & TARGETED VERIFICATION:
-   - ${languageNote}
-   - For EVERY candidate provided in the user prompt's candidate list, return an entry in 'regionDecisions' referencing its exact 'regionId':
-     * "action": "keep" | "verify" | "drop"
-       - Use "keep" when 'needsVerification' is false and the local OCR text accurately matches what is inside that box (omit 'verifiedOCR' to avoid redundant re-transcription).
-       - Use "verify" when 'needsVerification' is true OR when local OCR is inaccurate, incomplete, garbled, clipped, or missed embedded foreign/mixed-script characters inside the box; provide exact verbatim 'verifiedOCR' (with natural continuous spacing).
-       - Use "drop" ONLY when the candidate box is an empty speech bubble, pure punctuation/decorative art ("...", "?!"), or a strict duplicate fragment covered by another kept candidate. Never drop valid dialogue or valid mixed-language text.
-     * "primaryClass": "dialogue" | "thought" | "narration" | "caption" | "vocalization" | "sfx" | "environmental_text" | "unknown"
-     * "sourceLanguage": "en" | "ko" | "ja" | "zh" | "mixed" | "unknown"
-     * Only if a boundary is clearly clipped/misaligned on the page edge, optionally supply corrected "refinedBox2d": [ymin, xmin, ymax, xmax].
+2. READING ORDER DETERMINATION:
+   - Determine the correct narrative reading order for ALL input candidate regions based on the full visual page layout.
+   - Return a "readingOrder" array containing every input candidate "regionId" in strict narrative sequence.
+   - Follow comic panel layout and reading direction conventions (e.g. Manga: right-to-left, top-to-bottom; Webtoon: top-to-bottom scroll; Western: left-to-right).
+   - Every input candidate regionId MUST appear in "readingOrder" exactly once. Never omit an ID or invent new IDs.
+   - If visual flow between bubbles is ambiguous, record them in "orderingAmbiguities": [{"regionA": "id1", "regionB": "id2", "reason": "why visual flow is ambiguous"}].
 
-3. MISSED REGIONS ('additionalRegions'):
-   - Add ONLY genuine visible text units NOT covered by any candidate in the input list (for example handwritten sound effects or floating captions missed by local detection).
+3. TYPER SYMBOL ASSIGNMENT & CLASSIFICATION:
+   - For EVERY candidate in the input list, return a decision in 'regionDecisions':
+     * "assignedTyperId": Select strictly from the CONFIGURED TYPERS below. Do NOT invent custom typer IDs.
+     * "typerConfidence": Numeric confidence (0.0 to 1.0) in this typer assignment.
+     * "primaryClass": "dialogue" | "thought" | "narration" | "caption" | "vocalization" | "sfx" | "environmental_text" | "unknown"
+     * "speakerCandidate": Character name if visually clear, or null.
+     * "visualEvidence": Brief visual cue from artwork explaining speech bubble tail, bubble shape, font style, or panel placement.
+     * "action": "keep" | "verify" | "drop"
+       - Use "keep" when 'needsVerification' is false and the local OCR text accurately matches what is inside that box.
+       - Use "verify" when 'needsVerification' is true OR when local OCR has errors; provide exact verbatim 'verifiedOCR' in 'ocrAlternatives'.
+       - Use "drop" ONLY when the candidate box is an empty speech bubble, pure punctuation/decorative art ("...", "?!"), or a strict duplicate fragment covered by another kept candidate.
+     * "uncertaintyReasons": Array of strings explaining any ambiguity in typer assignment, classification, or reading order.
+     * ${languageNote}
+
+CONFIGURED TYPERS (select assignedTyperId strictly from this list):
+${typersList}
+
+4. MISSED REGIONS ('additionalRegions'):
+   - Add ONLY genuine visible text units NOT covered by any candidate in the input list.
    - NEVER duplicate a box already present in 'regionDecisions'.
-   ${includeSFX ? '- Include visible sound effects (SFX) as "sfx" if missed by local detection.' : '- Sound-effect extraction is disabled: do NOT include background SFX in additionalRegions (still keep dialogue, narration, captions, signs, and labels).'}
+   ${includeSFX ? '- Include visible sound effects (SFX) as "sfx" if missed by local detection.' : '- Sound-effect extraction is disabled: do NOT include background SFX in additionalRegions.'}
 
 OUTPUT FORMAT:
 Return strictly valid pure JSON without markdown fences:
 {
   "pageContext": "1-2 sentence scene composition, action, and character summary",
   "readingConventionCandidate": "manga_rtl" | "webtoon_v" | "ltr",
+  "readingOrder": ["region-1", "region-2"],
+  "orderingAmbiguities": [
+    { "regionA": "region-1", "regionB": "region-2", "reason": "ambiguous flow between panel 1 and 2" }
+  ],
   "panels": [
     { "panelId": "panel-1", "box_2d": [ymin, xmin, ymax, xmax] }
   ],
@@ -156,14 +193,17 @@ Return strictly valid pure JSON without markdown fences:
     {
       "regionId": "exact candidate regionId",
       "action": "keep" | "verify" | "drop",
+      "assignedTyperId": "speech_bubbles",
+      "typerConfidence": 0.95,
+      "primaryClass": "dialogue" | "thought" | "narration" | "caption" | "vocalization" | "sfx" | "environmental_text" | "unknown",
       "verifiedOCR": "only when action is verify",
       "ocrAlternatives": ["optional alt"],
-      "primaryClass": "dialogue" | "thought" | "narration" | "caption" | "vocalization" | "sfx" | "environmental_text" | "unknown",
       "sourceLanguage": "en" | "ko" | "ja" | "zh" | "mixed" | "unknown",
       "isVertical": false,
       "speakerCandidate": "Character name or null",
-      "visualEvidence": "Brief visual cue",
+      "visualEvidence": "Smooth rounded speech bubble with pointer tail to female protagonist",
       "isAmbiguous": false,
+      "uncertaintyReasons": [],
       "isClipped": false
     }
   ],

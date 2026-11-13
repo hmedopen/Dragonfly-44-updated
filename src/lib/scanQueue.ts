@@ -26,6 +26,7 @@ export type QueueProgressCallback = (progress: {
   completedCount: number;
   totalCount: number;
   pageStatuses: Record<string, PageScanStatus>;
+  detailedPageStatuses?: Record<string, PageScanStatus>;
   pageErrors: Record<string, string>;
   pageWarnings: Record<string, string[]>;
   partialPageIds: string[];
@@ -41,6 +42,7 @@ export class ScanQueueManager {
   private completedCount = 0;
   private totalCount = 0;
   private pageStatuses: Record<string, PageScanStatus> = {};
+  private detailedPageStatuses: Record<string, PageScanStatus> = {};
   private pageErrors: Record<string, string> = {};
   private pageWarnings: Record<string, string[]> = {};
   private partialPageIds: Set<string> = new Set();
@@ -69,6 +71,7 @@ export class ScanQueueManager {
       completedCount: this.completedCount,
       totalCount: this.totalCount,
       pageStatuses: { ...this.pageStatuses },
+      detailedPageStatuses: { ...this.detailedPageStatuses },
       pageErrors: { ...this.pageErrors },
       pageWarnings: { ...this.pageWarnings },
       partialPageIds: Array.from(this.partialPageIds),
@@ -81,11 +84,16 @@ export class ScanQueueManager {
 
   public setPageStatus(pageId: string, status: PageScanStatus) {
     this.pageStatuses[pageId] = status;
+    this.detailedPageStatuses[pageId] = status;
     this.notify();
   }
 
   public getPageStatus(pageId: string): PageScanStatus {
     return this.pageStatuses[pageId] || 'unscanned';
+  }
+
+  public getDetailedPageStatus(pageId: string): PageScanStatus {
+    return this.detailedPageStatuses[pageId] || this.pageStatuses[pageId] || 'unscanned';
   }
 
   public getPageErrors(): Record<string, string> {
@@ -272,6 +280,7 @@ export class ScanQueueManager {
         if (this.isCancelled || currentSignal.aborted || err?.name === 'AbortError') {
           console.log(`[ScanQueue] Page ${currentItem.pageId} cancelled.`);
           this.pageStatuses[currentItem.pageId] = 'unscanned';
+          this.detailedPageStatuses[currentItem.pageId] = 'cancelled';
           emitDiagnosticBoundary({
             subsystem: 'scanning-ocr',
             component: 'ScanQueueManager',
@@ -285,7 +294,11 @@ export class ScanQueueManager {
           });
         } else {
           console.error(`[ScanQueue] Unrecoverable failure for page ${currentItem.pageId}:`, err);
+          const isLocalOcrError =
+            typeof err?.message === 'string' &&
+            /Local OCR|local_ocr|route refused|model bridge|onnx/i.test(err.message);
           this.pageStatuses[currentItem.pageId] = 'error';
+          this.detailedPageStatuses[currentItem.pageId] = isLocalOcrError ? 'ocr_failed' : 'ocr_complete_interpretation_failed';
           this.pageErrors[currentItem.pageId] = err?.message || 'Scan failed';
           emitDiagnosticBoundary({
             subsystem: 'scanning-ocr',
@@ -435,6 +448,15 @@ export class ScanQueueManager {
 
       this.lastCompletedBubbles = { pageIndex: item.pageIndex, bubbles: result.bubbles };
       this.pageStatuses[item.pageId] = 'scanned';
+      if (result.scanResult?.interpretationStatus === 'complete') {
+        this.detailedPageStatuses[item.pageId] = 'ocr_complete_interpretation_complete';
+      } else if (result.scanResult?.interpretationStatus === 'failed') {
+        this.detailedPageStatuses[item.pageId] = 'ocr_complete_interpretation_failed';
+      } else if (result.scanResult?.interpretationStatus === 'pending') {
+        this.detailedPageStatuses[item.pageId] = 'ocr_complete_interpretation_pending';
+      } else {
+        this.detailedPageStatuses[item.pageId] = 'ocr_complete_interpretation_complete';
+      }
       this.completedCount++;
       onPageSuccess?.(item.pageId, result.bubbles);
       this.notify(item.pageIndex);

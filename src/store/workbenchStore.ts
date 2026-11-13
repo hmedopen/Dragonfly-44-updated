@@ -19,7 +19,7 @@ import { projectMemory } from '../services/projectMemory';
 import type { KnowledgeCandidate, KnowledgeConflictSet } from '../types/memory';
 import { scanQueue } from '../lib/scanQueue';
 import { auditChapterWithGemini } from '../lib/reviewEngine';
-import { translateSingleBubbleWithGemini } from '../lib/geminiScan';
+import { translateSingleBubbleWithGemini, interpretPageVisualContext } from '../lib/geminiScan';
 import { settingsService } from '../services/settings/settingsService';
 
 let unsubscribeBatchScanQueue: (() => void) | null = null;
@@ -57,6 +57,7 @@ interface WorkbenchState {
   isScanningActive: boolean;
   scanProgressText: string | null;
   pageStatuses: Record<string, PageScanStatus>;
+  detailedPageStatuses: Record<string, PageScanStatus>;
   isReviewingChapter: boolean;
   isScanningSinglePage: boolean;
   isReviewingSinglePage: boolean;
@@ -160,6 +161,10 @@ interface WorkbenchState {
     projectId?: string | null,
     isDraft?: boolean
   ) => void;
+  interpretSinglePage: (
+    pageId: string,
+    projectId?: string | null
+  ) => Promise<any>;
   translateSingleBubble: (
     pageId: string,
     bubbleId: string,
@@ -213,6 +218,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   isScanningActive: false,
   scanProgressText: null,
   pageStatuses: {},
+  detailedPageStatuses: {},
   isReviewingChapter: false,
   isScanningSinglePage: false,
   isReviewingSinglePage: false,
@@ -1321,6 +1327,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
         isScanningActive: isBatch && progress.isScanning,
         isScanningSinglePage: !isBatch && progress.isScanning,
         pageStatuses: progress.pageStatuses,
+        detailedPageStatuses: progress.detailedPageStatuses || {},
         scanProgressText: isBatch && progress.isScanning
           ? `${activeStep}/${progress.totalCount} - CANCEL`
           : null,
@@ -1349,6 +1356,69 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   // 2. Scan Page (Single Page Scan)
   scanSinglePage: (pageId, pageIndex, projectId = null, isDraft = false) => {
     get().startBatchScan([{ pageId, pageIndex }], projectId, isDraft);
+  },
+
+  // 2b. Visual Interpretation (Re-interprets existing local OCR extraction without re-running OCR)
+  interpretSinglePage: async (pageId: string, projectId: string | null = null) => {
+    const state = get();
+    const chapterId = state.activeChapterId || undefined;
+    const snapshot = settingsService.createOperationSnapshot({ projectId, chapterId });
+    const apiKey = snapshot.values['general.gemini_api_key'] || '';
+    const selectedModel = snapshot.values['scanning.model'] || 'gemini-3.8-flash';
+    const includeSFX = Boolean(snapshot.values['scanning.include_sfx']);
+    const readingConvention = (snapshot.values['scanning.reading_convention'] as any) || 'auto';
+    const sourceLanguageHint = (snapshot.values['ocr.source_language'] as string) || 'auto';
+    const typerSettings = loadTyperSettings();
+
+    set((s) => ({
+      detailedPageStatuses: {
+        ...s.detailedPageStatuses,
+        [pageId]: 'scanning',
+      },
+    }));
+
+    try {
+      const outcome = await interpretPageVisualContext({
+        pageId,
+        chapterId,
+        projectId,
+        apiKey,
+        selectedModel: String(selectedModel),
+        includeSFX,
+        readingConvention,
+        sourceLanguageHint,
+        configuredTypers: typerSettings.typers,
+      });
+
+      if (outcome.success) {
+        set((s) => ({
+          bubblesByPage: {
+            ...s.bubblesByPage,
+            [pageId]: outcome.bubbles,
+          },
+          detailedPageStatuses: {
+            ...s.detailedPageStatuses,
+            [pageId]: 'ocr_complete_interpretation_complete',
+          },
+        }));
+      } else {
+        set((s) => ({
+          detailedPageStatuses: {
+            ...s.detailedPageStatuses,
+            [pageId]: 'ocr_complete_interpretation_failed',
+          },
+        }));
+      }
+      return outcome;
+    } catch (err: any) {
+      set((s) => ({
+        detailedPageStatuses: {
+          ...s.detailedPageStatuses,
+          [pageId]: 'ocr_complete_interpretation_failed',
+        },
+      }));
+      throw err;
+    }
   },
 
   // 3. Single Bubble Translation

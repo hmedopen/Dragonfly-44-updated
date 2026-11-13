@@ -306,3 +306,179 @@ export function inferHierarchicalReadingOrder(
     };
   });
 }
+
+export interface ReadingOrderValidationResult {
+  isValid: boolean;
+  orderedIds: string[];
+  errors: string[];
+  missingIds: string[];
+  unknownIds: string[];
+  duplicateIds: string[];
+}
+
+/**
+ * Validates that Gemini's returned reading order accounts for every eligible input group ID exactly once.
+ * Rejects unknown IDs, duplicates, and omitted IDs.
+ */
+export function validateGeminiReadingOrder(
+  readingOrder: unknown,
+  expectedRegionIds: string[]
+): ReadingOrderValidationResult {
+  const errors: string[] = [];
+  const expectedSet = new Set(expectedRegionIds);
+
+  if (!Array.isArray(readingOrder)) {
+    return {
+      isValid: false,
+      orderedIds: [],
+      errors: ['Gemini reading order is not an array.'],
+      missingIds: [...expectedRegionIds],
+      unknownIds: [],
+      duplicateIds: [],
+    };
+  }
+
+  // Canonical mapping supports exact match or prefix-stripped suffix match
+  const canonicalMap = new Map<string, string>();
+  for (const exp of expectedRegionIds) {
+    canonicalMap.set(exp, exp);
+    if (exp.includes('__')) {
+      const afterDoubleUnderscore = exp.split('__')[1];
+      if (afterDoubleUnderscore && !canonicalMap.has(afterDoubleUnderscore)) {
+        canonicalMap.set(afterDoubleUnderscore, exp);
+      }
+    }
+    if (exp.includes('-')) {
+      const parts = exp.split('-');
+      // Support stripping first segment (e.g. pageId prefix)
+      const afterFirstDash = parts.slice(1).join('-');
+      if (!canonicalMap.has(afterFirstDash)) {
+        canonicalMap.set(afterFirstDash, exp);
+      }
+      // Support last segment (e.g. local-1)
+      const lastTwo = parts.slice(-2).join('-');
+      if (!canonicalMap.has(lastTwo)) {
+        canonicalMap.set(lastTwo, exp);
+      }
+    }
+  }
+
+  const rawIds = readingOrder
+    .map((id) => (typeof id === 'string' ? id.trim() : ''))
+    .filter((id) => id.length > 0);
+
+  const unknownIds: string[] = [];
+  const duplicateIds: string[] = [];
+  const seenIds = new Set<string>();
+  const canonicalIds: string[] = [];
+
+  for (const id of rawIds) {
+    const canonical = canonicalMap.get(id);
+    if (!canonical || !expectedSet.has(canonical)) {
+      unknownIds.push(id);
+    } else {
+      if (seenIds.has(canonical)) {
+        duplicateIds.push(id);
+      }
+      seenIds.add(canonical);
+      canonicalIds.push(canonical);
+    }
+  }
+
+  const missingIds = expectedRegionIds.filter((id) => !seenIds.has(id));
+
+  if (unknownIds.length > 0) {
+    errors.push(`Gemini reading order contains ${unknownIds.length} unknown region ID(s): ${unknownIds.join(', ')}`);
+  }
+  if (duplicateIds.length > 0) {
+    errors.push(`Gemini reading order contains duplicate region ID(s): ${duplicateIds.join(', ')}`);
+  }
+  if (missingIds.length > 0) {
+    errors.push(`Gemini reading order omitted ${missingIds.length} input region ID(s): ${missingIds.join(', ')}`);
+  }
+
+  const isValid = errors.length === 0 && canonicalIds.length === expectedRegionIds.length;
+  return {
+    isValid,
+    orderedIds: isValid ? canonicalIds : [],
+    errors,
+    missingIds,
+    unknownIds,
+    duplicateIds,
+  };
+}
+
+/**
+ * Applies a verified sequence of region IDs to order TextRegion records,
+ * assigning explicit sequence indices and recording confidence/ambiguities.
+ */
+export function applyReadingOrder(
+  regions: TextRegion[],
+  orderedIds: string[],
+  options?: {
+    isFallback?: boolean;
+    confidence?: number;
+    rationale?: string;
+    ambiguities?: Array<{ regionA: string; regionB: string; reason: string }>;
+  }
+): TextRegion[] {
+  const regionMap = new Map<string, TextRegion>();
+  regions.forEach((r) => regionMap.set(r.regionId, r));
+
+  const ordered: TextRegion[] = [];
+  const assignedIds = new Set<string>();
+
+  // 1. Follow the validated sequence
+  for (let idx = 0; idx < orderedIds.length; idx++) {
+    const id = orderedIds[idx];
+    const region = regionMap.get(id);
+    if (!region) continue;
+    assignedIds.add(id);
+
+    const isAmbiguous = options?.ambiguities?.some(
+      (a) => a.regionA === id || a.regionB === id
+    );
+
+    const updatedFlags = [...region.flags];
+    if (isAmbiguous && !updatedFlags.includes('READING_ORDER_CONFLICT')) {
+      updatedFlags.push('READING_ORDER_CONFLICT');
+    }
+
+    ordered.push({
+      ...region,
+      order: {
+        sequenceIndex: idx + 1,
+        confidence: isAmbiguous
+          ? 0.70
+          : options?.confidence ?? (options?.isFallback ? 0.75 : 0.96),
+        rationale:
+          options?.rationale ||
+          (options?.isFallback
+            ? 'Geometric layout fallback'
+            : 'Gemini visual narrative reading order'),
+      },
+      flags: updatedFlags,
+    });
+  }
+
+  // 2. Safety guard: any region missing from orderedIds is placed at the end without disappearing
+  for (const region of regions) {
+    if (!assignedIds.has(region.regionId)) {
+      const updatedFlags = [...region.flags];
+      if (!updatedFlags.includes('READING_ORDER_CONFLICT')) {
+        updatedFlags.push('READING_ORDER_CONFLICT');
+      }
+      ordered.push({
+        ...region,
+        order: {
+          sequenceIndex: ordered.length + 1,
+          confidence: 0.50,
+          rationale: 'Unsequenced group appended during order recovery',
+        },
+        flags: updatedFlags,
+      });
+    }
+  }
+
+  return ordered;
+}

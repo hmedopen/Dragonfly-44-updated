@@ -251,6 +251,7 @@ export function mergeScanWithExistingState(options: {
       ocrPolygon: isManuallyEdited ? existing.ocrPolygon : (candidate.geometry.polygon || existing.ocrPolygon),
       ocrAlternatives: candidate.ocrAlternatives || existing.ocrAlternatives,
       lineSegments: isManuallyEdited ? existing.lineSegments : (candidate.lineSegments || existing.lineSegments),
+      interpretation: candidate.interpretation || existing.interpretation,
       type: effectiveType,
       typerPrefix: effectivePrefix,
       sourceLanguage: candidate.sourceLanguage || existing.sourceLanguage || 'ja',
@@ -323,6 +324,14 @@ export function mergeScanWithExistingState(options: {
     if (!matchedCandidateRegionIds.has(candidate.regionId)) {
       newlyAdded++;
       const def = defaultTyperForClass(candidate.classification.primaryClass, typerSettings.typers);
+      const effectiveTyperId =
+        candidate.interpretation?.typerId && candidate.interpretation.typerId !== 'none'
+          ? candidate.interpretation.typerId
+          : def.id;
+      const effectiveTyperPrefix =
+        candidate.interpretation?.typerPrefix !== undefined
+          ? candidate.interpretation.typerPrefix
+          : def.prefix;
 
       const newBubble: BubbleItem = {
         id: candidate.regionId,
@@ -332,8 +341,9 @@ export function mergeScanWithExistingState(options: {
         ocrPolygon: candidate.geometry.polygon,
         ocrAlternatives: candidate.ocrAlternatives,
         lineSegments: candidate.lineSegments,
-        type: def.id,
-        typerPrefix: def.prefix,
+        interpretation: candidate.interpretation,
+        type: effectiveTyperId,
+        typerPrefix: effectiveTyperPrefix,
         sourceLanguage: candidate.sourceLanguage || 'ja',
         sourceText: candidate.rawOCR,
         originalSourceText: candidate.rawOCR,

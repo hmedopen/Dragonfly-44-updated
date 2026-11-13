@@ -34,10 +34,18 @@ import {
   scanMangaPage,
   type ScanMangaPageOptions,
 } from './mangaScanner';
-import { inferHierarchicalReadingOrder, resolveReadingConvention } from './readingOrder';
+import {
+  applyReadingOrder,
+  inferHierarchicalReadingOrder,
+  resolveReadingConvention,
+  validateGeminiReadingOrder,
+} from './readingOrder';
+import { defaultTyperForClass } from './scanAdapter';
 import { buildHybridContextPrompt } from './scanPromptBuilder';
 import { extractCleanJson } from './translationValidator';
 import { createDiagnosticCorrelationId, emitDiagnosticBoundary } from './diagnosticTap';
+import type { CustomTyperConfig } from '../types/typers';
+import { loadTyperSettings } from '../types/typers';
 import type {
   LocalOcrEngineOptions,
   LocalOcrScanResult,
@@ -46,6 +54,7 @@ import type {
   OcrRouteId,
 } from '../types/localOcr';
 import type {
+  GeminiInterpretationRecord,
   GenericTextClass,
   PageScanResult,
   PanelRegion,
@@ -107,11 +116,17 @@ export interface HybridGeminiCandidateInput {
   kind: 'text_bubble' | 'text_free';
   needsVerification: boolean;
   verificationReasons: string[];
+  polygon?: Array<[number, number]>;
+  lineCount?: number;
+  isVertical?: boolean;
+  associatedBubbleBox?: [number, number, number, number];
 }
 
 export interface HybridRegionDecision {
   regionId: string;
   action: 'keep' | 'verify' | 'drop';
+  assignedTyperId?: string;
+  typerConfidence?: number;
   verifiedOCR?: string;
   ocrAlternatives?: string[];
   primaryClass: GenericTextClass;
@@ -121,12 +136,15 @@ export interface HybridRegionDecision {
   speakerCandidate?: string;
   visualEvidence?: string;
   isAmbiguous?: boolean;
+  uncertaintyReasons?: string[];
   isClipped?: boolean;
 }
 
 export interface ValidatedHybridContextOutput {
   pageContext: string;
   readingConventionCandidate?: string;
+  readingOrder: string[];
+  orderingAmbiguities?: Array<{ regionA: string; regionB: string; reason: string }>;
   panels: Array<{ panelId: string; box_2d: [number, number, number, number] }>;
   regionDecisions: HybridRegionDecision[];
   additionalRegions: Array<{
@@ -162,6 +180,7 @@ export interface HybridScanDependencies {
     includeSFX: boolean;
     sourceLanguageHint: OcrLanguageHint | string;
     candidates: HybridGeminiCandidateInput[];
+    configuredTypers?: CustomTyperConfig[];
     signal?: AbortSignal;
   }) => Promise<ValidatedHybridContextOutput>;
   runCropRetries?: typeof performTargetedCropRetries;
@@ -174,6 +193,8 @@ export interface ScanMangaPageHybridOptions extends ScanMangaPageOptions {
   correlationId?: string;
   /** Optional flag to allow fallback to Gemini OCR (default false: local OCR is sole authority). */
   allowGeminiFallback?: boolean;
+  /** Optional custom configured typers from workspace settings. */
+  configuredTypers?: CustomTyperConfig[];
   /** Optional injectable dependencies for tests. */
   hybridDeps?: HybridScanDependencies;
 }
@@ -252,6 +273,14 @@ export function validateHybridContextOutput(rawText: string): {
       return {
         regionId: d.regionId.trim(),
         action,
+        assignedTyperId:
+          typeof d.assignedTyperId === 'string' && d.assignedTyperId.trim().length > 0
+            ? d.assignedTyperId.trim()
+            : undefined,
+        typerConfidence:
+          typeof d.typerConfidence === 'number' && Number.isFinite(d.typerConfidence)
+            ? Math.max(0, Math.min(1, d.typerConfidence))
+            : undefined,
         verifiedOCR: typeof d.verifiedOCR === 'string' ? d.verifiedOCR.trim() : undefined,
         ocrAlternatives: Array.isArray(d.ocrAlternatives) ? d.ocrAlternatives.map(String) : undefined,
         primaryClass,
@@ -264,9 +293,24 @@ export function validateHybridContextOutput(rawText: string): {
             : undefined,
         visualEvidence: typeof d.visualEvidence === 'string' ? d.visualEvidence : undefined,
         isAmbiguous: typeof d.isAmbiguous === 'boolean' ? d.isAmbiguous : undefined,
+        uncertaintyReasons: Array.isArray(d.uncertaintyReasons) ? d.uncertaintyReasons.map(String) : undefined,
         isClipped: typeof d.isClipped === 'boolean' ? d.isClipped : undefined,
       };
     });
+
+  const rawReadingOrder = Array.isArray(parsed.readingOrder) ? parsed.readingOrder : [];
+  const readingOrder: string[] = rawReadingOrder
+    .map((id: any) => (typeof id === 'string' ? id.trim() : ''))
+    .filter((id: string) => id.length > 0);
+
+  const rawAmbiguities = Array.isArray(parsed.orderingAmbiguities) ? parsed.orderingAmbiguities : [];
+  const orderingAmbiguities = rawAmbiguities
+    .filter((a: any) => typeof a?.regionA === 'string' && typeof a?.regionB === 'string')
+    .map((a: any) => ({
+      regionA: String(a.regionA).trim(),
+      regionB: String(a.regionB).trim(),
+      reason: typeof a.reason === 'string' ? a.reason.trim() : 'Visual narrative flow ambiguity',
+    }));
 
   const rawAdditional = Array.isArray(parsed.additionalRegions) ? parsed.additionalRegions : [];
   const additionalRegions = rawAdditional
@@ -307,6 +351,8 @@ export function validateHybridContextOutput(rawText: string): {
         typeof parsed.readingConventionCandidate === 'string'
           ? parsed.readingConventionCandidate
           : undefined,
+      readingOrder,
+      orderingAmbiguities,
       panels,
       regionDecisions,
       additionalRegions,
@@ -617,6 +663,7 @@ async function defaultRunGeminiContextPass(options: {
   includeSFX: boolean;
   sourceLanguageHint: OcrLanguageHint | string;
   candidates: HybridGeminiCandidateInput[];
+  configuredTypers?: CustomTyperConfig[];
   signal?: AbortSignal;
 }): Promise<ValidatedHybridContextOutput> {
   const {
@@ -627,6 +674,7 @@ async function defaultRunGeminiContextPass(options: {
     includeSFX,
     sourceLanguageHint,
     candidates,
+    configuredTypers,
     signal,
   } = options;
 
@@ -634,6 +682,7 @@ async function defaultRunGeminiContextPass(options: {
     readingConvention,
     includeSFX,
     sourceLanguageHint,
+    configuredTypers,
   });
 
   const mimeType = blob.type || 'image/png';
@@ -643,6 +692,10 @@ async function defaultRunGeminiContextPass(options: {
   const candidatePayload = candidates.map((c) => ({
     regionId: c.regionId,
     box_2d: c.box_2d,
+    polygon: c.polygon,
+    lineCount: c.lineCount,
+    isVertical: c.isVertical,
+    associatedBubbleBox: c.associatedBubbleBox,
     localOCR: c.localOCR,
     confidence: Number(c.ocrConfidence.toFixed(3)),
     kind: c.kind,
@@ -660,7 +713,7 @@ async function defaultRunGeminiContextPass(options: {
         parts: [
           {
             text:
-              'Analyze this comic page alongside the local OCR candidates below. Detect panels, classify each candidate regionId ("keep", "verify", or "drop"), provide verifiedOCR only where needed, and list any genuinely missed regions.\n\nLOCAL OCR CANDIDATES:\n' +
+              'Analyze this comic page alongside the local OCR candidates below. Determine the correct visual readingOrder array for all candidate regionIds, assign a configured typer (assignedTyperId) and primaryClass to each candidate, detect panels, and verify text only where needed.\n\nLOCAL OCR CANDIDATES:\n' +
               JSON.stringify(candidatePayload),
           },
           {
@@ -710,6 +763,7 @@ function buildPartialLocalOnlyResult(options: {
   sourceLanguageHint: string;
   includeSFX: boolean;
   failureReason: string;
+  configuredTypers?: CustomTyperConfig[];
 }): PageScanResult {
   const {
     pageId,
@@ -721,6 +775,7 @@ function buildPartialLocalOnlyResult(options: {
     sourceLanguageHint,
     includeSFX,
     failureReason,
+    configuredTypers,
   } = options;
 
   const transformLedger = createTransformRecord({
@@ -769,7 +824,37 @@ function buildPartialLocalOnlyResult(options: {
     });
   }
 
-  const orderedRegions = inferHierarchicalReadingOrder([], meaningfulRegions, effectiveConvention);
+  const rawOrderedRegions = inferHierarchicalReadingOrder([], meaningfulRegions, effectiveConvention);
+  const typers = configuredTypers || loadTyperSettings().typers;
+  const interpretations: GeminiInterpretationRecord[] = [];
+
+  const orderedRegions: TextRegion[] = rawOrderedRegions.map((r) => {
+    const typer = defaultTyperForClass(r.classification.primaryClass, typers);
+    const flags = [...r.flags];
+    if (!flags.includes('READING_ORDER_CONFLICT')) {
+      flags.push('READING_ORDER_CONFLICT');
+    }
+    const interp: GeminiInterpretationRecord = {
+      regionId: r.regionId,
+      orderIndex: r.order.sequenceIndex,
+      primaryClass: r.classification.primaryClass,
+      typerId: typer.id,
+      typerPrefix: typer.prefix,
+      classificationConfidence: r.classification.confidence,
+      orderingConfidence: 0.5,
+      speakerCandidate: null,
+      visualEvidence: 'Fallback geometric ordering; Gemini interpretation unavailable',
+      flags,
+      uncertaintyReasons: [`Gemini visual interpretation unavailable: ${failureReason}`],
+      isFallbackOrdering: true,
+    };
+    interpretations.push(interp);
+    return {
+      ...r,
+      flags,
+      interpretation: interp,
+    };
+  });
 
   const issues: ScanIssue[] = [
     {
@@ -789,6 +874,10 @@ function buildPartialLocalOnlyResult(options: {
     sourceDimensions: dimensions,
     readingConvention: effectiveConvention,
     status: 'partial',
+    interpretationStatus: 'failed',
+    interpretationError: failureReason,
+    readingOrderSource: 'geometric_fallback',
+    interpretations,
     panels: [],
     bubbleRegions,
     regions: orderedRegions,
@@ -840,6 +929,7 @@ export async function scanMangaPageHybridWithMeta(
   const execGeminiContext = hybridDeps?.runGeminiContextPass ?? defaultRunGeminiContextPass;
   const execCropRetries = hybridDeps?.runCropRetries ?? performTargetedCropRetries;
 
+  const configuredTypers = options.configuredTypers || loadTyperSettings().typers;
   const warnings: string[] = [];
 
   const runFallback = async (
@@ -1091,6 +1181,11 @@ export async function scanMangaPageHybridWithMeta(
   }
 
   // 6. Identify candidates needing targeted Gemini verification
+  const bubbleBoxMap = new Map<string, [number, number, number, number]>();
+  for (const b of localResult.bubbleRegions || []) {
+    bubbleBoxMap.set(b.bubbleId, b.geometry.box_2d);
+  }
+
   const geminiCandidateInputs: HybridGeminiCandidateInput[] = localCandidates.map(
     ({ region, kind }) => {
       const check = assessCandidateVerification(
@@ -1099,9 +1194,17 @@ export async function scanMangaPageHybridWithMeta(
         route.effectiveLanguage,
         ocrConfidenceThreshold
       );
+      const associatedBubbleBox = region.associations?.bubbleId
+        ? bubbleBoxMap.get(region.associations.bubbleId)
+        : undefined;
+
       return {
         regionId: region.regionId,
         box_2d: region.geometry.box_2d,
+        polygon: region.geometry.polygon,
+        lineCount: region.lineSegments?.length,
+        isVertical: region.isVertical,
+        associatedBubbleBox,
         localOCR: normalizeExtractedDialogue(region.rawOCR),
         ocrConfidence: region.confidence.ocr,
         kind,
@@ -1129,6 +1232,7 @@ export async function scanMangaPageHybridWithMeta(
         includeSFX,
         sourceLanguageHint: normalizedHint,
         candidates: geminiCandidateInputs,
+        configuredTypers,
         signal,
       });
     } catch (err) {
@@ -1144,7 +1248,7 @@ export async function scanMangaPageHybridWithMeta(
     throw createAbortError();
   }
 
-    if (!geminiContext) {
+  if (!geminiContext) {
     const partialScan = buildPartialLocalOnlyResult({
       pageId,
       dimensions,
@@ -1155,6 +1259,7 @@ export async function scanMangaPageHybridWithMeta(
       sourceLanguageHint: normalizedHint,
       includeSFX,
       failureReason: geminiFailureReason || 'Gemini contextual stage unavailable.',
+      configuredTypers,
     });
 
     emitDiagnosticBoundary({
@@ -1206,16 +1311,36 @@ export async function scanMangaPageHybridWithMeta(
   const decisionById = new Map<string, HybridRegionDecision>();
   for (const decision of geminiContext.regionDecisions) {
     decisionById.set(decision.regionId, decision);
+    if (decision.regionId.includes('__')) {
+      const parts = decision.regionId.split('__');
+      if (!decisionById.has(parts[1])) decisionById.set(parts[1], decision);
+    }
+    if (decision.regionId.includes('-')) {
+      const parts = decision.regionId.split('-');
+      const suffix = parts.slice(1).join('-');
+      if (!decisionById.has(suffix)) decisionById.set(suffix, decision);
+      const lastTwo = parts.slice(-2).join('-');
+      if (!decisionById.has(lastTwo)) decisionById.set(lastTwo, decision);
+    }
   }
 
   const finalRegions: TextRegion[] = [];
+  const assignedTyperMap = new Map<
+    string,
+    { id: string; prefix: string; confidence: number }
+  >();
   let keptCandidateCount = 0;
   let verifiedCandidateCount = 0;
   let droppedByContextCount = droppedDuplicateCount;
   let filteredSfxCount = 0;
 
   for (const { region, kind } of localCandidates) {
-    const dec = decisionById.get(region.regionId);
+    const bareRegionId = region.regionId.includes('__')
+      ? region.regionId.split('__')[1]
+      : region.regionId.includes('-')
+      ? region.regionId.split('-').slice(1).join('-')
+      : region.regionId;
+    const dec = decisionById.get(region.regionId) || decisionById.get(bareRegionId);
     const localCleanText = normalizeExtractedDialogue(region.rawOCR);
     const hasLocalText = isMeaningfulLinguisticContent(localCleanText);
 
@@ -1232,6 +1357,27 @@ export async function scanMangaPageHybridWithMeta(
       droppedByContextCount++;
       continue;
     }
+
+    // Assign typer strictly from configuredTypers
+    let assignedTyper = { id: 'speech_bubbles', prefix: '"":' };
+    let isTyperAmbiguous = false;
+    if (dec?.assignedTyperId) {
+      const match = configuredTypers.find(
+        (t) => t.id.toLowerCase() === dec.assignedTyperId!.toLowerCase()
+      );
+      if (match) {
+        assignedTyper = { id: match.id, prefix: match.prefix };
+      } else {
+        assignedTyper = defaultTyperForClass(primaryClass, configuredTypers);
+        isTyperAmbiguous = true;
+      }
+    } else {
+      assignedTyper = defaultTyperForClass(primaryClass, configuredTypers);
+    }
+    assignedTyperMap.set(region.regionId, {
+      ...assignedTyper,
+      confidence: dec?.typerConfidence ?? (isTyperAmbiguous ? 0.6 : 0.95),
+    });
 
     // Local OCR text is verbatim and immutable. Gemini may propose alternatives, but never overwrite.
     const finalText = localCleanText;
@@ -1260,7 +1406,7 @@ export async function scanMangaPageHybridWithMeta(
     const box_2d = region.geometry.box_2d;
 
     const updatedFlags: ScanIssueFlag[] = [...region.flags];
-    if (isFlaggedDrop && !updatedFlags.includes('CLASSIFICATION_AMBIGUOUS')) {
+    if ((isFlaggedDrop || isTyperAmbiguous) && !updatedFlags.includes('CLASSIFICATION_AMBIGUOUS')) {
       updatedFlags.push('CLASSIFICATION_AMBIGUOUS');
     }
     if (usedVerifiedText && dec?.isAmbiguous === false) {
@@ -1304,7 +1450,7 @@ export async function scanMangaPageHybridWithMeta(
       classification: {
         primaryClass,
         confidence: primaryClass === 'unknown' ? 0.55 : 0.9,
-        needsReview: Boolean(primaryClass === 'unknown' || dec?.isAmbiguous || isFlaggedDrop),
+        needsReview: Boolean(primaryClass === 'unknown' || dec?.isAmbiguous || isFlaggedDrop || isTyperAmbiguous),
         evidence: dec?.visualEvidence || region.classification.evidence,
       },
       associations: {
@@ -1338,8 +1484,73 @@ export async function scanMangaPageHybridWithMeta(
     return runFallback('local_ocr_empty', route.routeId, route.effectiveLanguage);
   }
 
-  // 10. Hierarchical reading order inference
-  let orderedRegions = inferHierarchicalReadingOrder(panels, finalRegions, effectiveConvention);
+  // 10. Reading Order Determination: Validate Gemini Visual Reading Order with Geometric Fallback
+  const candidateIds = finalRegions.map((r) => r.regionId);
+  const orderValidation = validateGeminiReadingOrder(geminiContext.readingOrder, candidateIds);
+
+  let orderedRegions: TextRegion[];
+  let readingOrderSource: 'gemini_visual' | 'geometric_fallback';
+
+  if (orderValidation.isValid) {
+    orderedRegions = applyReadingOrder(finalRegions, orderValidation.orderedIds, {
+      isFallback: false,
+      confidence: 0.96,
+      rationale: 'Gemini visual narrative reading order',
+      ambiguities: geminiContext.orderingAmbiguities,
+    });
+    readingOrderSource = 'gemini_visual';
+  } else {
+    warnings.push(
+      `Gemini reading order validation failed (${orderValidation.errors.join('; ')}); using geometric layout fallback.`
+    );
+    const fallbackRegions = inferHierarchicalReadingOrder(panels, finalRegions, effectiveConvention);
+    readingOrderSource = 'geometric_fallback';
+    orderedRegions = fallbackRegions.map((r) => {
+      const flags = [...r.flags];
+      if (!flags.includes('READING_ORDER_CONFLICT')) {
+        flags.push('READING_ORDER_CONFLICT');
+      }
+      return {
+        ...r,
+        order: {
+          ...r.order,
+          confidence: 0.70,
+          rationale: 'Geometric layout fallback after visual reading order validation failed',
+        },
+        flags,
+      };
+    });
+  }
+
+  // 11. Attach GeminiInterpretationRecord to each region
+  const interpretations: GeminiInterpretationRecord[] = [];
+  orderedRegions = orderedRegions.map((r) => {
+    const dec = decisionById.get(r.regionId);
+    const assigned = assignedTyperMap.get(r.regionId) || {
+      id: 'speech_bubbles',
+      prefix: '"":',
+      confidence: 0.8,
+    };
+    const interp: GeminiInterpretationRecord = {
+      regionId: r.regionId,
+      orderIndex: r.order.sequenceIndex,
+      primaryClass: r.classification.primaryClass,
+      typerId: assigned.id,
+      typerPrefix: assigned.prefix,
+      classificationConfidence: r.classification.confidence,
+      orderingConfidence: r.order.confidence,
+      speakerCandidate: r.associations.speakerCandidate,
+      visualEvidence: dec?.visualEvidence || r.classification.evidence,
+      flags: r.flags,
+      uncertaintyReasons: dec?.uncertaintyReasons,
+      isFallbackOrdering: readingOrderSource !== 'gemini_visual',
+    };
+    interpretations.push(interp);
+    return {
+      ...r,
+      interpretation: interp,
+    };
+  });
 
   // 11. Bounded targeted crop retries ONLY for regions still flagged after contextual pass
   let cropRetryCount = 0;
@@ -1410,6 +1621,9 @@ export async function scanMangaPageHybridWithMeta(
     sourceDimensions: { width: dimensions.width, height: dimensions.height },
     readingConvention: effectiveConvention,
     status: 'complete',
+    interpretationStatus: 'complete',
+    readingOrderSource,
+    interpretations,
     panels,
     bubbleRegions: localResult.bubbleRegions,
     regions: orderedRegions,

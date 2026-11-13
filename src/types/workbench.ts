@@ -1,3 +1,5 @@
+import type { GeminiInterpretationRecord } from './scanning';
+
 export type BubbleType = string;
 
 export type TyperPrefix = string;
@@ -60,6 +62,7 @@ export interface BubbleItem {
   updatedAt?: number;
   ocrAlternatives?: string[];     // Alternative OCR readings/proposals without overwriting verbatim sourceText
   ocrPolygon?: Array<[number, number]>; // Tight polygon surrounding recognized text
+  interpretation?: GeminiInterpretationRecord; // Visual interpretation metadata (reading order, typer, semantic class)
   lineSegments?: Array<{
     lineId: string;
     geometry: {
@@ -366,7 +369,16 @@ export const ELOQUENCE_CONFIG: Record<
   },
 };
 
-export type PageScanStatus = 'unscanned' | 'scanning' | 'scanned' | 'error';
+export type PageScanStatus =
+  | 'unscanned'
+  | 'scanning'
+  | 'scanned'
+  | 'error'
+  | 'ocr_complete_interpretation_complete'
+  | 'ocr_complete_interpretation_pending'
+  | 'ocr_complete_interpretation_failed'
+  | 'ocr_failed'
+  | 'cancelled';
 
 // ==========================================
 // SYSTEM #2: AI INSTRUCTION & TRANSLATION ENGINE TYPES

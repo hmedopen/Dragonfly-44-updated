@@ -344,6 +344,7 @@ function hydrateTyperEntry(typer: CustomTyperConfig): CustomTyperConfig {
 
 export function loadTyperSettings(): TyperSettings {
   try {
+    if (typeof localStorage === 'undefined') return DEFAULT_TYPER_SETTINGS;
     const raw = localStorage.getItem(TYPER_SETTINGS_STORAGE_KEY);
     if (!raw) return DEFAULT_TYPER_SETTINGS;
     const parsed = JSON.parse(raw);

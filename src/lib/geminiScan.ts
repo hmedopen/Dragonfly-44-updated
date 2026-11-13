@@ -1,4 +1,11 @@
-import { getPageBlob, getPageBubbles, savePageBubbles, savePageScan, getProjectLore } from '../services/db';
+import {
+  getPageBlob,
+  getPageBubbles,
+  getPageScan,
+  savePageBubbles,
+  savePageScan,
+  getProjectLore,
+} from '../services/db';
 import { getChapterIntelligence, ingestPageIntelligence } from '../services/intelligence';
 import type {
   BubbleItem,
@@ -8,23 +15,37 @@ import type {
   HumanizerIntensity,
   OrthographyMode,
 } from '../types/workbench';
-import type { ReadingConvention, PageScanResult } from '../types/scanning';
-import { loadTyperSettings } from '../types/typers';
+import type {
+  ReadingConvention,
+  PageScanResult,
+  TextRegion,
+  GenericTextClass,
+  GeminiInterpretationRecord,
+} from '../types/scanning';
+import { loadTyperSettings, type CustomTyperConfig } from '../types/typers';
 import { compileInstructions } from './instructionCompiler';
 import { humanizeArabicText } from './arabicHumanizer';
 import { validateSingleBubbleOutput } from './translationValidator';
 import {
   scanMangaPageHybridWithMeta,
+  type HybridGeminiCandidateInput,
   type HybridScanDependencies,
   type HybridScanMetadata,
 } from './hybridScan';
+import {
+  validateGeminiReadingOrder,
+  applyReadingOrder,
+  inferHierarchicalReadingOrder,
+} from './readingOrder';
+import { defaultTyperForClass } from './scanAdapter';
 import { mergeScanWithExistingState } from './rescanMerge';
 import { batchTranslateBubbles } from './batchTranslation';
-import { isMeaningfulLinguisticContent } from './mangaScanner';
+import { isMeaningfulLinguisticContent, normalizeExtractedDialogue } from './mangaScanner';
 import { createDiagnosticCorrelationId, emitDiagnosticBoundary } from './diagnosticTap';
 
 export interface ScanPageDeps {
   getPageBubbles?: typeof getPageBubbles;
+  getPageScan?: typeof getPageScan;
   savePageBubbles?: typeof savePageBubbles;
   savePageScan?: typeof savePageScan;
   getProjectLore?: typeof getProjectLore;
@@ -249,6 +270,7 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
       : undefined;
 
   const shouldRetryCrops = enableCropRetries !== undefined ? enableCropRetries : cropRetryLimit > 0;
+  const typerSettings = loadTyperSettings();
 
   // 2. SYSTEM #3: Unified Hybrid Scan & Classification Pass (Local OCR primary + Gemini context/fallback)
   const hybridOutcome = await scanMangaPageHybridWithMeta({
@@ -263,6 +285,7 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
     maxRetries: cropRetryLimit,
     ocrConfidenceThreshold,
     correlationId,
+    configuredTypers: typerSettings.typers,
     signal,
     hybridDeps,
   });
@@ -271,7 +294,6 @@ export async function scanPageWithGemini(options: ScanPageOptions): Promise<Scan
 
   const scanResult = hybridOutcome.scanResult;
   const warnings = [...hybridOutcome.meta.warnings];
-  const typerSettings = loadTyperSettings();
 
   // 3. Multi-signal merge: preserves manual edits, user typers, manual ordering, and user-drawn boxes
   const mergeResult = mergeScanWithExistingState({
@@ -740,5 +762,374 @@ export async function translateSingleBubbleWithGemini(
     rawTranslatedText: rawArabic,
     humanizedTranslatedText: humanizedArabic,
     translatedText: humanizedArabic,
+  };
+}
+
+export interface InterpretPageVisualOptions {
+  pageId: string;
+  chapterId?: string;
+  projectId?: string | null;
+  apiKey: string;
+  selectedModel?: GeminiModelKey | string;
+  includeSFX?: boolean;
+  readingConvention?: ReadingConvention;
+  sourceLanguageHint?: string;
+  configuredTypers?: CustomTyperConfig[];
+  correlationId?: string;
+  signal?: AbortSignal;
+  scanDeps?: ScanPageDeps;
+  hybridDeps?: HybridScanDependencies;
+}
+
+export interface InterpretPageVisualResult {
+  success: boolean;
+  pageId: string;
+  bubbles: BubbleItem[];
+  scanResult?: PageScanResult;
+  interpretations: GeminiInterpretationRecord[];
+  readingOrderSource: 'gemini_visual' | 'geometric_fallback';
+  error?: string;
+}
+
+/**
+ * Runs independent Gemini visual interpretation on existing local OCR extractions
+ * without re-running local OCR. Updates reading order, typer assignment, and
+ * semantic classifications on existing groups.
+ */
+export async function interpretPageVisualContext(
+  options: InterpretPageVisualOptions
+): Promise<InterpretPageVisualResult> {
+  const {
+    pageId,
+    chapterId,
+    projectId,
+    apiKey,
+    selectedModel = 'gemini-3.8-flash',
+    includeSFX = true,
+    readingConvention = 'auto',
+    sourceLanguageHint = 'auto',
+    configuredTypers: providedTypers,
+    correlationId: providedCorrelationId,
+    signal,
+    scanDeps,
+    hybridDeps,
+  } = options;
+
+  const correlationId = providedCorrelationId || createDiagnosticCorrelationId(`interpret-${pageId}`);
+  const loadScan = scanDeps?.getPageScan ?? getPageScan;
+  const loadBubbles = scanDeps?.getPageBubbles ?? getPageBubbles;
+  const persistBubbles = scanDeps?.savePageBubbles ?? savePageBubbles;
+  const persistScan = scanDeps?.savePageScan ?? savePageScan;
+  const getBlob = hybridDeps?.getPageBlob ?? getPageBlob;
+  const configuredTypers = providedTypers || loadTyperSettings().typers;
+
+  const existingScan = await loadScan(pageId);
+  const existingBubbles = await loadBubbles(pageId);
+
+  if ((!existingScan || existingScan.regions.length === 0) && existingBubbles.length === 0) {
+    return {
+      success: false,
+      pageId,
+      bubbles: [],
+      interpretations: [],
+      readingOrderSource: 'geometric_fallback',
+      error: 'No local OCR extraction found for this page. Please run Local OCR first.',
+    };
+  }
+
+  const blob = await getBlob(pageId);
+  if (!blob) {
+    return {
+      success: false,
+      pageId,
+      bubbles: existingBubbles,
+      scanResult: existingScan || undefined,
+      interpretations: [],
+      readingOrderSource: 'geometric_fallback',
+      error: 'Page image blob not found in storage.',
+    };
+  }
+
+  // Use existing OCR regions if available; otherwise construct regions from existing bubbles
+  const regions: TextRegion[] =
+    existingScan && existingScan.regions.length > 0
+      ? [...existingScan.regions]
+      : existingBubbles.map((b) => ({
+          regionId: b.id,
+          geometry: {
+            coordinateSpace: 'normalized_1000' as const,
+            box_2d: b.box_2d,
+            polygon: b.ocrPolygon,
+          },
+          rawOCR: b.sourceText || '',
+          confidence: {
+            imageQuality: 1.0,
+            regionDetection: 0.9,
+            ocr: b.confidence ?? 0.9,
+            association: 0.9,
+            readingOrder: 0.9,
+            classification: 0.9,
+          },
+          classification: {
+            primaryClass: (b.type === 'sfx' || b.typerPrefix === 'SFX:' ? 'sfx' : 'dialogue') as GenericTextClass,
+            confidence: 0.9,
+            needsReview: false,
+          },
+          sourceLanguage: b.sourceLanguage || 'auto',
+          associations: {},
+          order: {
+            sequenceIndex: b.index,
+            confidence: 0.9,
+            rationale: 'Existing bubble sequence',
+          },
+          flags: [],
+          isManuallyEdited: b.isManuallyEdited,
+        }));
+
+  const bubbleBoxMap = new Map<string, [number, number, number, number]>();
+  for (const b of existingScan?.bubbleRegions || []) {
+    bubbleBoxMap.set(b.bubbleId, b.geometry.box_2d);
+  }
+
+  const candidateInputs: HybridGeminiCandidateInput[] = regions.map((r) => ({
+    regionId: r.regionId,
+    box_2d: r.geometry.box_2d,
+    polygon: r.geometry.polygon,
+    lineCount: r.lineSegments?.length,
+    isVertical: r.isVertical,
+    associatedBubbleBox: r.associations?.bubbleId ? bubbleBoxMap.get(r.associations.bubbleId) : undefined,
+    localOCR: normalizeExtractedDialogue(r.rawOCR),
+    ocrConfidence: r.confidence?.ocr ?? 0.9,
+    kind: r.associations?.bubbleId ? 'text_bubble' : 'text_free',
+    needsVerification: false,
+    verificationReasons: [],
+  }));
+
+  let geminiContext: any = null;
+  try {
+    if (hybridDeps?.runGeminiContextPass) {
+      geminiContext = await hybridDeps.runGeminiContextPass({
+        blob,
+        pageId,
+        apiKey,
+        selectedModel: String(selectedModel),
+        readingConvention,
+        includeSFX,
+        sourceLanguageHint,
+        candidates: candidateInputs,
+        configuredTypers,
+        signal,
+      });
+    } else {
+      // Default execution path calling defaultRunGeminiContextPass via dynamic import or direct execution
+      const { scanMangaPageHybridWithMeta } = await import('./hybridScan');
+      // HybridScan has defaultRunGeminiContextPass internally
+      const outcome = await scanMangaPageHybridWithMeta({
+        pageId,
+        apiKey,
+        selectedModel,
+        readingConvention,
+        includeSFX,
+        sourceLanguageHint,
+        correlationId,
+        configuredTypers,
+        signal,
+        hybridDeps,
+      });
+      return {
+        success: outcome.scanResult.status !== 'failed',
+        pageId,
+        bubbles: outcome.scanResult.regions.map((r) => {
+          const matchedBubble = existingBubbles.find((b) => b.id === r.regionId);
+          return {
+            ...(matchedBubble || {}),
+            id: r.regionId,
+            pageId,
+            index: r.order.sequenceIndex,
+            box_2d: r.geometry.box_2d,
+            ocrPolygon: r.geometry.polygon,
+            interpretation: r.interpretation,
+            type: matchedBubble?.isManuallyEdited && matchedBubble.type && matchedBubble.type !== 'none'
+              ? matchedBubble.type
+              : r.interpretation?.typerId || 'speech_bubbles',
+            typerPrefix: matchedBubble?.isManuallyEdited && matchedBubble.typerPrefix !== undefined
+              ? matchedBubble.typerPrefix
+              : r.interpretation?.typerPrefix || '"":',
+            sourceText: r.rawOCR,
+            originalSourceText: r.rawOCR,
+            confidence: r.confidence.ocr,
+            updatedAt: Date.now(),
+          } as BubbleItem;
+        }),
+        scanResult: outcome.scanResult,
+        interpretations: outcome.scanResult.interpretations || [],
+        readingOrderSource: outcome.scanResult.readingOrderSource || 'gemini_visual',
+      };
+    }
+  } catch (err: any) {
+    if (signal?.aborted || err?.name === 'AbortError') throw err;
+    return {
+      success: false,
+      pageId,
+      bubbles: existingBubbles,
+      scanResult: existingScan || undefined,
+      interpretations: [],
+      readingOrderSource: 'geometric_fallback',
+      error: `Visual interpretation failed: ${err?.message || 'unknown error'}`,
+    };
+  }
+
+  // Validate reading order
+  const candidateIds = regions.map((r) => r.regionId);
+  const orderValidation = validateGeminiReadingOrder(geminiContext.readingOrder, candidateIds);
+  let orderedRegions: TextRegion[];
+  let readingOrderSource: 'gemini_visual' | 'geometric_fallback';
+
+  if (orderValidation.isValid) {
+    orderedRegions = applyReadingOrder(regions, orderValidation.orderedIds, {
+      isFallback: false,
+      confidence: 0.96,
+      rationale: 'Gemini visual narrative reading order',
+      ambiguities: geminiContext.orderingAmbiguities,
+    });
+    readingOrderSource = 'gemini_visual';
+  } else {
+    orderedRegions = inferHierarchicalReadingOrder(
+      geminiContext.panels?.map((p: any, idx: number) => ({
+        panelId: p.panelId || `panel-${idx + 1}`,
+        geometry: { coordinateSpace: 'normalized_1000' as const, box_2d: p.box_2d },
+        detectionConfidence: 0.9,
+        sequenceIndex: idx + 1,
+      })) || [],
+      regions,
+      readingConvention
+    );
+    readingOrderSource = 'geometric_fallback';
+    orderedRegions = orderedRegions.map((r) => {
+      const flags = [...r.flags];
+      if (!flags.includes('READING_ORDER_CONFLICT')) flags.push('READING_ORDER_CONFLICT');
+      return { ...r, flags };
+    });
+  }
+
+  const decisionMap = new Map((geminiContext.regionDecisions || []).map((d: any) => [d.regionId, d]));
+  const interpretations: GeminiInterpretationRecord[] = [];
+  const interpretedRegions: TextRegion[] = orderedRegions.map((r) => {
+    const dec: any = decisionMap.get(r.regionId);
+    const primaryClass: GenericTextClass = dec?.primaryClass || r.classification.primaryClass;
+    let assignedTyper = { id: 'speech_bubbles', prefix: '"":' };
+    let isTyperAmbiguous = false;
+    if (dec?.assignedTyperId) {
+      const match = configuredTypers.find((t) => t.id.toLowerCase() === dec.assignedTyperId.toLowerCase());
+      if (match) {
+        assignedTyper = { id: match.id, prefix: match.prefix };
+      } else {
+        assignedTyper = defaultTyperForClass(primaryClass, configuredTypers);
+        isTyperAmbiguous = true;
+      }
+    } else {
+      assignedTyper = defaultTyperForClass(primaryClass, configuredTypers);
+    }
+
+    const flags = [...r.flags];
+    if (isTyperAmbiguous && !flags.includes('CLASSIFICATION_AMBIGUOUS')) {
+      flags.push('CLASSIFICATION_AMBIGUOUS');
+    }
+
+    const interp: GeminiInterpretationRecord = {
+      regionId: r.regionId,
+      orderIndex: r.order.sequenceIndex,
+      primaryClass,
+      typerId: assignedTyper.id,
+      typerPrefix: assignedTyper.prefix,
+      classificationConfidence: isTyperAmbiguous ? 0.6 : (dec?.typerConfidence ?? 0.95),
+      orderingConfidence: r.order.confidence,
+      speakerCandidate: dec?.speakerCandidate ?? r.associations?.speakerCandidate,
+      visualEvidence: dec?.visualEvidence || r.classification?.evidence,
+      flags,
+      uncertaintyReasons: dec?.uncertaintyReasons,
+      isFallbackOrdering: readingOrderSource !== 'gemini_visual',
+    };
+    interpretations.push(interp);
+
+    return {
+      ...r,
+      classification: {
+        ...r.classification,
+        primaryClass,
+        confidence: interp.classificationConfidence,
+        evidence: interp.visualEvidence,
+      },
+      associations: {
+        ...r.associations,
+        speakerCandidate: interp.speakerCandidate,
+      },
+      flags,
+      interpretation: interp,
+    };
+  });
+
+  const interpByRegionId = new Map(interpretations.map((i) => [i.regionId, i]));
+  const updatedBubbles: BubbleItem[] = existingBubbles.map((bubble) => {
+    const interp = interpByRegionId.get(bubble.id) || interpByRegionId.get(bubble.regionId || '');
+    if (!interp) return bubble;
+    const isManuallyEdited = Boolean(bubble.isManuallyEdited);
+    return {
+      ...bubble,
+      index: interp.orderIndex,
+      type: isManuallyEdited && bubble.type && bubble.type !== 'none' ? bubble.type : interp.typerId,
+      typerPrefix:
+        isManuallyEdited && bubble.typerPrefix !== undefined ? bubble.typerPrefix : interp.typerPrefix,
+      interpretation: interp,
+      updatedAt: Date.now(),
+    };
+  });
+  updatedBubbles.sort((a, b) => a.index - b.index);
+
+  const updatedScan: PageScanResult = {
+    ...(existingScan || {
+      scanId: `scan-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      pageId,
+      sourceImageId: pageId,
+      sourceDimensions: { width: 0, height: 0 },
+      readingConvention,
+      status: 'complete',
+      panels: [],
+      bubbleRegions: [],
+      issues: [],
+      transformLedger: { sourceImageId: pageId, sourceWidth: 0, sourceHeight: 0, steps: [] },
+      visualContext: '',
+      detectedGlossaryTerms: [],
+      detectedCharacters: [],
+      detectedRelationships: [],
+      createdAt: Date.now(),
+      version: 1,
+    }),
+    regions: interpretedRegions,
+    interpretationStatus: 'complete',
+    readingOrderSource,
+    interpretations,
+    visualContext: geminiContext.pageContext || existingScan?.visualContext || '',
+    panels: (geminiContext.panels || []).map((p: any, idx: number) => ({
+      panelId: p.panelId || `panel-${idx + 1}`,
+      geometry: { coordinateSpace: 'normalized_1000' as const, box_2d: p.box_2d },
+      detectionConfidence: 0.9,
+      sequenceIndex: idx + 1,
+    })),
+    detectedCharacters: geminiContext.detectedCharacters || existingScan?.detectedCharacters || [],
+    detectedGlossaryTerms: geminiContext.detectedGlossaryTerms || existingScan?.detectedGlossaryTerms || [],
+    detectedRelationships: geminiContext.detectedRelationships || existingScan?.detectedRelationships || [],
+  };
+
+  await persistScan(pageId, updatedScan);
+  await persistBubbles(pageId, updatedBubbles);
+
+  return {
+    success: true,
+    pageId,
+    bubbles: updatedBubbles,
+    scanResult: updatedScan,
+    interpretations,
+    readingOrderSource,
   };
 }

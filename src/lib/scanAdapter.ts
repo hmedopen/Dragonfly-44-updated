@@ -154,6 +154,10 @@ export function scanResultToBubbleItems(
       const canonical = resolveCanonicalTyper(existing.type, typerSettings.typers);
       selectedType = canonical.id;
       selectedPrefix = existing.typerPrefix !== undefined ? existing.typerPrefix : canonical.prefix;
+    } else if (region.interpretation?.typerId && region.interpretation.typerId !== 'none') {
+      const canonical = resolveCanonicalTyper(region.interpretation.typerId, typerSettings.typers);
+      selectedType = canonical.id;
+      selectedPrefix = region.interpretation.typerPrefix || canonical.prefix;
     } else {
       // Automatic initial assignment from generic classification
       const def = defaultTyperForClass(region.classification.primaryClass, typerSettings.typers);
@@ -202,6 +206,7 @@ export function scanResultToBubbleItems(
       ocrPolygon: region.geometry.polygon || existing?.ocrPolygon,
       ocrAlternatives: region.ocrAlternatives || existing?.ocrAlternatives,
       lineSegments: region.lineSegments || existing?.lineSegments,
+      interpretation: region.interpretation || existing?.interpretation,
       type: selectedType,
       typerPrefix: selectedPrefix,
       sourceLanguage: region.sourceLanguage || 'ja',

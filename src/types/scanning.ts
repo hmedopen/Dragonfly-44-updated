@@ -117,6 +117,21 @@ export interface BubbleRegion {
   flags?: ScanIssueFlag[];
 }
 
+export interface GeminiInterpretationRecord {
+  regionId: string;
+  orderIndex: number;
+  primaryClass: GenericTextClass;
+  typerId: string;
+  typerPrefix: string;
+  classificationConfidence: number;
+  orderingConfidence: number;
+  speakerCandidate?: string | null;
+  visualEvidence?: string;
+  flags: ScanIssueFlag[];
+  uncertaintyReasons?: string[];
+  isFallbackOrdering?: boolean;
+}
+
 export interface TextRegion {
   regionId: string;
   geometry: RegionGeometry;
@@ -132,6 +147,7 @@ export interface TextRegion {
   isManuallyEdited?: boolean;
   sourceLanguage?: string;
   isVertical?: boolean;
+  interpretation?: GeminiInterpretationRecord;
 }
 
 export type ReadingConvention = 'auto' | 'manga_rtl' | 'webtoon_v' | 'ltr';
@@ -143,6 +159,10 @@ export interface PageScanResult {
   sourceDimensions: { width: number; height: number };
   readingConvention: ReadingConvention;
   status: 'complete' | 'partial' | 'failed';
+  interpretationStatus?: 'complete' | 'pending' | 'failed' | 'skipped';
+  interpretationError?: string;
+  readingOrderSource?: 'gemini_visual' | 'geometric_fallback' | 'manual';
+  interpretations?: GeminiInterpretationRecord[];
   panels: PanelRegion[];
   bubbleRegions?: BubbleRegion[];
   regions: TextRegion[];
