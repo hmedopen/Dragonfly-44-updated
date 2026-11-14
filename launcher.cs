@@ -32,10 +32,13 @@ namespace FolioScript
 
             if (!IsServerAlive())
             {
+                string nodePath = @"C:\Program Files\nodejs\node.exe";
+                if (!File.Exists(nodePath)) nodePath = "node.exe";
+
                 ProcessStartInfo serverInfo = new ProcessStartInfo
                 {
-                    FileName = "cmd.exe",
-                    Arguments = "/c start /B node \"" + serverScript + "\"",
+                    FileName = nodePath,
+                    Arguments = "\"" + serverScript + "\"",
                     WorkingDirectory = appDir,
                     CreateNoWindow = true,
                     UseShellExecute = false,
@@ -48,7 +51,7 @@ namespace FolioScript
                 }
                 catch { }
 
-                for (int i = 0; i < 25; i++)
+                for (int i = 0; i < 30; i++)
                 {
                     if (IsServerAlive()) break;
                     Thread.Sleep(100);
@@ -69,7 +72,7 @@ namespace FolioScript
                 browserPath = @"C:\Program Files\Microsoft\Edge\Application\msedge.exe";
             }
 
-            string appArgs = "--app=\"http://127.0.0.1:5173/?v=fs4\" --window-size=1280,820";
+            string appArgs = "--app=\"http://127.0.0.1:5173/?v=fs5\" --window-size=1280,820";
 
             ProcessStartInfo windowInfo = new ProcessStartInfo
             {
