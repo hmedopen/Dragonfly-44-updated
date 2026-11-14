@@ -184,7 +184,8 @@ export class ChapterZipExporter {
   public static async exportSelectedPagesToZip(
     selectedPages: ChapterPage[],
     imageMap: Map<string, DownloadedImageData>,
-    defaultFilename: string
+    defaultFilename: string,
+    acquisitionId?: string
   ): Promise<ZipExportResult> {
     if (selectedPages.length === 0) {
       throw new Error('No pages selected for export.');
@@ -192,6 +193,26 @@ export class ChapterZipExporter {
 
     // Sort by originalIndex to guarantee preserved source ordering
     const sorted = [...selectedPages].sort((a, b) => a.originalIndex - b.originalIndex);
+
+    const win = typeof window !== 'undefined' ? (window as any) : undefined;
+    const electronBridge = win?.folioScript?.chapterSnatch;
+
+    // Fast-path: Disk-backed streaming ZIP export (zero Base64 overhead across IPC)
+    const hasAllDiskPaths = sorted.every((p) => Boolean(p.tempFilePath));
+    if (electronBridge?.saveZip && hasAllDiskPaths && acquisitionId) {
+      const pageFiles = sorted.map((p, idx) => ({
+        filename: `${String(idx + 1).padStart(3, '0')}.${p.extension}`,
+        filePath: p.tempFilePath!,
+      }));
+
+      const res = await electronBridge.saveZip({
+        defaultFilename,
+        acquisitionId,
+        pageFiles,
+      });
+
+      return res;
+    }
 
     const entries: ZipFileEntry[] = [];
     for (let i = 0; i < sorted.length; i++) {
@@ -207,10 +228,6 @@ export class ChapterZipExporter {
         data: img.data,
       });
     }
-
-    // Check if Electron native IPC is available
-    const win = typeof window !== 'undefined' ? (window as any) : undefined;
-    const electronBridge = win?.folioScript?.chapterSnatch;
 
     if (electronBridge?.saveZip) {
       // Use Electron's native file-dialog pattern
@@ -232,12 +249,14 @@ export class ChapterZipExporter {
     const blob = new Blob([zipBytes as any], { type: 'application/zip' });
     const blobUrl = URL.createObjectURL(blob);
 
-    const link = document.createElement('a');
-    link.href = blobUrl;
-    link.download = defaultFilename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    if (typeof document !== 'undefined') {
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = defaultFilename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
 
     setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
 

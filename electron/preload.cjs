@@ -35,8 +35,19 @@ const localModelsBridge = {
 
 const chapterSnatchBridge = {
   fetchMetadata: (url) => ipcRenderer.invoke('chapterSnatch:fetchMetadata', url),
-  downloadPageImage: (imageUrl, referer) => ipcRenderer.invoke('chapterSnatch:downloadPageImage', { imageUrl, referer }),
+  downloadPageImage: (imageUrlOrPayload, referer, options) => {
+    if (typeof imageUrlOrPayload === 'object' && imageUrlOrPayload !== null) {
+      return ipcRenderer.invoke('chapterSnatch:downloadPageImage', imageUrlOrPayload);
+    }
+    return ipcRenderer.invoke('chapterSnatch:downloadPageImage', {
+      imageUrl: imageUrlOrPayload,
+      referer,
+      ...options,
+    });
+  },
   saveZip: (payload) => ipcRenderer.invoke('chapterSnatch:saveZip', payload),
+  readPage: (payload) => ipcRenderer.invoke('chapterSnatch:readPage', payload),
+  cleanupAcquisition: (acquisitionId) => ipcRenderer.invoke('chapterSnatch:cleanupAcquisition', acquisitionId),
 };
 
 const appBridge = {

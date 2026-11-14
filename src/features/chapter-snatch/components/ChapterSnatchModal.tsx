@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import type { Folder } from '../../../types';
 import { chapterAcquisitionManager } from '../services/acquisitionManager';
-import { ChapterSourceResolver } from '../services/sourceResolver';
+import { sourceRegistry } from '../core/sourceRegistry';
 import { ChapterZipExporter } from '../services/zipExporter';
 import { ChapterWorkspaceImporter } from '../services/workspaceImporter';
 import { PageThumbnailCard } from './PageThumbnailCard';
-import type { ChapterAcquisition, ChapterSource } from '../types';
+import type { ChapterAcquisition } from '../types';
 import {
   X,
   Download,
@@ -51,6 +51,8 @@ export const ChapterSnatchModal: React.FC<ChapterSnatchModalProps> = ({
   const [isExportingZip, setIsExportingZip] = useState(false);
   const [isImportingWorkspace, setIsImportingWorkspace] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [showSupportedSites, setShowSupportedSites] = useState(false);
+  const [siteSearch, setSiteSearch] = useState('');
 
   // Subscribe to acquisition manager updates & auto-select ready pages
   useEffect(() => {
@@ -77,9 +79,9 @@ export const ChapterSnatchModal: React.FC<ChapterSnatchModalProps> = ({
   }, []);
 
   // Realtime source detection on typing
-  const detectedSource: ChapterSource | null = useMemo(() => {
+  const detectedAdapter = useMemo(() => {
     if (!urlInput.trim()) return null;
-    return ChapterSourceResolver.detectSource(urlInput);
+    return sourceRegistry.findSourceForUrl(urlInput.trim());
   }, [urlInput]);
 
   const handleFetch = async (e?: React.FormEvent) => {
@@ -157,7 +159,8 @@ export const ChapterSnatchModal: React.FC<ChapterSnatchModalProps> = ({
       const res = await ChapterZipExporter.exportSelectedPagesToZip(
         selectedPagesList,
         chapterAcquisitionManager.getAllImages(),
-        defaultName
+        defaultName,
+        acquisition.acquisitionId
       );
 
       if (res.saved) {
@@ -187,6 +190,7 @@ export const ChapterSnatchModal: React.FC<ChapterSnatchModalProps> = ({
         openChapter,
         setActiveFolderId,
         setSelectedChapterId,
+        acquisitionId: acquisition.acquisitionId,
       });
 
       if (result.success) {
@@ -217,25 +221,32 @@ export const ChapterSnatchModal: React.FC<ChapterSnatchModalProps> = ({
         {/* Header */}
         <div className="h-14 px-6 border-b border-white/[0.08] bg-[#08080b] flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
-            <div className="p-1.5 rounded-lg bg-zinc-800 border border-white/[0.08] text-white">
+            <div className="p-1.5 rounded-lg bg-zinc-800/90 border border-white/[0.08] text-white">
               <Download className="w-4 h-4" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-mono text-xs font-bold tracking-wider uppercase text-zinc-100">
-                  Chapter Snatch
-                </span>
-                <span className="px-1.5 py-0.2 rounded text-[9px] font-mono bg-zinc-800 text-zinc-400 border border-white/[0.06]">
-                  v1.0
+                <span className="font-mono text-xs font-semibold tracking-wider uppercase text-zinc-200">
+                  Fetch Chapter
                 </span>
               </div>
               <p className="text-[11px] text-zinc-500">
-                Acquire chapters from MangaDex and Asura Scans directly into Folio Script.
+                Preview and acquire manga or webtoon chapters directly into Folio Script.
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowSupportedSites(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-900 border border-white/[0.12] text-xs font-mono text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors cursor-pointer"
+              title="View all 23 live supported sources"
+            >
+              <Globe className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Supported Sites (23)</span>
+            </button>
+
             <button
               type="button"
               onClick={handleClose}
@@ -255,28 +266,22 @@ export const ChapterSnatchModal: React.FC<ChapterSnatchModalProps> = ({
                 type="text"
                 value={urlInput}
                 onChange={(e) => setUrlInput(e.target.value)}
-                placeholder="Paste chapter URL (e.g., https://mangadex.org/chapter/... or https://asurascans.com/...)"
+                placeholder="Paste chapter URL (e.g. MangaDex, LINE Webtoon, GigaViewer, Scanlation...)"
                 className="w-full h-9 pl-3 pr-28 rounded-xl bg-zinc-900 border border-white/[0.12] text-xs font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-white/30 transition-colors"
                 disabled={isBusy}
               />
 
               {/* Source Indicator Pill */}
               <div className="absolute right-2 flex items-center pointer-events-none">
-                {detectedSource === 'mangadex' && (
-                  <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-semibold bg-orange-500/15 text-orange-300 border border-orange-500/30">
-                    MangaDex
+                {detectedAdapter ? (
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-medium bg-zinc-800 text-zinc-300 border border-white/[0.1]">
+                    {detectedAdapter.name}
                   </span>
-                )}
-                {detectedSource === 'asura' && (
-                  <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-semibold bg-violet-500/15 text-violet-300 border border-violet-500/30">
-                    Asura Scans
-                  </span>
-                )}
-                {!detectedSource && urlInput.trim() && (
-                  <span className="px-2 py-0.5 rounded-md text-[10px] font-mono text-zinc-500 bg-zinc-800 border border-white/[0.06]">
+                ) : urlInput.trim() ? (
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-mono text-zinc-500 bg-zinc-900 border border-white/[0.06]">
                     Detecting
                   </span>
-                )}
+                ) : null}
               </div>
             </div>
 
@@ -406,21 +411,28 @@ export const ChapterSnatchModal: React.FC<ChapterSnatchModalProps> = ({
         <div className="flex-1 overflow-y-auto p-6 custom-scrollbar bg-[#0a0a0d]">
           {!hasManifest ? (
             <div className="h-full flex flex-col items-center justify-center text-center p-8 max-w-md mx-auto">
-              <div className="w-12 h-12 rounded-2xl bg-zinc-900 border border-white/[0.08] flex items-center justify-center mb-4 text-zinc-500">
+              <div className="w-12 h-12 rounded-2xl bg-zinc-900 border border-white/[0.08] flex items-center justify-center mb-4 text-zinc-400">
                 <Download className="w-6 h-6 stroke-[1.5]" />
               </div>
-              <h3 className="text-sm font-semibold text-zinc-200 mb-1">Paste a chapter link to start</h3>
+              <h3 className="text-sm font-medium text-zinc-200 mb-1">Enter a chapter URL to begin</h3>
               <p className="text-xs text-zinc-500 leading-relaxed mb-4">
-                Enter a chapter URL from MangaDex or Asura Scans above. Folio Script will automatically
-                retrieve the page list and original-quality images.
+                Paste a chapter link from MangaDex, LINE Webtoon, GigaViewer, or supported scanlations to preview and acquire pages.
               </p>
-              <div className="flex items-center gap-2 text-[11px] font-mono text-zinc-600">
-                <span>Supported:</span>
-                <span className="px-1.5 py-0.5 rounded bg-zinc-900 border border-white/[0.06]">
+              <div className="flex flex-wrap items-center justify-center gap-1.5 text-[10px] font-mono text-zinc-400">
+                <span className="px-2 py-0.5 rounded bg-zinc-900 border border-white/[0.06]">
                   mangadex.org
                 </span>
-                <span className="px-1.5 py-0.5 rounded bg-zinc-900 border border-white/[0.06]">
+                <span className="px-2 py-0.5 rounded bg-zinc-900 border border-white/[0.06]">
+                  webtoons.com
+                </span>
+                <span className="px-2 py-0.5 rounded bg-zinc-900 border border-white/[0.06]">
+                  tonarinoyj.jp
+                </span>
+                <span className="px-2 py-0.5 rounded bg-zinc-900 border border-white/[0.06]">
                   asurascans.com
+                </span>
+                <span className="px-2 py-0.5 rounded bg-zinc-900 border border-white/[0.06]">
+                  + scanlations
                 </span>
               </div>
             </div>
@@ -498,6 +510,111 @@ export const ChapterSnatchModal: React.FC<ChapterSnatchModalProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Screen C: Supported Sites Modal Dialog */}
+      {showSupportedSites && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-100">
+          <div className="w-full max-w-2xl max-h-[80vh] bg-[#0e0f15] border border-white/[0.14] rounded-2xl shadow-2xl flex flex-col overflow-hidden text-zinc-100 font-sans animate-in zoom-in-95 duration-100">
+            {/* Header */}
+            <div className="h-14 px-6 border-b border-white/[0.08] bg-[#090a0e] flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2.5">
+                <Globe className="w-4 h-4 text-emerald-400" />
+                <span className="font-mono text-xs font-semibold tracking-wider uppercase text-zinc-200">
+                  Supported Chapter Sources
+                </span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                  23 Live Verified
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSupportedSites(false)}
+                className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Filter Search */}
+            <div className="px-6 py-3 bg-[#0a0a0f] border-b border-white/[0.06] shrink-0">
+              <input
+                type="text"
+                value={siteSearch}
+                onChange={(e) => setSiteSearch(e.target.value)}
+                placeholder="Filter by source name or domain..."
+                className="w-full h-8 px-3 rounded-lg bg-zinc-900 border border-white/[0.1] text-xs font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-white/20 transition-colors"
+                autoFocus
+              />
+            </div>
+
+            {/* List */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-2">
+              {SUPPORTED_SOURCES.filter(
+                (s) =>
+                  s.name.toLowerCase().includes(siteSearch.toLowerCase()) ||
+                  s.domain.toLowerCase().includes(siteSearch.toLowerCase()) ||
+                  s.engine.toLowerCase().includes(siteSearch.toLowerCase())
+              ).map((source) => (
+                <div
+                  key={source.id}
+                  className="p-3 rounded-xl bg-zinc-900/60 border border-white/[0.06] hover:border-white/[0.12] transition-colors flex items-center justify-between gap-4"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-zinc-200">{source.name}</span>
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-zinc-800 text-zinc-400 border border-white/[0.04]">
+                        {source.engine}
+                      </span>
+                      <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-mono">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block"></span>
+                        Live
+                      </span>
+                    </div>
+                    <p className="text-[11px] font-mono text-zinc-500 truncate mt-0.5">{source.domain}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUrlInput(source.sampleUrl);
+                      setShowSupportedSites(false);
+                    }}
+                    className="px-2.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 hover:text-white border border-white/[0.08] text-[11px] font-mono shrink-0 transition-colors cursor-pointer"
+                    title="Fill URL input with a real chapter test URL"
+                  >
+                    Use Sample URL
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+
+const SUPPORTED_SOURCES = [
+  { id: 'mangadex', name: 'MangaDex', domain: 'mangadex.org', engine: 'REST API', sampleUrl: 'https://mangadex.org/chapter/0aaf8b27-0013-4ae0-8935-91a089466874' },
+  { id: 'asura', name: 'Asura Scans', domain: 'asurascans.com', engine: 'Astro Island', sampleUrl: 'https://asurascans.com/comics/logging-out-is-too-hard-f212c582/chapter/1' },
+  { id: 'webtoons', name: 'LINE Webtoon', domain: 'webtoons.com', engine: 'Reader DOM', sampleUrl: 'https://www.webtoons.com/en/fantasy/tower-of-god/season-3-ep-1/viewer?title_no=95&episode_no=420' },
+  { id: 'tonarinoyj', name: 'Tonari no Young Jump', domain: 'tonarinoyj.jp', engine: 'GigaViewer', sampleUrl: 'https://tonarinoyj.jp/episode/12207421984093802437' },
+  { id: 'kuragebunch', name: 'Kurage Bunch', domain: 'kuragebunch.com', engine: 'GigaViewer', sampleUrl: 'https://kuragebunch.com/episode/12207421984512319617' },
+  { id: 'kingofshojo', name: 'King of Shojo', domain: 'kingofshojo.com', engine: 'MangaThemesia', sampleUrl: 'https://kingofshojo.com/logging-out-is-too-hard-chapter-20/' },
+  { id: 'rawkuma', name: 'Rawkuma', domain: 'rawkuma.net', engine: 'WordPress', sampleUrl: 'https://rawkuma.net/chainsaw-man-chapter-1/' },
+  { id: 'thunderscans', name: 'Thunder Scans', domain: 'en-thunderscans.com', engine: 'MangaThemesia', sampleUrl: 'https://en-thunderscans.com/the-amber-sword-chapter-33/' },
+  { id: 'rokaricomics', name: 'Rokari Comics', domain: 'rokaricomics.com', engine: 'MangaThemesia', sampleUrl: 'https://rokaricomics.com/golden-chevalier-chapter-57/' },
+  { id: 'vortexscans', name: 'Vortex Scans', domain: 'vortexscans.org', engine: 'Vasto CMS', sampleUrl: 'https://vortexscans.org/series/reality-quest-2/chapter-230' },
+  { id: 'qiscans', name: 'Qi Manga', domain: 'qimanga.com', engine: 'Vasto CMS', sampleUrl: 'https://qimanga.com/series/one-day-i-became-a-hatchling/chapter-1' },
+  { id: 'hijala', name: 'Hijala', domain: 'en-hijala.com', engine: 'Vasto CMS', sampleUrl: 'https://en-hijala.com/series/the-build-up/chapter-203' },
+  { id: 'nyxscans', name: 'Nyx Scans', domain: 'nyxscans.com', engine: 'Vasto CMS', sampleUrl: 'https://nyxscans.com/series/the-villainess-wants-a-divorce!/chapter-34' },
+  { id: 'hivetoons', name: 'Hive Toons', domain: 'hivetoons.org', engine: 'Vasto CMS', sampleUrl: 'https://hivetoons.org/series/red-shirt/chapter-54' },
+  { id: 'rinkocomics', name: 'Rinko Comics', domain: 'rinkocomics.com', engine: 'ComicWorld XOR', sampleUrl: 'https://rinkocomics.com/chapter/hug-us-chapter-35/' },
+  { id: 'flamecomics', name: 'Flame Comics', domain: 'flamecomics.xyz', engine: 'Next.js SPA', sampleUrl: 'https://flamecomics.xyz/series/1/385fe46707bd150c' },
+  { id: 'demonicscans', name: 'Demonic Scans', domain: 'demonicscans.org', engine: 'ReaderMC PHP', sampleUrl: 'https://demonicscans.org/title/The-Wizard%2527s-Notes/chapter/1/1' },
+  { id: 'genztoons', name: 'GenZ Toons', domain: 'genztoons.org', engine: 'Custom SSR', sampleUrl: 'https://genztoons.org/chapter/65f8b05e74a-65f8dc4a4e7/' },
+  { id: 'elftoon', name: 'ElfToon', domain: 'elftoon.net', engine: 'Next.js CMS', sampleUrl: 'https://elftoon.net/series/comic/infinite-evolution-from-zero/chapter/1' },
+  { id: 'kyanscans', name: 'Kayn Scans', domain: 'kaynscans.com', engine: 'Next.js CMS', sampleUrl: 'https://kaynscans.com/series/comic/the-dignity-of-a-chaebol/chapter/1' },
+  { id: 'nuviatoon', name: 'NuviaToon', domain: 'nuviatoon.org', engine: 'Next.js App API', sampleUrl: 'https://nuviatoon.org/comics/my-husband-was-definitely-a-paladin/chapter/40' },
+  { id: 'twmanga', name: 'TW Manga', domain: 'www.twbzmg.com', engine: 'Baozimh Reader', sampleUrl: 'https://www.twbzmg.com/comic/chapter/dingjiqiyunqiaoqiaoxiulianqiannian-yuewenmanhua/0_0.html' },
+  { id: 'rumanhua2', name: 'RuManhua', domain: 'www.rumanhua2.com', engine: 'Dean Edwards + all2.js', sampleUrl: 'http://www.rumanhua2.com/OjQucQi/vsUsUaF.html' },
+];

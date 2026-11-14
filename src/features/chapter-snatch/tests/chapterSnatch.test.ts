@@ -10,8 +10,25 @@ import { ChapterAcquisitionManager } from '../services/acquisitionManager.ts';
 import { ChapterWorkspaceImporter } from '../services/workspaceImporter.ts';
 import type { ChapterPage, DownloadedImageData } from '../types.ts';
 import type { Folder } from '../../../types.ts';
+import { SourceRegistry } from '../core/sourceRegistry.ts';
+import {
+  FetchHttpClient,
+  isSsrfSafeUrl as isSsrfSafeUrlTs,
+  parseIpv4ToNumber,
+  isPrivateOrReservedIpv4,
+  isPrivateOrReservedIpv6,
+} from '../core/httpClient.ts';
+import type { ChapterSourceAdapter } from '../core/types.ts';
 // @ts-ignore
-import { isSsrfSafeUrl, createZipBuffer } from '../../../../electron/chapterSnatchIpc.cjs';
+import {
+  isSsrfSafeUrl,
+  createZipBuffer,
+  createZipFromDisk,
+  cleanupAcquisition,
+} from '../../../../electron/chapterSnatchBackend.cjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 
 // Sample 1x1 test image bytes
 const TINY_PNG = new Uint8Array([
@@ -536,3 +553,496 @@ test('ChapterWorkspaceImporter converts selected pages to workspace chapter with
   // Verify navigation was triggered
   assert.equal(openedChapterId, importedChapter.id);
 });
+
+// =========================================================================
+// SECTION 8: FETCH CORE CENTRAL REGISTRY & CONTRACTS
+// =========================================================================
+
+test('SourceRegistry registers, lists, gets, and unregisters adapters', () => {
+  const registry = new SourceRegistry();
+  const initialCount = registry.getAll().length;
+  assert.ok(initialCount >= 2);
+  assert.ok(registry.get('mangadex'));
+  assert.ok(registry.get('asura'));
+
+  // Test custom adapter registration
+  const customAdapter: ChapterSourceAdapter = {
+    id: 'custom-src',
+    name: 'Custom Manga Source',
+    allowedSourceHosts: ['custommanga.com'],
+    allowedImageHosts: ['cdn.custommanga.com'],
+    canHandle: (url) => String(url).includes('custommanga.com'),
+    resolve: (url) => ({
+      source: 'custom-src',
+      normalizedUrl: String(url),
+      sourceChapterId: 'ch-1',
+      hostname: 'custommanga.com',
+    }),
+    fetchManifest: async () => ({
+      metadata: {
+        source: 'custom-src',
+        sourceChapterId: 'ch-1',
+        sourceUrl: 'https://custommanga.com/1',
+        pageCount: 1,
+      },
+      pages: [],
+    }),
+  };
+
+  registry.register(customAdapter);
+  assert.equal(registry.getAll().length, initialCount + 1);
+  assert.equal(registry.get('custom-src')?.name, 'Custom Manga Source');
+  assert.equal(registry.detectSource('https://custommanga.com/chapter/1'), 'custom-src');
+
+  // Test unregister
+  const removed = registry.unregister('custom-src');
+  assert.equal(removed, true);
+  assert.equal(registry.getAll().length, initialCount);
+  assert.equal(registry.get('custom-src'), undefined);
+});
+
+test('SourceRegistry handles ambiguous, malformed, and unsupported URLs', () => {
+  const registry = new SourceRegistry();
+
+  assert.throws(() => registry.resolve(''), /Please enter a chapter URL/);
+  assert.throws(() => registry.resolve('not-a-url'), /Invalid URL format/);
+  assert.throws(() => registry.resolve('ftp://mangadex.org/chapter/123'), /Only secure HTTP\(S\) URLs are supported/);
+  assert.throws(
+    () => registry.resolve('https://unregistered-manga-site.org/ch/1'),
+    /Unsupported source "unregistered-manga-site.org"/
+  );
+});
+
+// =========================================================================
+// SECTION 9: ADVANCED SSRF & NUMERIC IP ENCODING PROTECTION
+// =========================================================================
+
+test('SSRF Guard detects and blocks numeric IP encodings (octal, hex, dword)', () => {
+  const allowlist = ['mangadex.org', '*.mangadex.org'];
+
+  // Dword / Decimal integer (2130706433 = 127.0.0.1)
+  assert.equal(parseIpv4ToNumber('2130706433'), 0x7f000001);
+  assert.equal(isPrivateOrReservedIpv4(2130706433), true);
+  assert.equal(isSsrfSafeUrl('http://2130706433/admin', allowlist), false);
+  assert.equal(isSsrfSafeUrlTs('http://2130706433/admin', allowlist), false);
+
+  // Octal format (0177.0.0.1 = 127.0.0.1)
+  const octalNum = parseIpv4ToNumber('0177.0.0.1');
+  assert.equal(octalNum, 0x7f000001);
+  assert.equal(isSsrfSafeUrl('http://0177.0.0.1/admin', allowlist), false);
+  assert.equal(isSsrfSafeUrlTs('http://0177.0.0.1/admin', allowlist), false);
+
+  // Hex format (0x7f.0.0.1 or 0x7f000001 = 127.0.0.1)
+  const hexNum = parseIpv4ToNumber('0x7f.0.0.1');
+  assert.equal(hexNum, 0x7f000001);
+  assert.equal(isSsrfSafeUrl('http://0x7f.0.0.1/', allowlist), false);
+  assert.equal(isSsrfSafeUrlTs('http://0x7f000001/', allowlist), false);
+
+  // Cloud metadata IP (169.254.169.254) in decimal (2852039166)
+  assert.equal(parseIpv4ToNumber('169.254.169.254'), 0xa9fea9fe);
+  assert.equal(isPrivateOrReservedIpv4(0xa9fea9fe), true);
+  assert.equal(isSsrfSafeUrl('http://169.254.169.254/latest/meta-data', allowlist), false);
+  assert.equal(isSsrfSafeUrlTs('http://2852039166/latest/meta-data', allowlist), false);
+
+  // Carrier-grade NAT (100.64.0.1)
+  const cgnatNum = parseIpv4ToNumber('100.64.0.1');
+  assert.ok(cgnatNum !== null);
+  assert.equal(isPrivateOrReservedIpv4(cgnatNum!), true);
+  assert.equal(isSsrfSafeUrl('http://100.64.0.1/', allowlist), false);
+
+  // Multicast (224.0.0.1) and Broadcast (255.255.255.255)
+  assert.equal(isPrivateOrReservedIpv4(parseIpv4ToNumber('224.0.0.1')!), true);
+  assert.equal(isPrivateOrReservedIpv4(parseIpv4ToNumber('255.255.255.255')!), true);
+});
+
+test('SSRF Guard blocks IPv6 loopback, link-local, unique-local, and IPv4-mapped addresses', () => {
+  const allowlist = ['mangadex.org', '*.mangadex.org'];
+
+  assert.equal(isPrivateOrReservedIpv6('::1'), true);
+  assert.equal(isPrivateOrReservedIpv6('::'), true);
+  assert.equal(isPrivateOrReservedIpv6('fe80::1'), true);
+  assert.equal(isPrivateOrReservedIpv6('fc00::1'), true);
+  assert.equal(isPrivateOrReservedIpv6('fd12:3456:789a::1'), true);
+  assert.equal(isPrivateOrReservedIpv6('ff02::1'), true);
+  assert.equal(isPrivateOrReservedIpv6('::ffff:127.0.0.1'), true);
+  assert.equal(isPrivateOrReservedIpv6('::ffff:169.254.169.254'), true);
+
+  assert.equal(isSsrfSafeUrl('http://[::1]/secret', allowlist), false);
+  assert.equal(isSsrfSafeUrlTs('http://[::1]/secret', allowlist), false);
+  assert.equal(isSsrfSafeUrl('http://[fe80::1]/', allowlist), false);
+  assert.equal(isSsrfSafeUrlTs('http://[::ffff:127.0.0.1]/', allowlist), false);
+});
+
+test('SSRF Guard strictly validates host boundaries and rejects subdomain spoofing', () => {
+  const allowlist = ['mangadex.org', '*.mangadex.org', 'asurascans.com', '*.asurascans.com'];
+
+  // Valid allowlisted hosts
+  assert.equal(isSsrfSafeUrl('https://mangadex.org/chapter/1', allowlist), true);
+  assert.equal(isSsrfSafeUrl('https://api.mangadex.org/chapter/1', allowlist), true);
+  assert.equal(isSsrfSafeUrl('https://asurascans.com/comics/1', allowlist), true);
+
+  // Malicious lookalike or attacker-controlled hosts
+  assert.equal(isSsrfSafeUrl('https://evil-mangadex.org/chapter/1', allowlist), false);
+  assert.equal(isSsrfSafeUrl('https://mangadex.org.attacker.com/chapter/1', allowlist), false);
+  assert.equal(isSsrfSafeUrl('https://asurascans.fake.io/comics/1', allowlist), false);
+  assert.equal(isSsrfSafeUrl('https://metadata.google.internal/computeMetadata/v1/', allowlist), false);
+  assert.equal(isSsrfSafeUrl('https://attacker.com@mangadex.org/', allowlist), false); // embedded userinfo
+});
+
+// =========================================================================
+// SECTION 10: HTTP CLIENT TIMEOUTS, RETRIES, AND REDIRECT SECURITY
+// =========================================================================
+
+test('FetchHttpClient respects timeout and abort signal', async () => {
+  const client = new FetchHttpClient({ defaultTimeoutMs: 50, defaultMaxRetries: 0 });
+
+  // Mock fetch that respects AbortSignal (as native fetch does)
+  const hangingFetch = (_url: any, init: any) =>
+    new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal.reason || new Error('Aborted')));
+    });
+
+  await assert.rejects(
+    async () => {
+      await client.fetchSafe('https://mangadex.org/chapter/1', { timeoutMs: 30 }, hangingFetch as any);
+    },
+    /timed out/
+  );
+
+  // Caller AbortSignal cancellation
+  const ac = new AbortController();
+  ac.abort(new Error('User cancelled'));
+  await assert.rejects(
+    async () => {
+      await client.fetchSafe('https://mangadex.org/chapter/1', { signal: ac.signal }, hangingFetch as any);
+    },
+    /User cancelled/
+  );
+});
+
+test('FetchHttpClient validates redirects and blocks open redirects to private IPs', async () => {
+  const client = new FetchHttpClient({
+    defaultTimeoutMs: 5000,
+    defaultMaxRetries: 1,
+    defaultAllowedHosts: ['mangadex.org', '*.mangadex.org'],
+  });
+
+  // Mock server returning redirect to localhost
+  const redirectFetch = async (url: any) => {
+    const u = String(url);
+    if (u === 'https://mangadex.org/redirect-trap') {
+      return new Response('', {
+        status: 302,
+        headers: { location: 'http://127.0.0.1:5173/admin' },
+      });
+    }
+    return new Response('ok', { status: 200 });
+  };
+
+  await assert.rejects(
+    async () => {
+      await client.fetchSafe('https://mangadex.org/redirect-trap', {}, redirectFetch as any);
+    },
+    /SSRF Guard: Redirect destination is blocked/
+  );
+});
+
+test('FetchHttpClient follows legitimate redirects within allowlist', async () => {
+  const client = new FetchHttpClient({
+    defaultTimeoutMs: 5000,
+    defaultMaxRetries: 1,
+    defaultAllowedHosts: ['mangadex.org', '*.mangadex.org'],
+  });
+
+  const validRedirectFetch = async (url: any) => {
+    const u = String(url);
+    if (u === 'https://mangadex.org/short/123') {
+      return new Response('', {
+        status: 301,
+        headers: { location: 'https://api.mangadex.org/chapter/123' },
+      });
+    }
+    if (u === 'https://api.mangadex.org/chapter/123') {
+      return new Response(JSON.stringify({ result: 'ok' }), { status: 200 });
+    }
+    return new Response('Not Found', { status: 404 });
+  };
+
+  const res = await client.fetchSafe('https://mangadex.org/short/123', {}, validRedirectFetch as any);
+  assert.equal(res.status, 200);
+  const json = await res.json();
+  assert.equal(json.result, 'ok');
+});
+
+// =========================================================================
+// SECTION 11: DISK-BACKED STREAMING ZIP & MEMORY BEHAVIOR
+// =========================================================================
+
+test('createZipFromDisk creates spec-compliant ZIP archive without Base64 memory overhead', async () => {
+  const tempDir = path.join(os.tmpdir(), `folio-test-acq-${Date.now()}`);
+  await fs.promises.mkdir(tempDir, { recursive: true });
+
+  const file1 = path.join(tempDir, '001.png');
+  const file2 = path.join(tempDir, '002.jpg');
+  await fs.promises.writeFile(file1, TINY_PNG);
+  await fs.promises.writeFile(file2, TINY_JPEG);
+
+  const outZip = path.join(tempDir, 'output.zip');
+  const entries = [
+    { filename: '001.png', filePath: file1 },
+    { filename: '002.jpg', filePath: file2 },
+  ];
+
+  const totalBytes = await createZipFromDisk(entries, outZip);
+  assert.ok(totalBytes > 100);
+
+  const zipContent = await fs.promises.readFile(outZip);
+  assert.equal(zipContent.length, totalBytes);
+
+  // Validate EOCD signature and entries count
+  ChapterZipExporter.verifyArchive(new Uint8Array(zipContent), 2);
+
+  // Clean up
+  await fs.promises.rm(tempDir, { recursive: true, force: true });
+});
+
+test('cleanupAcquisition cleans up temporary acquisition cache directory cleanly', async () => {
+  const acqId = `test-acq-cleanup-${Date.now()}`;
+  const acqDir = path.join(os.tmpdir(), 'folio-chapter-snatch', acqId);
+  await fs.promises.mkdir(acqDir, { recursive: true });
+  await fs.promises.writeFile(path.join(acqDir, 'sample.tmp'), 'temp data');
+  assert.equal(fs.existsSync(acqDir), true);
+
+  await cleanupAcquisition(acqId);
+  assert.equal(fs.existsSync(acqDir), false);
+});
+
+// =========================================================================
+// SECTION 12: WORKSPACE PERSISTENCE, RESTART SURVIVAL & WORKFLOW COMPATIBILITY
+// =========================================================================
+
+test('Imported pages survive simulated application restart and are retrievable via getPageBlob', async () => {
+  setupMockIndexedDb();
+
+  const selectedPages: ChapterPage[] = [
+    {
+      id: 'restart-page-1',
+      originalIndex: 1,
+      filename: '001.png',
+      mimeType: 'image/png',
+      extension: 'png',
+      sizeBytes: TINY_PNG.length,
+      imageUrl: 'https://example.com/p1.png',
+      downloadStatus: 'ready',
+    },
+  ];
+
+  const imageMap = new Map<string, DownloadedImageData>();
+  imageMap.set('restart-page-1', {
+    data: TINY_PNG,
+    mimeType: 'image/png',
+    extension: 'png',
+    sizeBytes: TINY_PNG.length,
+  });
+
+  const testFolder: Folder = {
+    id: 'folder-persist-test',
+    name: 'Persistence Series',
+    badgeCount: 0,
+    chapters: [],
+    createdAt: Date.now(),
+  };
+
+  let folderStore = [testFolder];
+  const setFolders = (action: any) => {
+    folderStore = typeof action === 'function' ? action(folderStore) : action;
+  };
+
+  const importRes = await ChapterWorkspaceImporter.importPagesToWorkspace({
+    selectedPages,
+    imageMap,
+    metadata: {
+      source: 'mangadex',
+      sourceChapterId: 'md-restart-ch',
+      seriesTitle: 'Persistence Series',
+      chapterNumber: '1',
+      sourceUrl: 'https://mangadex.org/chapter/md-restart-ch',
+      pageCount: 1,
+    },
+    targetFolder: testFolder,
+    folders: folderStore,
+    setFolders,
+    openChapter: () => {},
+  });
+
+  assert.equal(importRes.success, true);
+  const createdChapter = folderStore[0].chapters[0];
+  assert.ok(createdChapter);
+  const importedPage = createdChapter.pageList![0];
+  assert.ok(importedPage);
+
+  // SIMULATE APPLICATION RESTART:
+  // Dynamically import getPageBlob from db service and retrieve the saved blob by pageId
+  const { getPageBlob } = await import('../../../services/db.ts');
+  const storedBlob = await getPageBlob(importedPage.id);
+  assert.ok(storedBlob, 'Expected stored blob in IndexedDB');
+  assert.equal(storedBlob.size, TINY_PNG.length);
+
+  // COMPATIBILITY CHECK WITH SCAN / REVIEW / EXTRACT:
+  // The scanner and reviewer pipelines expect getPageBlob(pageId) to return a valid Blob/File
+  // which can be converted to an ArrayBuffer / ImageData.
+  const arrayBuf = await (storedBlob as Blob).arrayBuffer();
+  const bytes = new Uint8Array(arrayBuf);
+  const validation = ChapterImageValidator.validateImageBytes(bytes);
+  assert.equal(validation.isValid, true);
+  assert.equal(validation.mimeType, 'image/png');
+  assert.equal(bytes.length, TINY_PNG.length);
+});
+
+test('ChapterAcquisitionManager handles partial failures and retries only failed pages', async () => {
+  const manager = new ChapterAcquisitionManager();
+
+  const mockPages: ChapterPage[] = [
+    {
+      id: 'p-success',
+      originalIndex: 1,
+      filename: '001.png',
+      mimeType: 'image/png',
+      extension: 'png',
+      sizeBytes: TINY_PNG.length,
+      imageUrl: 'https://mangadex.network/p1.png',
+      downloadStatus: 'pending',
+    },
+    {
+      id: 'p-fail',
+      originalIndex: 2,
+      filename: '002.png',
+      mimeType: 'image/png',
+      extension: 'png',
+      sizeBytes: 0,
+      imageUrl: 'https://mangadex.network/fail.png',
+      downloadStatus: 'pending',
+    },
+  ];
+
+  let shouldFail = true;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: any) => {
+    const u = String(url);
+    if (u.includes('fail.png')) {
+      if (shouldFail) {
+        return new Response('Server Error', { status: 500 });
+      }
+      return new Response(TINY_PNG as any, { status: 200, headers: { 'content-type': 'image/png' } });
+    }
+    return new Response(TINY_PNG as any, { status: 200, headers: { 'content-type': 'image/png' } });
+  }) as any;
+
+  try {
+    const ac = new AbortController();
+    await manager.downloadPages(mockPages, ac.signal);
+
+    const snap1 = manager.getSnapshot();
+    assert.equal(snap1.status, 'partial_failure');
+    assert.equal(snap1.completedCount, 1);
+    assert.equal(snap1.failedCount, 1);
+    assert.equal(mockPages[0].downloadStatus, 'ready');
+    assert.equal(mockPages[1].downloadStatus, 'failed');
+
+    // Now retry: server recovers
+    shouldFail = false;
+    await manager.retryFailedPages();
+
+    const snap2 = manager.getSnapshot();
+    assert.equal(snap2.status, 'ready');
+    assert.equal(snap2.completedCount, 2);
+    assert.equal(snap2.failedCount, 0);
+    assert.equal(mockPages[1].downloadStatus, 'ready');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Large chapters maintain exact 1-based sequential ordering and zero-padded filenames', async () => {
+  setupMockIndexedDb();
+
+  const count = 35;
+  const largePages: ChapterPage[] = [];
+  const imageMap = new Map<string, DownloadedImageData>();
+
+  for (let i = 1; i <= count; i++) {
+    const id = `large-p-${i}`;
+    largePages.push({
+      id,
+      originalIndex: i,
+      filename: `raw-file-${i}.png`,
+      mimeType: 'image/png',
+      extension: 'png',
+      sizeBytes: TINY_PNG.length,
+      imageUrl: `https://mangadex.network/p${i}.png`,
+      downloadStatus: 'ready',
+    });
+    imageMap.set(id, {
+      data: TINY_PNG,
+      mimeType: 'image/png',
+      extension: 'png',
+      sizeBytes: TINY_PNG.length,
+    });
+  }
+
+  // 1. Verify ZIP ordering with 35 pages
+  const zipEntries = largePages.map((p, idx) => ({
+    filename: `${String(idx + 1).padStart(3, '0')}.${p.extension}`,
+    data: imageMap.get(p.id)!.data,
+  }));
+  const zip = ChapterZipExporter.createZip(zipEntries);
+  ChapterZipExporter.verifyArchive(zip, count);
+
+  // 2. Verify Workspace Import ordering
+  const testFolder: Folder = {
+    id: 'folder-large-ch',
+    name: 'Large Chapter Series',
+    badgeCount: 0,
+    chapters: [],
+    createdAt: Date.now(),
+  };
+
+  let folderStore = [testFolder];
+  const setFolders = (action: any) => {
+    folderStore = typeof action === 'function' ? action(folderStore) : action;
+  };
+
+  const importRes = await ChapterWorkspaceImporter.importPagesToWorkspace({
+    selectedPages: largePages,
+    imageMap,
+    metadata: {
+      source: 'mangadex',
+      sourceChapterId: 'md-large-35',
+      seriesTitle: 'Large Series',
+      chapterNumber: '42',
+      sourceUrl: 'https://mangadex.org/chapter/md-large-35',
+      pageCount: count,
+    },
+    targetFolder: testFolder,
+    folders: folderStore,
+    setFolders,
+    openChapter: () => {},
+  });
+
+  assert.equal(importRes.success, true);
+  assert.equal(importRes.pageCount, count);
+
+  const chapter = folderStore[0].chapters[0];
+  assert.equal(chapter.pages, count);
+  assert.equal(chapter.pageList!.length, count);
+
+  // Verify every page is in strict sequential 1-based order
+  for (let i = 0; i < count; i++) {
+    const expectedIndex = i + 1;
+    const page = chapter.pageList![i];
+    assert.equal(page.index, expectedIndex, `Mismatch at page index ${expectedIndex}`);
+    assert.equal(page.fileName, `${String(expectedIndex).padStart(3, '0')}.png`);
+  }
+});
+
+

@@ -4,9 +4,7 @@ import type {
   ChapterPage,
   DownloadedImageData,
 } from '../types';
-import { ChapterSourceResolver } from './sourceResolver';
-import { MangaDexConnector } from './mangadexConnector';
-import { AsuraConnector } from './asuraConnector';
+import { sourceRegistry } from '../core/sourceRegistry';
 import { ChapterImageValidator } from './imageValidator';
 import { ChapterZipExporter } from './zipExporter';
 
@@ -65,12 +63,18 @@ export class ChapterAcquisitionManager {
   }
 
   /**
-   * Resets and cleans up any existing acquisition and blob URLs.
+   * Resets and cleans up any existing acquisition, temp files, and blob URLs.
    */
   public reset(): void {
+    const oldAcqId = this.currentAcquisition.acquisitionId;
     this.cancel();
     this.cleanupThumbnails();
     this.imageStore.clear();
+
+    if (oldAcqId) {
+      this.cleanupBackendAcquisition(oldAcqId);
+    }
+
     this.currentAcquisition = this.createInitialState();
     this.notify();
   }
@@ -86,6 +90,14 @@ export class ChapterAcquisitionManager {
     ) {
       this.currentAcquisition.status = 'cancelled';
       this.notify();
+    }
+  }
+
+  private cleanupBackendAcquisition(acquisitionId: string): void {
+    const win = typeof window !== 'undefined' ? (window as any) : undefined;
+    const electronBridge = win?.folioScript?.chapterSnatch;
+    if (electronBridge?.cleanupAcquisition) {
+      electronBridge.cleanupAcquisition(acquisitionId).catch(() => {});
     }
   }
 
@@ -110,10 +122,9 @@ export class ChapterAcquisitionManager {
     this.notify();
 
     try {
-      // 1. Identify Source
-      const info = ChapterSourceResolver.resolve(rawUrl);
+      // 1. Resolve source via Central Registry
+      const { adapter, info } = sourceRegistry.resolve(rawUrl);
 
-      // Check if Electron native IPC fetch is available
       const win = typeof window !== 'undefined' ? (window as any) : undefined;
       const electronBridge = win?.folioScript?.chapterSnatch;
 
@@ -126,7 +137,7 @@ export class ChapterAcquisitionManager {
         metadata = ipcResult.metadata;
         pages = ipcResult.pages;
       } else if (win?.location) {
-        // Safe main/server process fetch via local server backend (Chrome --app or web mode)
+        // Safe backend fetch via local server (Chrome --app or web mode)
         const resp = await fetch(`/api/chapter-snatch/metadata?url=${encodeURIComponent(info.normalizedUrl)}`, {
           signal,
         });
@@ -138,16 +149,10 @@ export class ChapterAcquisitionManager {
         metadata = data.metadata;
         pages = data.pages;
       } else {
-        // Direct connector fetch (e.g. in test or web fallback)
-        if (info.source === 'mangadex') {
-          const res = await MangaDexConnector.fetchChapterManifest(info);
-          metadata = res.metadata;
-          pages = res.pages;
-        } else {
-          const res = await AsuraConnector.fetchChapterManifest(info);
-          metadata = res.metadata;
-          pages = res.pages;
-        }
+        // Direct adapter fetch (e.g. unit tests or standalone node)
+        const res = await adapter.fetchManifest(info, undefined, signal);
+        metadata = res.metadata;
+        pages = res.pages;
       }
 
       if (signal.aborted) {
@@ -162,7 +167,7 @@ export class ChapterAcquisitionManager {
       this.currentAcquisition.status = 'downloading';
       this.notify();
 
-      // 2. Download Pages in Parallel
+      // 2. Download Pages in Parallel with controlled concurrency
       await this.downloadPages(pages, signal);
 
       return this.getSnapshot();
@@ -182,6 +187,10 @@ export class ChapterAcquisitionManager {
    * Downloads a list of pages with controlled concurrency and image validation.
    */
   public async downloadPages(pagesToDownload: ChapterPage[], signal: AbortSignal): Promise<void> {
+    if (this.currentAcquisition.pages.length === 0) {
+      this.currentAcquisition.pages = pagesToDownload;
+      this.currentAcquisition.totalCount = pagesToDownload.length;
+    }
     const concurrency = 4;
     let index = 0;
 
@@ -251,18 +260,27 @@ export class ChapterAcquisitionManager {
 
       let rawBytes: Uint8Array;
       let declaredMime: string | undefined;
+      let tempFilePath: string | undefined = undefined;
 
       if (electronBridge?.downloadPageImage) {
-        // Safe IPC image download
+        // Safe IPC image download with disk-backed acquisition support
         const referer = this.currentAcquisition.metadata?.sourceUrl;
-        const res = await electronBridge.downloadPageImage(page.imageUrl, referer);
+        const res = await electronBridge.downloadPageImage({
+          imageUrl: page.imageUrl,
+          referer,
+          acquisitionId: this.currentAcquisition.acquisitionId,
+          filename: page.filename,
+        });
         rawBytes = ChapterZipExporter.base64ToUint8Array(res.dataBase64);
         declaredMime = res.mimeType;
+        tempFilePath = res.filePath;
       } else if (win?.location) {
-        // Safe backend fetch via local server (Chrome --app or web mode)
+        // Safe backend fetch via local server
         const referer = this.currentAcquisition.metadata?.sourceUrl || '';
+        const acqId = encodeURIComponent(this.currentAcquisition.acquisitionId);
+        const fn = encodeURIComponent(page.filename);
         const resp = await fetch(
-          `/api/chapter-snatch/download-page?url=${encodeURIComponent(page.imageUrl)}&referer=${encodeURIComponent(referer)}`,
+          `/api/chapter-snatch/download-page?url=${encodeURIComponent(page.imageUrl)}&referer=${encodeURIComponent(referer)}&acquisitionId=${acqId}&filename=${fn}`,
           { signal }
         );
         if (!resp.ok) {
@@ -272,6 +290,7 @@ export class ChapterAcquisitionManager {
         const data = await resp.json();
         rawBytes = ChapterZipExporter.base64ToUint8Array(data.dataBase64);
         declaredMime = data.mimeType;
+        tempFilePath = data.filePath;
       } else {
         // Browser/test fetch
         const res = await fetch(page.imageUrl, {
@@ -309,6 +328,7 @@ export class ChapterAcquisitionManager {
         mimeType,
         extension,
         sizeBytes,
+        tempFilePath,
       });
 
       // Revoke previous thumbnail if any
@@ -325,6 +345,7 @@ export class ChapterAcquisitionManager {
       page.mimeType = mimeType;
       page.extension = extension;
       page.sizeBytes = sizeBytes;
+      page.tempFilePath = tempFilePath;
       page.error = undefined;
 
       this.currentAcquisition.completedCount = this.currentAcquisition.pages.filter(

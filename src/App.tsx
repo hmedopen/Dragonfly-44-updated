@@ -608,10 +608,10 @@ export function App() {
                   type="button"
                   onClick={() => setIsChapterSnatchOpen(true)}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-mono text-zinc-300 hover:text-white bg-zinc-900/80 hover:bg-zinc-800 border border-white/[0.08] transition-colors cursor-pointer"
-                  title="Chapter Snatch"
+                  title="Fetch manga or webtoon chapters"
                 >
                   <Download className="w-3.5 h-3.5 text-zinc-300" />
-                  <span>Chapter Snatch</span>
+                  <span>Fetch Chapter</span>
                 </button>
 
                 <button

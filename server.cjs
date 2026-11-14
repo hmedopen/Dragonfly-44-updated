@@ -46,13 +46,15 @@ const server = http.createServer(async (req, res) => {
   if (urlObj.pathname === '/api/chapter-snatch/download-page') {
     const imageUrl = urlObj.searchParams.get('url');
     const referer = urlObj.searchParams.get('referer') || undefined;
+    const acquisitionId = urlObj.searchParams.get('acquisitionId') || undefined;
+    const filename = urlObj.searchParams.get('filename') || undefined;
     if (!imageUrl) {
       res.writeHead(400, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
       res.end(JSON.stringify({ error: 'Missing "url" parameter.' }));
       return;
     }
     try {
-      const data = await downloadPageImage(imageUrl, referer);
+      const data = await downloadPageImage(imageUrl, referer, { acquisitionId, filename });
       res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
       res.end(JSON.stringify(data));
     } catch (err) {

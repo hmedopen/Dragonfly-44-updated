@@ -12,6 +12,7 @@ export interface ImportToWorkspaceParams {
   openChapter: (chapterId: string, folderId?: string | null, pageId?: string | null) => void;
   setActiveFolderId?: (folderId: string | null) => void;
   setSelectedChapterId?: (chapterId: string | null) => void;
+  acquisitionId?: string;
 }
 
 export class ChapterWorkspaceImporter {
@@ -30,6 +31,7 @@ export class ChapterWorkspaceImporter {
       openChapter,
       setActiveFolderId,
       setSelectedChapterId,
+      acquisitionId,
     } = params;
 
     if (selectedPages.length === 0) {
@@ -40,18 +42,45 @@ export class ChapterWorkspaceImporter {
     const sorted = [...selectedPages].sort((a, b) => a.originalIndex - b.originalIndex);
 
     // 2. Convert raw image byte buffers into standard File objects for the ingestion pipeline
+    const win = typeof window !== 'undefined' ? (window as any) : undefined;
+    const electronBridge = win?.folioScript?.chapterSnatch;
+
     const files: File[] = [];
     for (let i = 0; i < sorted.length; i++) {
       const page = sorted[i];
-      const img = imageMap.get(page.id);
-      if (!img || !img.data || img.data.length === 0) {
-        throw new Error(`Page ${page.originalIndex} (${page.filename}) has not completed downloading.`);
+      let rawData: Uint8Array | undefined = undefined;
+      let extension = page.extension;
+      let mimeType = page.mimeType;
+
+      if (page.tempFilePath && electronBridge?.readPage && acquisitionId) {
+        try {
+          const res = await electronBridge.readPage({ acquisitionId, filename: page.filename });
+          if (res?.dataBase64) {
+            const binary = atob(res.dataBase64);
+            const len = binary.length;
+            const bytes = new Uint8Array(len);
+            for (let b = 0; b < len; b++) bytes[b] = binary.charCodeAt(b);
+            rawData = bytes;
+          }
+        } catch {
+          // Fall back to memory map below
+        }
+      }
+
+      if (!rawData) {
+        const img = imageMap.get(page.id);
+        if (!img || !img.data || img.data.length === 0) {
+          throw new Error(`Page ${page.originalIndex} (${page.filename}) has not completed downloading.`);
+        }
+        rawData = img.data;
+        extension = img.extension;
+        mimeType = img.mimeType;
       }
 
       // Use sequential filename with real extension: 001.webp, 002.png, etc.
-      const seqFilename = `${String(i + 1).padStart(3, '0')}.${img.extension}`;
-      const file = new File([img.data as any], seqFilename, {
-        type: img.mimeType,
+      const seqFilename = `${String(i + 1).padStart(3, '0')}.${extension}`;
+      const file = new File([rawData as any], seqFilename, {
+        type: mimeType,
         lastModified: Date.now(),
       });
       files.push(file);
